@@ -603,35 +603,64 @@ export type PlacedNode = {
 };
 
 /**
- * Positions for the flow tree. Fold state decides which nodes expand;
- * activeOnly drops idle thread rows and projects left with none.
+ * Positions for the flow tree. Fold state decides which nodes expand.
+ * Scope gates depth: at top scope (scope = null) projects expand to thread
+ * rows only; once a project or thread is in scope, turns and work unlock.
+ * statusFilter keeps only threads whose status is included (empty set = all);
+ * nodes on the scope path are always exempt from filtering.
  */
 export function flowLayout(
   shape: ShapeDto,
   open: ReadonlySet<string>,
-  opts: { activeOnly?: boolean } = {},
+  opts: { statusFilter?: ReadonlySet<FlowStatus>; scope?: string | null } = {},
 ): { placed: PlacedNode[]; W: number; H: number } {
   const index = indexShape(shape);
+  const byId = new Map(shape.nodes.map((n) => [n.id, n]));
+  const scopePath = new Set<string>();
+  if (opts.scope != null) {
+    let cur = byId.get(opts.scope);
+    while (cur !== undefined && cur.kind !== "root") {
+      scopePath.add(cur.id);
+      cur = cur.parentId === null ? undefined : byId.get(cur.parentId);
+    }
+  }
+  const deep = scopePath.size > 0; // focused inside a project or thread
+  const scopedThreadId =
+    opts.scope !== null && opts.scope !== undefined && byId.get(opts.scope)?.kind === "thread"
+      ? opts.scope
+      : null;
+  const passes = (t: FlowNode) =>
+    scopePath.has(t.id) ||
+    opts.statusFilter === undefined ||
+    opts.statusFilter.size === 0 ||
+    opts.statusFilter.has(t.status);
   const kids = (node: FlowNode): FlowNode[] => {
     switch (node.kind) {
       case "root": {
-        const projects = (index.childrenOf.get(node.id) ?? []).filter((n) => n.kind === "project");
-        return opts.activeOnly
-          ? projects.filter((p) => (index.threadsOf.get(p.id) ?? []).some((t) => t.status !== "idle"))
-          : projects;
+        let projects = (index.childrenOf.get(node.id) ?? []).filter((n) => n.kind === "project");
+        if (deep) projects = projects.filter((p) => scopePath.has(p.id));
+        // Projects with no surviving threads drop out (unless on the path —
+        // a project has no thread status to filter by, but keep the chain).
+        return projects.filter(
+          (p) => scopePath.has(p.id) || (index.threadsOf.get(p.id) ?? []).some((t) => passes(t)),
+        );
       }
       case "project": {
-        const threads = index.childrenOf.get(node.id) ?? [];
-        return opts.activeOnly ? threads.filter((t) => t.status !== "idle") : threads;
+        let threads = index.childrenOf.get(node.id) ?? [];
+        if (scopedThreadId !== null) threads = threads.filter((t) => t.id === scopedThreadId);
+        return threads.filter((t) => passes(t));
       }
       case "thread":
-        return index.childrenOf.get(node.id) ?? [];
+        // Turn level is gated: thread children exist only in scope.
+        return deep ? index.childrenOf.get(node.id) ?? [] : [];
       case "turn":
         return flowChildren(node.id, index, open, { foldWork: true });
       default:
         return [];
     }
   };
+  const effOpen = new Set(open);
+  for (const id of scopePath) effOpen.add(id);
   const root = shape.nodes.find((n) => n.kind === "root");
   if (root === undefined) return { placed: [], W: 0, H: 0 };
   const placed: PlacedNode[] = [];
@@ -642,7 +671,7 @@ export function flowLayout(
     top: number,
   ): { h: number; mid: number } => {
     // The root is the canvas anchor, not a fold: it always expands.
-    const nodeKids = (node.kind === "root" || open.has(node.id)) ? kids(node) : [];
+    const nodeKids = node.kind === "root" || effOpen.has(node.id) ? kids(node) : [];
     const spans: Array<{ h: number; mid: number }> = [];
     let cursor = top;
     // Parent card is placed before its subtree (preorder) so lists read
@@ -654,7 +683,7 @@ export function flowLayout(
       depth,
       parentId: node.parentId,
       childCount: nodeKids.length,
-      expanded: open.has(node.id),
+      expanded: effOpen.has(node.id),
     };
     placed.push(self);
     for (const kid of nodeKids) {

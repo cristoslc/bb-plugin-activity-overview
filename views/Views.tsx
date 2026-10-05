@@ -438,13 +438,19 @@ function ActivityFlowView() {
   const { shape, error, retry } = useShape();
   const navigate = useBbNavigate();
   const fold = useFold(shape);
-  const [activeOnly, setActiveOnly] = useState(true);
+  // Scope narrows the tree: click a project or thread card to focus its
+  // subtree; turn/step chevrons only unlock inside a scope.
+  const [scopeId, setScopeId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<Set<FlowStatus>>(
+    // Idle excluded by default (the "Active only" preset); chips adjust it.
+    new Set(["running", "waiting", "error", "queued"] as FlowStatus[]),
+  );
   const [selected, setSelected] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const nowMs = Date.now();
   const layout = useMemo(
-    () => (shape === null ? null : flowLayout(shape, fold.open, { activeOnly })),
-    [shape, fold.open, activeOnly],
+    () => (shape === null ? null : flowLayout(shape, fold.open, { scope: scopeId, statusFilter })),
+    [shape, fold.open, scopeId, statusFilter],
   );
 
   // Center the root card in the scroller whenever the layout changes, so the
@@ -478,22 +484,99 @@ function ActivityFlowView() {
   // Expand/collapse-all fold projects, threads and turns; work-fold keys
   // ("turn::all") ride along so Expand all also reveals trimmed step rows.
   const foldableIds: string[] = [];
+  const turnCount = new Map<string, number>();
   for (const node of shape.nodes) {
     if (node.kind === "project" || node.kind === "thread" || node.kind === "turn") {
       foldableIds.push(node.id, `${node.id}::all`);
     }
+    if (node.kind === "turn" && node.parentId !== null) {
+      turnCount.set(node.parentId, (turnCount.get(node.parentId) ?? 0) + 1);
+    }
   }
   const running = layout.placed.find((p) => p.node.status === "running" && p.node.kind === "thread");
+  // Scope path for the breadcrumb (focused node + its ancestors).
+  const shapeById = new Map(shape.nodes.map((n) => [n.id, n]));
+  const scopePath = new Set<string>();
+  if (scopeId !== null) {
+    let cur = shapeById.get(scopeId);
+    while (cur !== undefined && cur.kind !== "root") {
+      scopePath.add(cur.id);
+      cur = cur.parentId === null ? undefined : shapeById.get(cur.parentId);
+    }
+  }
+  const scopeProject =
+    scopeId === null
+      ? null
+      : (() => {
+          const n = shapeById.get(scopeId);
+          if (n === undefined) return null;
+          return n.kind === "thread" ? shapeById.get(n.parentId ?? "") ?? null : n;
+        })();
+  // Legend counts cover threads inside the current scope; chips filter on top.
   const legendCounts = new Map<FlowStatus, number>();
   for (const node of shape.nodes) {
     if (node.kind !== "thread") continue;
+    if (scopeId !== null && !scopePath.has(node.id) && node.parentId !== scopeId) continue;
     legendCounts.set(node.status, (legendCounts.get(node.status) ?? 0) + 1);
   }
+  // Chips are solo: click a status to see only it, click again to reset to
+  // all. Active only stays the quick idle-excluding preset.
+  const chipToggle = (status: FlowStatus) => {
+    setStatusFilter((prev) =>
+      prev.size === 1 && prev.has(status) ? new Set() : new Set([status]),
+    );
+  };
+  const activeOnlyPressed = statusFilter.size === 4 && !statusFilter.has("idle");
+  const selectNode = (p: PlacedNode) => {
+    const id = p.node.id;
+    setSelected((prev) => (prev === id ? null : id));
+    if (p.node.kind === "project" || p.node.kind === "thread") {
+      setScopeId((prev) => {
+        if (prev === id) {
+          // Clicking the focused card again climbs one level out.
+          return p.node.kind === "thread" ? p.node.parentId : null;
+        }
+        return id;
+      });
+    }
+  };
 
   return (
     <div className="rounded-md border border-border/60" style={{ background: "#0f151d" }}>
       <div className="flex flex-wrap items-center gap-2 p-2 text-[11px] text-muted-foreground">
-        <ToolbarButton pressed={activeOnly} onClick={() => setActiveOnly((v) => !v)}>
+        <span className="inline-flex items-center gap-1">
+          <button
+            type="button"
+            className={scopeId === null ? "text-foreground underline" : "underline hover:text-foreground"}
+            onClick={() => setScopeId(null)}
+          >
+            All
+          </button>
+          {scopeProject !== null ? (
+            <>
+              <span>/</span>
+              <button
+                type="button"
+                onClick={() => setScopeId(scopeProject.id)}
+                className={scopeId === scopeProject.id ? "text-foreground underline" : "underline hover:text-foreground"}
+              >
+                {scopeProject.label}
+              </button>
+            </>
+          ) : null}
+          {scopeId !== null && shapeById.get(scopeId)?.kind === "thread" ? (
+            <>
+              <span>/</span>
+              <span className="truncate text-foreground" style={{ maxWidth: 180 }}>
+                {shapeById.get(scopeId)!.label}
+              </span>
+            </>
+          ) : null}
+        </span>
+        <ToolbarButton
+          pressed={activeOnlyPressed}
+          onClick={() => setStatusFilter(activeOnlyPressed ? new Set() : new Set(["running", "waiting", "error", "queued"] as FlowStatus[]))}
+        >
           Active only
         </ToolbarButton>
         <ToolbarButton onClick={() => fold.expandAll(foldableIds)}>Expand</ToolbarButton>
@@ -539,7 +622,9 @@ function ActivityFlowView() {
               p={p}
               selected={selected === p.node.id}
               nowMs={nowMs}
-              onSelect={() => setSelected((prev) => (prev === p.node.id ? null : p.node.id))}
+              locked={p.node.kind === "thread" && scopeId === null}
+              turnCount={turnCount.get(p.node.id) ?? 0}
+              onSelect={() => selectNode(p)}
               onToggle={() =>
                 p.node.kind === "more"
                   ? fold.toggle(`${p.node.parentId}::all`)
@@ -552,15 +637,31 @@ function ActivityFlowView() {
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/40 p-2 text-[11px] text-muted-foreground">
         {[...legendCounts].filter(([, n]) => n > 0).map(([status, n]) => (
-          <span key={status} className="inline-flex items-center gap-1.5">
+          <button
+            key={status}
+            type="button"
+            onClick={() => chipToggle(status)}
+            title={statusFilter.has(status) ? `Showing only: ${[...statusFilter].join(", ")}` : `Show only ${status} threads`}
+            className={
+              "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 " +
+              (statusFilter.has(status)
+                ? "border border-border bg-background text-foreground"
+                : "border border-transparent hover:bg-background/60")
+            }
+          >
             <FlowDotSafe status={status} />
             {status}&thinsp;{n}
-          </span>
+          </button>
         ))}
+        {statusFilter.size > 0 ? (
+          <button type="button" className="underline" onClick={() => setStatusFilter(new Set())}>
+            clear filter
+          </button>
+        ) : null}
         {selectedNode !== null ? (
           <FlowDetails node={selectedNode} nowMs={nowMs} onOpenThread={() => selectedNode.threadId !== null && navigate.toThread(selectedNode.threadId)} />
         ) : (
-          <span>Click a node for details · double-click a thread to open it · scroll to pan</span>
+          <span>Click a project or thread to focus it · turns and steps unlock inside a scope · scroll to pan</span>
         )}
       </div>
     </div>
@@ -606,6 +707,8 @@ function FlowCard({
   p,
   selected,
   nowMs,
+  locked,
+  turnCount,
   onSelect,
   onToggle,
   onOpenThread,
@@ -613,16 +716,20 @@ function FlowCard({
   p: PlacedNode;
   selected: boolean;
   nowMs: number;
+  /** Thread at top scope: turns are gated off, so no chevron. */
+  locked: boolean;
+  turnCount: number;
   onSelect: () => void;
   onToggle: () => void;
   onOpenThread: () => void;
 }) {
   const n = p.node;
-  const collapsible = n.kind === "project" || n.kind === "thread" || n.kind === "turn";
+  const collapsible =
+    (n.kind === "project" || n.kind === "turn") || (n.kind === "thread" && !locked);
   const isWorkMore = n.kind === "more" && n.id.endsWith("::earlier");
   const sub =
     n.kind === "thread"
-      ? `${p.childCount} turn${p.childCount === 1 ? "" : "s"}${p.childCount === 0 ? "" : ` · ${flowAge(n, nowMs)}`}`
+      ? `${turnCount} turn${turnCount === 1 ? "" : "s"}${turnCount === 0 ? "" : ` · ${flowAge(n, nowMs)}`}`
       : (n.sublabel ?? (isWorkMore ? "click to unfold" : n.kind === "more" ? "hidden on server" : ""));
   const openable = n.threadId !== null;
   return (

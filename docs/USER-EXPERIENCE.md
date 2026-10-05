@@ -9,12 +9,19 @@
   Graph style) over project → thread → turn → work. Node cards sit in depth
   columns with dashed bezier connectors; projects open by default; hot
   threads (running/waiting/queued/error) expand to their turns; idle threads
-  stay collapsed but keep their card; "Active only" (on by default) drops
-  idle thread rows and idle-only projects. Expanding a turn shows its newest
+  stay collapsed but keep their card. Expanding a turn shows its newest
   8 work rows with a "+N earlier steps" card above them when the server
   trimmed more (click to unfold); turns beyond the cap show "+N earlier
   turns". Click a node for details in the footer; double-click a thread to
   open it.
+- Flow depth is scope-gated: at top scope, projects expand to thread rows
+  only — turn and step chevrons do not exist until you focus a project or
+  thread (click its card; the breadcrumb "All / project / thread" climbs
+  back out; clicking the focused card steps up one level). Status filters
+  live in the footer legend: the counts (running / waiting / error / queued /
+  idle) are solo chips — click a status to see only it, click again to show
+  all — and "Active only" is the quick idle-excluding preset (on by default;
+  a scoped node always stays visible even when its status is filtered out).
 - The Activity flow reads the plugin's own `shape` RPC (server-side turn
   timelines), refreshed by a coalesced `thread:changed` realtime push and a
   15s heartbeat while visible. The flow's status colors keep the same

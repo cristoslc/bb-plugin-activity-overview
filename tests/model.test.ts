@@ -326,15 +326,14 @@ test("activity flow: tidy tree — expanded threads put turns one column right; 
     fnode({ id: "thr_idle", parentId: "project:a", kind: "thread", threadId: "thr_idle", status: "idle" }),
   ]);
   const open = flowDefaultOpen(shape);
-  const { placed } = flowLayout(shape, open, { activeOnly: false });
-  // Default policy: project open, running thread open, its newest turn open,
-  // idle thread collapsed.
+  // Top scope: depth gate keeps turns locked even though the default policy
+  // folds the newest turn of the running thread open.
+  const { placed } = flowLayout(shape, open);
   const byId = new Map(placed.map((p) => [p.node.id, p]));
   assert.ok(byId.has("root"));
   assert.equal(byId.get("thr_run")?.x, NODE_W * 2 + COL_GAP * 2);
-  assert.equal(byId.get("thr_run:turn:t1")?.x, NODE_W * 3 + COL_GAP * 3);
-  assert.ok(byId.has("t1:w1") && byId.has("t1:w2"));
-  assert.ok(!byId.has("thr_idle:turn:undefined")); // idle thread's subtree hidden
+  assert.ok(!byId.has("thr_run:turn:t1")); // gated: no turns at top scope
+  assert.ok(!byId.has("t1:w1") && !byId.has("t1:w2"));
   const idleRow = byId.get("thr_idle");
   assert.ok(idleRow !== undefined && idleRow.childCount === 0);
   // Pairwise overlap check on every placed card.
@@ -347,9 +346,15 @@ test("activity flow: tidy tree — expanded threads put turns one column right; 
       assert.ok(apart, `cards ${a.node.id} and ${b.node.id} overlap at (${a.x},${a.y}) / (${b.x},${b.y})`);
     }
   }
+  // Focused into the project, turns unlock and the default fold applies.
+  const focused = flowLayout(shape, open, { scope: "project:a" });
+  const fById = new Map(focused.placed.map((p) => [p.node.id, p]));
+  assert.ok(fById.has("thr_idle")); // same project, filterless layout
+  assert.equal(fById.get("thr_run:turn:t1")?.x, NODE_W * 3 + COL_GAP * 3);
+  assert.ok(fById.has("t1:w1") && fById.has("t1:w2"));
 });
 
-test("activity flow: activeOnly drops idle thread rows and projects left with none", () => {
+test("activity flow: statusFilter drops excluded thread rows and projects left with none", () => {
   const shape = shapeFrom([
     fnode({ id: "root", parentId: null, kind: "root" }),
     fnode({ id: "project:a", parentId: "root", kind: "project" }),
@@ -358,11 +363,19 @@ test("activity flow: activeOnly drops idle thread rows and projects left with no
     fnode({ id: "thr_cold", parentId: "project:b", kind: "thread", threadId: "thr_cold", status: "idle" }),
   ]);
   const closed = new Set<string>();
-  const { placed } = flowLayout(shape, closed, { activeOnly: true });
-  const ids = placed.map((p) => p.node.id);
-  assert.ok(ids.includes("project:a")); // keeps its hot thread visible when expanded
-  assert.ok(!ids.includes("project:b")); // idle-only project disappears
-  assert.ok(!ids.includes("thr_cold"));
+  // The "Active only" preset in the view: every status but idle.
+  const activeOnly = flowLayout(shape, closed, {
+    statusFilter: new Set(["running", "waiting", "error", "queued"]),
+  });
+  const activeIds = activeOnly.placed.map((p) => p.node.id);
+  assert.ok(activeIds.includes("project:a")); // keeps its hot thread visible when expanded
+  assert.ok(!activeIds.includes("project:b")); // idle-only project disappears
+  assert.ok(!activeIds.includes("thr_cold"));
+  // Single-status chip: "error 4" keeps only error threads.
+  const errorsOnly = flowLayout(shape, closed, { statusFilter: new Set(["error"]) });
+  const errIds = errorsOnly.placed.map((p) => p.node.id);
+  assert.ok(!errIds.includes("project:a"));
+  assert.ok(!errIds.includes("thr_hot"));
 });
 
 test("activity flow: sibling subtree heights do not compound — deep-tree tops stay linear", () => {
@@ -394,17 +407,72 @@ test("activity flow: collapsed nodes hide their whole subtree; W/H cover the pla
     fnode({ id: "thr_1:turn:t1", parentId: "thr_1", kind: "turn", threadId: "thr_1" }),
     fnode({ id: "t1:w1", parentId: "thr_1:turn:t1", kind: "work", threadId: "thr_1" }),
   ]);
-  const closed = flowLayout(shape, new Set(["root"]), { activeOnly: false });
+  const closed = flowLayout(shape, new Set(["root"]), {});
   // A closed node still gets a card (it's the thing you expand); only its
   // descendants are hidden.
   assert.deepEqual(closed.placed.map((p) => p.node.id), ["root", "project:a"]);
   assert.equal(closed.W, NODE_W * 2 + COL_GAP);
   assert.equal(closed.H, NODE_H);
 
-  const partial = flowLayout(shape, new Set(["root", "project:a"]), { activeOnly: false });
+  const partial = flowLayout(shape, new Set(["root", "project:a"]), {});
   const ids = partial.placed.map((p) => p.node.id);
   assert.deepEqual(ids, ["root", "project:a", "thr_1"]);
   assert.equal(partial.W, NODE_W * 3 + COL_GAP * 2);
   // Single visible child chain, so vertical span is just one card.
   assert.equal(partial.H, NODE_H);
+});
+
+test("activity flow: scope gate — turns never expand at top scope, even when folded open", () => {
+  const shape = shapeFrom([
+    fnode({ id: "root", parentId: null, kind: "root" }),
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_1", parentId: "project:a", kind: "thread", threadId: "thr_1", status: "running" }),
+    fnode({ id: "thr_1:turn:t1", parentId: "thr_1", kind: "turn", threadId: "thr_1" }),
+    fnode({ id: "t1:w1", parentId: "thr_1:turn:t1", kind: "work", threadId: "thr_1" }),
+  ]);
+  // User expanded everything, but the scope is top-level: turns stay locked.
+  const everything = new Set(["root", "project:a", "thr_1", "thr_1:turn:t1"]);
+  const top = flowLayout(shape, everything, { scope: null });
+  const topIds = top.placed.map((p) => p.node.id);
+  assert.ok(topIds.includes("thr_1"));
+  assert.ok(!topIds.includes("thr_1:turn:t1"));
+  const threadCard = top.placed.find((p) => p.node.id === "thr_1");
+  assert.ok(threadCard !== undefined && threadCard.childCount === 0);
+});
+
+test("activity flow: focusing a project unlocks turns and hides other branches", () => {
+  const shape = shapeFrom([
+    fnode({ id: "root", parentId: null, kind: "root" }),
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_1", parentId: "project:a", kind: "thread", threadId: "thr_1", status: "running" }),
+    fnode({ id: "thr_1:turn:t1", parentId: "thr_1", kind: "turn", threadId: "thr_1" }),
+    fnode({ id: "t1:w1", parentId: "thr_1:turn:t1", kind: "work", threadId: "thr_1" }),
+    fnode({ id: "project:b", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_2", parentId: "project:b", kind: "thread", threadId: "thr_2", status: "running" }),
+    fnode({ id: "thr_2:turn:t2", parentId: "thr_2", kind: "turn", threadId: "thr_2" }),
+  ]);
+  const open = new Set(["thr_1", "thr_1:turn:t1"]);
+  const { placed } = flowLayout(shape, open, { scope: "project:a" });
+  const ids = placed.map((p) => p.node.id);
+  // Scope chain stays visible: root → project:a → thread → turn → work.
+  assert.deepEqual(ids, ["root", "project:a", "thr_1", "thr_1:turn:t1", "t1:w1"]);
+  // The fold did not include project:a, but the scope path expands it.
+  assert.equal(placed[1]!.childCount, 1);
+});
+
+test("activity flow: focusing a thread isolates it in its project and beats the status filter", () => {
+  const shape = shapeFrom([
+    fnode({ id: "root", parentId: null, kind: "root" }),
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_hot", parentId: "project:a", kind: "thread", threadId: "thr_hot", status: "running" }),
+    fnode({ id: "thr_hot:turn:t1", parentId: "thr_hot", kind: "turn", threadId: "thr_hot" }),
+    fnode({ id: "thr_cold", parentId: "project:a", kind: "thread", threadId: "thr_cold", status: "idle" }),
+    fnode({ id: "project:b", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_other", parentId: "project:b", kind: "thread", threadId: "thr_other", status: "running" }),
+  ]);
+  const { placed } = flowLayout(shape, new Set(), { scope: "thr_cold", statusFilter: new Set(["running"]) });
+  const ids = placed.map((p) => p.node.id);
+  // The scoped idle thread survives the idle filter; hot threads outside
+  // the scope do not appear; only the scope chain is laid out.
+  assert.deepEqual(ids, ["root", "project:a", "thr_cold"]);
 });

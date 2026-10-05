@@ -33,12 +33,21 @@ tabs: four aggregate tabs rendered live from the host's sidebar thread data, plu
   bezier connectors from parent right edge to child left edge, a chevron on
   each foldable card. Fold policy is pure (views/model.ts): projects open,
   hot threads open, only the newest turn of a running thread expands by
-  default; "Active only" (default on) drops idle thread rows and idle-only
-  projects; "+N earlier steps/turns" markers mark what the server trimmed
+  default; "+N earlier steps/turns" markers mark what the server trimmed
   (the work-level marker unfolds on click). Click a node for details in the
   footer; double-click a thread (or use its footer button) to open the thread;
-  a status legend with counts sits in the footer; the layout lives in
-  `flowLayout` (views/model.ts) with tests in tests/model.test.ts.
+  the layout lives in `flowLayout` (views/model.ts) with tests in
+  tests/model.test.ts.
+  - **Scope gating**: at top scope, projects expand to thread rows only —
+    turn and step chevrons do not exist there. Clicking a project or thread
+    card focuses its subtree (breadcrumb All / project / thread in the
+    toolbar climbs back out; clicking the focused card steps up one level).
+    Turns and work only unfold inside a scope; a cold scoped thread survives
+    its status filter.
+  - **Filters**: the footer legend counts double as solo status-filter
+    chips: click "error 4" to see only error threads, click it again to show
+    all. The "Active only" toolbar button is the idle-excluding preset
+    (running/waiting/error/queued, on by default).
 
 ## Reading the dots
 
