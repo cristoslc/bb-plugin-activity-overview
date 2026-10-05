@@ -64,6 +64,7 @@ import {
   type Status,
 } from "./model";
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "../shared";
+import { THEME_CSS } from "./theme";
 
 const MIN_STAGE_W = 320; // pack floor for very narrow panels
 /** Chrome-free zone the opening fit keeps visible content inside: tab bar
@@ -420,7 +421,7 @@ function MapCanvas({
       <div
         ref={viewRef}
         className="absolute inset-0 touch-none select-none"
-        style={{ background: "#0f151d", cursor: panning ? "grabbing" : "grab" }}
+        style={{ background: "var(--attn-stage)", cursor: panning ? "grabbing" : "grab" }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -469,11 +470,11 @@ function MapCanvas({
 
 function LegendRow({ counts }: { counts: Record<Status, number> }) {
   const colors: Array<[string, string, number]> = [
-    ["error", "#e5534b", counts.error],
-    ["needs-you", "#d9a53f", counts["needs-you"]],
-    ["working", "#3d84e0", counts.working],
-    ["unread", "#2e9e45", counts.unread],
-    ["idle aging", "#8b949e", counts.idle],
+    ["error", "var(--attn-error)", counts.error],
+    ["needs-you", "var(--attn-needs-you)", counts["needs-you"]],
+    ["working", "var(--attn-working)", counts.working],
+    ["unread", "var(--attn-unread)", counts.unread],
+    ["idle aging", "var(--attn-grey-1)", counts.idle],
   ];
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -481,7 +482,7 @@ function LegendRow({ counts }: { counts: Record<Status, number> }) {
         <span key={label} className="inline-flex items-center gap-1.5">
           <span
             className="inline-block rounded-full"
-            style={label === "idle aging" ? { width: 5, height: 5, background: color, boxShadow: "5px 0 0 #545b63" } : { width: 5, height: 5, background: color }}
+            style={label === "idle aging" ? { width: 5, height: 5, background: color, boxShadow: "5px 0 0 var(--attn-grey-3)" } : { width: 5, height: 5, background: color }}
           />
           {label}&thinsp;{n}
         </span>
@@ -566,9 +567,9 @@ export function BoardView({
           key={card.key}
           title={`${card.name} · ${card.n} threads · ${card.hot} hot`}
           className="absolute rounded-md"
-          style={{ left: x, top: y, width: card.w, height: card.h, background: "#10161f", border: "1px solid #1c2430" }}
+          style={{ left: x, top: y, width: card.w, height: card.h, background: "var(--attn-card)", border: "1px solid var(--attn-card-border)" }}
         >
-          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "#9fb4c8" }}>
+          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "var(--attn-label)" }}>
             {card.name} · {card.n}
           </div>
           <div className="absolute" style={{ left: 8, top: labelH + 6, width: card.cols * pitch, height: card.rows * pitch }}>
@@ -644,7 +645,7 @@ export function UnitTreemapView({
           key={r.p.pid}
           title={`${r.p.name} · ${r.p.n} threads`}
           className="absolute rounded-sm"
-          style={{ left: r.x, top: r.y, width: r.w, height: r.h, background: "#131a22" }}
+          style={{ left: r.x, top: r.y, width: r.w, height: r.h, background: "var(--attn-card)" }}
         />
       ))}
       {model.regions.flatMap((r) =>
@@ -668,7 +669,7 @@ export function UnitTreemapView({
           <div
             key={`lbl-${r.p.pid}`}
             className="pointer-events-none absolute truncate"
-            style={{ left: r.x + 5, top: r.y + 2, maxWidth: r.w - 10, fontSize: 10, color: "#98a8b6", zIndex: 3 }}
+            style={{ left: r.x + 5, top: r.y + 2, maxWidth: r.w - 10, fontSize: 10, color: "var(--attn-label)", zIndex: 3 }}
           >
             {r.p.name} · {r.p.n}
           </div>
@@ -727,7 +728,7 @@ export function StripTilesView({
           className="absolute"
           style={{ left: x, top: y, width: card.w }}
         >
-          <div className="truncate" style={{ fontSize: 11, color: "#9fb4c8", marginBottom: 4 * scale }}>
+          <div className="truncate" style={{ fontSize: 11, color: "var(--attn-label)", marginBottom: 4 * scale }}>
             {card.p.name} · {card.p.n}
           </div>
           <div className="flex">
@@ -777,9 +778,9 @@ export function AgentLanesView({
           key={card.pid}
           title={`${card.name} · ${card.n} threads · ${card.hot} hot`}
           className="absolute rounded-md"
-          style={{ left: x, top: y, width: card.w, height: card.h, background: "#131a22" }}
+          style={{ left: x, top: y, width: card.w, height: card.h, background: "var(--attn-card)" }}
         >
-          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "#9fb4c8" }}>
+          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "var(--attn-label)" }}>
             {card.name} · {card.n}
           </div>
           {card.rows.map((row, i) => (
@@ -789,7 +790,7 @@ export function AgentLanesView({
               style={{ left: 8 + row.depth * LANE_INDENT, top: LBL + 6 + i * LANE_ROW_PITCH, width: LANE_LABEL_W, height: LANE_DOT }}
             >
               <Dot cell={{ t: row.t, fam: row.fam }} x={0} y={0} d={LANE_DOT} nowMs={nowMs} />
-              <span className="ml-2 truncate" style={{ fontSize: 9, color: "#7d93a8" }}>
+              <span className="ml-2 truncate" style={{ fontSize: 9, color: "var(--attn-sub)" }}>
                 {row.t.title || row.t.id}
               </span>
             </div>
@@ -969,8 +970,8 @@ function ActivityFlowView({
             className="h-4 w-4 flex-none rounded-full"
             style={{
               animation: "attn-spin 0.9s linear infinite",
-              border: "2px solid rgba(143, 163, 181, 0.3)",
-              borderTopColor: "#8fa3b5",
+              border: "2px solid color-mix(in srgb, var(--attn-dim) 30%, transparent)",
+              borderTopColor: "var(--attn-dim)",
             }}
           />
           Loading activity — building the shape from live thread timelines…
@@ -1149,7 +1150,7 @@ function ActivityFlowView({
                     key={p.node.id}
                     d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
                     fill="none"
-                    stroke={p.node.status === "running" ? "#3d84e0" : "#31415a"}
+                    stroke={p.node.status === "running" ? "var(--attn-working)" : "var(--attn-seam)"}
                     strokeOpacity={0.55}
                     strokeDasharray="4 5"
                   />
@@ -1254,8 +1255,8 @@ function FlowCard({
         top: p.y,
         width: NODE_W,
         height: NODE_H,
-        background: selected ? "#1a2433" : "#131a22",
-        border: `1px solid ${selected ? "#2f4b74" : "#1c2430"}`,
+        background: selected ? "var(--attn-selected)" : "var(--attn-card)",
+        border: `1px solid ${selected ? "var(--attn-selected-border)" : "var(--attn-card-border)"}`,
         padding: "7px 8px",
         opacity: isWorkMore || n.kind === "more" ? 0.8 : 1,
       }}
@@ -1265,10 +1266,10 @@ function FlowCard({
           <FlowDotSafe status={n.status} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[11px]" style={{ color: n.kind === "thread" ? "#a5b8c9" : "#8fa3b5" }}>
+          <div className="truncate text-[11px]" style={{ color: n.kind === "thread" ? "var(--attn-emph)" : "var(--attn-dim)" }}>
             {n.label}
           </div>
-          <div className="truncate text-[10px]" style={{ color: "#5f6b76" }}>
+          <div className="truncate text-[10px]" style={{ color: "var(--attn-faint)" }}>
             {sub}
           </div>
         </div>
@@ -1301,8 +1302,8 @@ function FlowDetails({
   onOpenThread: () => void;
 }) {
   return (
-    <span className="w-full min-w-0 text-[10px]" style={{ color: "#8fa3b5" }}>
-      <span style={{ color: "#c3d0dc" }}>{node.label}</span>
+    <span className="w-full min-w-0 text-[10px]" style={{ color: "var(--attn-dim)" }}>
+      <span style={{ color: "var(--attn-emph)" }}>{node.label}</span>
       {" · "}
       {node.status}
       {node.kind === "thread" ? ` · ${flowAge(node, nowMs)}` : ""}
@@ -1363,8 +1364,11 @@ export function OverviewPage() {
     setWorld(null); // drop the previous view's world before the canvas remounts
   };
   return (
-    <div ref={panelRef} className="relative h-full min-h-0 flex-1 overflow-hidden">
-      <style>{`.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }`}</style>
+    <div ref={panelRef} className="attn-theme relative h-full min-h-0 flex-1 overflow-hidden">
+      <style>
+        {THEME_CSS +
+          "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
+      </style>
       {tab === "flow" ? (
         <ActivityFlowView apiRef={apiRef} />
       ) : (
