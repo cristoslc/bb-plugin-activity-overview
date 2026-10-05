@@ -26,6 +26,14 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { Shape, rpcContract } from "../server";
 import {
+  CAMERA_STORE_KEY,
+  DEFAULT_CAMERA_STORE,
+  mergeCameraStore,
+  parseCameraStore,
+  type Camera,
+  type CameraStore,
+} from "./camera";
+import {
   buildProjects,
   statusCounts,
   cellColor,
@@ -139,6 +147,36 @@ function usePanelSize(min: number): [RefObject<HTMLDivElement | null>, number, n
 
 const clampT = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+// ---------- camera persistence (bb forward/back) ----------
+// The map canvas's last transform and the last-visited tab live in the
+// session store, keyed per tab, so returning to the panel restores the
+// operator's camera instead of the default opening. Pure codec: views/camera.ts.
+
+function readCameraStore(): CameraStore {
+  try {
+    return parseCameraStore(sessionStorage.getItem(CAMERA_STORE_KEY), TABS.map((t) => t.id));
+  } catch {
+    // No session storage available (privacy modes, sandboxed frames): the
+    // panel works, it just reopens at the default camera every time.
+    return { tab: DEFAULT_CAMERA_STORE.tab, cams: {} };
+  }
+}
+
+/** Write-through, read-merge-write: a tab's camera lands, others survive. */
+function writeCameraStore(patch: { tab?: string; cams?: Record<string, Camera> }): void {
+  try {
+    const merged = mergeCameraStore(readCameraStore(), patch);
+    sessionStorage.setItem(CAMERA_STORE_KEY, JSON.stringify(merged));
+  } catch {
+    // As above: a full or unavailable session store only loses the nicety.
+  }
+}
+
+/** The stored camera for one tab, or null when that tab opens by default. */
+function storedCamera(tabId: string): Camera | null {
+  return readCameraStore().cams[tabId] ?? null;
+}
+
 /** Clamp a pan axis so the content keeps at least `m` margin from the view
  * edges at every extreme (flush edges read as mis-centered). */
 const clampPan = (tx: number, span: number, view: number, m: number) => {
@@ -160,6 +198,7 @@ function MapCanvas({
   apiRef,
   zoomMode = "fit",
   focus = null,
+  persistKey,
   overlay,
   children,
 }: {
@@ -167,6 +206,8 @@ function MapCanvas({
   apiRef: RefObject<MapApi | null>;
   zoomMode?: "fit" | "contain";
   focus?: { x: number; y: number } | null;
+  /** Session key this canvas's camera persists under (the tab id). */
+  persistKey?: string;
   overlay?: ReactNode;
   children: ReactNode;
 }) {
@@ -182,6 +223,8 @@ function MapCanvas({
   const focusRef = useRef(focus);
   focusRef.current = focus;
   const initialDoneRef = useRef(false);
+  /** Camera saved by a previous visit, consumed by the opening effect once. */
+  const restoreRef = useRef<Camera | null>(persistKey === undefined ? null : storedCamera(persistKey));
   const dragRef = useRef<{ id: number; px: number; py: number; tx: number; ty: number; captured: boolean } | null>(null);
   const lastPanRef = useRef(0);
   const [panning, setPanning] = useState(false);
@@ -273,6 +316,14 @@ function MapCanvas({
     const { vw, vh } = sizeRef.current;
     if (sz === null || sz.W <= 0 || sz.H <= 0 || vw <= 0 || vh <= 0) return;
     initialDoneRef.current = true;
+    const restored = restoreRef.current;
+    if (restored !== null) {
+      // A camera saved by a previous visit beats the default opening;
+      // applyT clamps the stale transform against the live viewport/world.
+      restoreRef.current = null;
+      applyT(restored);
+      return;
+    }
     const box = fitBox(vw, vh);
     if (zoomModeRef.current === "contain") {
       const k = clampT(Math.min(1, box.w / sz.W), MIN_LEGIBLE, 1);
@@ -288,6 +339,13 @@ function MapCanvas({
     applyT({ k, tx: box.x + (box.w - sz.W * k) / 2, ty: box.y + (box.h - sz.H * k) / 2 });
   }, [applyT]);
   useLayoutEffect(openOnce, [openOnce, world]);
+
+  // Write-through persistence: every committed transform lands in the session
+  // store under this tab, so bb back-navigation restores the last camera.
+  useLayoutEffect(() => {
+    if (persistKey === undefined || !initialDoneRef.current) return;
+    writeCameraStore({ cams: { [persistKey]: tRef.current } });
+  }, [persistKey, t]);
 
   // Measure the viewport and re-clamp the transform when it resizes.
   useLayoutEffect(() => {
@@ -873,11 +931,19 @@ function ActivityFlowView({
     return root === undefined ? null : { x: root.x + NODE_W / 2, y: root.y + NODE_H / 2 };
   }, [layout]);
   // Recenters on the root when the scope or the status filter changes; data
-  // refetches keep the operator's camera where they left it.
+  // refetches keep the operator's camera where they left it. The first layout
+  // must not re-center over a camera restored from the session store, so the
+  // scope key starts "already applied" in that case.
+  const restored = useRef<Camera | null>(storedCamera("flow"));
   const scopeKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (flowFocus === null) return;
     const key = `${scopeId ?? ""}|${[...statusFilter].sort().join(",")}`;
+    if (scopeKeyRef.current === null && restored.current !== null) {
+      restored.current = null;
+      scopeKeyRef.current = key;
+      return;
+    }
     if (scopeKeyRef.current === key) return;
     scopeKeyRef.current = key;
     apiRef.current?.openAt(flowFocus.x, flowFocus.y);
@@ -894,12 +960,18 @@ function ActivityFlowView({
     );
   }
   if (layout === null || shape === null) {
+    // The host's CSS does not compile plugin tailwind, so the spinner is
+    // inline styles over a plugin-local keyframes rule (see OverviewPage).
     return (
       <div className="p-4">
         <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
           <span
-            className="h-4 w-4 flex-none animate-spin rounded-full border-2 border-muted-foreground/30"
-            style={{ borderTopColor: "#8fa3b5" }}
+            className="h-4 w-4 flex-none rounded-full"
+            style={{
+              animation: "attn-spin 0.9s linear infinite",
+              border: "2px solid rgba(143, 163, 181, 0.3)",
+              borderTopColor: "#8fa3b5",
+            }}
           />
           Loading activity — building the shape from live thread timelines…
         </span>
@@ -977,6 +1049,7 @@ function ActivityFlowView({
         apiRef={apiRef}
         zoomMode="contain"
         focus={flowFocus}
+        persistKey="flow"
         overlay={
           <>
             <div className="pointer-events-auto absolute right-3 top-3 z-10 flex max-w-[min(560px,calc(100%_-_18rem))] flex-wrap items-center gap-2 rounded-md border border-border/60 bg-card p-2 text-[11px] text-muted-foreground shadow-sm">
@@ -1260,7 +1333,12 @@ type TabId = (typeof TABS)[number]["id"];
 
 export function OverviewPage() {
   const live = useLiveModel();
-  const [tab, setTab] = useState<TabId>("board");
+  // The last-visited tab survives bb back-navigation (same session store the
+  // cameras use) — an unknown id falls back to the board.
+  const [tab, setTab] = useState<TabId>(() => {
+    const stored = readCameraStore().tab;
+    return TABS.some((t) => t.id === stored) ? (stored as TabId) : "board";
+  });
   // World bounds of the active aggregate view, reported through onWorld.
   const [world, setWorld] = useState<WorldSize | null>(null);
   const onWorld = useCallback((size: WorldSize | null) => setWorld(size), []);
@@ -1281,15 +1359,16 @@ export function OverviewPage() {
   const total = built.total;
   const switchTab = (id: TabId) => {
     setTab(id);
+    writeCameraStore({ tab: id }); // remembered for the next visit
     setWorld(null); // drop the previous view's world before the canvas remounts
   };
   return (
     <div ref={panelRef} className="relative h-full min-h-0 flex-1 overflow-hidden">
-      <style>{`.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } }`}</style>
+      <style>{`.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }`}</style>
       {tab === "flow" ? (
         <ActivityFlowView apiRef={apiRef} />
       ) : (
-        <MapCanvas key={tab} world={world} apiRef={apiRef}>
+        <MapCanvas key={tab} world={world} apiRef={apiRef} persistKey={tab}>
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
           {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
           {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
