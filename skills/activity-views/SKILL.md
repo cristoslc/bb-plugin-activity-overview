@@ -49,6 +49,46 @@ tabs: four aggregate tabs rendered live from the host's sidebar thread data, plu
     all. The "Active only" toolbar button is the idle-excluding preset
     (running/waiting/error/queued, on by default).
 
+## Map-style interface
+
+The tab page is a full-bleed map canvas (Google Maps / OpenStreetMap style),
+not a scrolling document. Each view lays out into a fixed-size **world layer**
+that fills the entire panel viewport; the operator pans by dragging anywhere,
+zooms with the mouse wheel (around the cursor, 0.2×–5×) or the floating
++/−/fit controls at the bottom-right, and "⤢" fits the whole world into the
+view (never zooming past 1×). Dragging never lands as a click: a pan within
+the last 200ms suppresses card clicks and double-clicks. All chrome floats
+above the canvas:
+
+- Tab switcher — floating card top-left.
+- Legend + caption — floating card bottom-left, pointer-events-none so
+  tooltips pass through (hidden on the flow tab, whose footer chips serve the
+  same purpose).
+- Activity flow toolbar (breadcrumb, Active only, Expand/Collapse, To
+  running, thread count) — floating card top-right.
+- Activity flow footer (status chips, selected-node details) — floating card
+  bottom, pannable canvas behind it.
+- Dragging captures the pointer only after a real drag starts (moved >3px);
+  capturing before that retargets card clicks to the canvas root and eats
+  the cards' click and double-click handlers.
+
+Openings: aggregate tabs open with the whole world fitted and centered
+inside a chrome-free fit box (`SAFE` top 60 / bottom 88 / side 12px, plus a
+16px `GAP` breathing ring); the Unit treemap is sized to exactly fill the
+fit box, and the Board and Strip tiles grow their slot/tile scale (capped
+2×) and re-shelve so their shelves use the fit box's height, the way the
+treemap fills its rect. The flow tree opens in `contain` mode: contain-width
+scale floored at 0.8× so cards stay legible, vertically centered on the root
+card; scope and status-filter changes re-center there via `openAt`, while
+plain data refetches keep the camera. "⤢" re-fits the whole world.
+`panTo` ("To running") lands its target in the fit box's center.
+`MapCanvas` (views/Views.tsx) owns the pan/zoom state and clamps the world
+so content never fully leaves the viewport and clamped extremes keep a
+16px margin instead of butting flush against the edges; aggregate views
+report their world size through the `onWorld` callback (the world is exactly
+the content block, no baked-in padding). The flow tab shows a spinner
+throbber while the `shape` RPC builds the tree from live thread timelines.
+
 ## Reading the dots
 
 - Status classification (most urgent wins): needs-you (pending interaction) >

@@ -2,7 +2,22 @@
 // views render from live sidebar thread data; the Activity flow tab reads the
 // turn/work shape from the plugin's own `shape` RPC. Pure functions of the
 // model; no other server state.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+//
+// The page is a map canvas in the Google Maps / OpenStreetMap sense: each
+// view lays out into a fixed-size world layer that fills the panel viewport;
+// the operator pans by dragging, zooms with the wheel or the floating corner
+// controls, and all chrome (tabs, legend, flow toolbar and footer) floats
+// above the canvas instead of scrolling above the content.
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   experimental_useSidebarThreads,
   useBbNavigate,
@@ -43,7 +58,22 @@ import {
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "../shared";
 
 const MIN_STAGE_W = 320; // pack floor for very narrow panels
-const STAGE_CHROME = 26; // stage p-3 (2×12) + 1px border each side
+/** Chrome-free zone the opening fit keeps visible content inside: tab bar
+ * (top), the zoom-control row and legend (bottom). */
+const SAFE = { top: 60, bottom: 88, left: 12, right: 12 };
+/** Breathing room between the content block and the chrome/view edges. */
+const GAP = 16;
+/** The rect the opening fit and fit-button target: safe area plus gap. */
+const fitBox = (vw: number, vh: number) => ({
+  x: SAFE.left + GAP,
+  y: SAFE.top + GAP,
+  w: Math.max(1, vw - SAFE.left - SAFE.right - GAP * 2),
+  h: Math.max(1, vh - SAFE.top - SAFE.bottom - GAP * 2),
+});
+const ZOOM_MIN = 0.2; // zoom-out floor
+const ZOOM_MAX = 5; // zoom-in ceiling
+/** Contain-mode zoom floor: card labels stay readable when opening flow. */
+const MIN_LEGIBLE = 0.8;
 const P = 13; // card slot pitch
 const DOT = 8;
 const LBL = 13;
@@ -59,6 +89,22 @@ type LiveModel = {
   state: "loading" | "error" | "ready";
 };
 
+/** World-space bounds of a view: what the map canvas pans and zooms over. */
+type WorldSize = { W: number; H: number };
+/** Imperative map controls handed back to views (e.g. flow's "To running"). */
+type MapApi = {
+  fit: () => void;
+  panTo: (x: number, y: number) => void;
+  /** Legible contain-width opening centered on a world point (a scope change). */
+  openAt: (x: number, y: number) => void;
+};
+
+/** World bounds that Stage renders a content region of `contentH` px into. */
+const worldOf = (w: number, contentH: number): WorldSize => ({
+  W: w,
+  H: Math.ceil(contentH),
+});
+
 function useLiveModel(): LiveModel {
   const { status, threads, projects } = experimental_useSidebarThreads();
   return useMemo(() => {
@@ -69,25 +115,298 @@ function useLiveModel(): LiveModel {
 }
 
 /**
- * Measure the width available for the stage (the wrapper the views mount into)
- * so packing reflows to the panel instead of overflowing it.
+ * Measure the panel viewport (the wrapper the map canvas fills) so views pack
+ * to the visible width and the treemap fills the visible height.
  */
-function useStageWidth(min: number): [React.RefObject<HTMLDivElement | null>, number] {
+function usePanelSize(min: number): [RefObject<HTMLDivElement | null>, number, number] {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(min);
+  const [h, setH] = useState(0);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const read = () => {
-      const cw = el.clientWidth;
-      if (cw > 0) setW(Math.floor(cw));
+      if (el.clientWidth > 0) setW(Math.floor(el.clientWidth));
+      if (el.clientHeight > 0) setH(Math.floor(el.clientHeight));
     };
     read();
     const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  return [ref, w];
+  return [ref, w, h];
+}
+
+const clampT = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** Clamp a pan axis so the content keeps at least `m` margin from the view
+ * edges at every extreme (flush edges read as mis-centered). */
+const clampPan = (tx: number, span: number, view: number, m: number) => {
+  const lo = Math.min(m, view - m - span);
+  const hi = Math.max(view - m - span, m);
+  return clampT(tx, lo, hi);
+};
+
+/**
+ * A maps-style full-bleed canvas: `children` live in a world-space layer the
+ * operator pans by dragging and zooms with the wheel or the corner controls.
+ * `world` gives the world bounds views report for fit/clamping; `overlay` is
+ * untransformed chrome rendered above the canvas (flow toolbar and footer).
+ * The opening zoom is "fit" (whole world in the fit box) or "contain" (a
+ * legible contain-width scale centered on `focus` — the flow tree).
+ */
+function MapCanvas({
+  world,
+  apiRef,
+  zoomMode = "fit",
+  focus = null,
+  overlay,
+  children,
+}: {
+  world: WorldSize | null;
+  apiRef: RefObject<MapApi | null>;
+  zoomMode?: "fit" | "contain";
+  focus?: { x: number; y: number } | null;
+  overlay?: ReactNode;
+  children: ReactNode;
+}) {
+  const viewRef = useRef<HTMLDivElement>(null);
+  const [t, setT] = useState({ k: 1, tx: 0, ty: 0 });
+  const tRef = useRef(t);
+  tRef.current = t;
+  const sizeRef = useRef({ vw: 0, vh: 0 });
+  const worldRef = useRef<WorldSize | null>(world);
+  worldRef.current = world;
+  const zoomModeRef = useRef(zoomMode);
+  zoomModeRef.current = zoomMode;
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
+  const initialDoneRef = useRef(false);
+  const dragRef = useRef<{ id: number; px: number; py: number; tx: number; ty: number; captured: boolean } | null>(null);
+  const lastPanRef = useRef(0);
+  const [panning, setPanning] = useState(false);
+
+  const applyT = useCallback((next: { k: number; tx: number; ty: number }) => {
+    const { vw, vh } = sizeRef.current;
+    const sz = worldRef.current;
+    if (sz !== null && sz.W > 0 && sz.H > 0 && vw > 0 && vh > 0) {
+      next.k = clampT(next.k, ZOOM_MIN, ZOOM_MAX);
+      const wx = next.k * sz.W;
+      const wy = next.k * sz.H;
+      next.tx = clampPan(next.tx, wx, vw, GAP);
+      next.ty = clampPan(next.ty, wy, vh, GAP);
+    }
+    setT((prev) =>
+      prev.k === next.k && prev.tx === next.tx && prev.ty === next.ty ? prev : next,
+    );
+  }, []);
+
+  const fit = useCallback(() => {
+    const { vw, vh } = sizeRef.current;
+    const sz = worldRef.current;
+    if (sz === null || sz.W <= 0 || sz.H <= 0 || vw <= 0 || vh <= 0) return;
+    // The opening fit never blows a small world up past legibility (1×) and
+    // centers it inside the chrome-free fit box, not the raw viewport.
+    const box = fitBox(vw, vh);
+    const k = clampT(Math.min(box.w / sz.W, box.h / sz.H, 1), ZOOM_MIN, 1);
+    applyT({
+      k,
+      tx: box.x + (box.w - sz.W * k) / 2,
+      ty: box.y + (box.h - sz.H * k) / 2,
+    });
+  }, [applyT]);
+
+  const zoomAt = useCallback(
+    (cx: number, cy: number, factor: number) => {
+      const cur = tRef.current;
+      const k2 = clampT(cur.k * factor, ZOOM_MIN, ZOOM_MAX);
+      if (k2 === cur.k) return;
+      applyT({
+        k: k2,
+        tx: cx - (cx - cur.tx) * (k2 / cur.k),
+        ty: cy - (cy - cur.ty) * (k2 / cur.k),
+      });
+    },
+    [applyT],
+  );
+
+  const panTo = useCallback(
+    (x: number, y: number) => {
+      const k = tRef.current.k;
+      // Land the point in the middle of the fit box, clear of the chrome.
+      const box = fitBox(sizeRef.current.vw, sizeRef.current.vh);
+      applyT({ k, tx: box.x + box.w / 2 - x * k, ty: box.y + box.h / 2 - y * k });
+    },
+    [applyT],
+  );
+
+  /** Legible contain-width opening centered on a world point. */
+  const openAt = useCallback(
+    (x: number, y: number) => {
+      const sz = worldRef.current;
+      if (sz === null || sz.W <= 0 || sz.H <= 0) return;
+      const box = fitBox(sizeRef.current.vw, sizeRef.current.vh);
+      const k = clampT(Math.min(1, box.w / sz.W), MIN_LEGIBLE, 1);
+      applyT({ k, tx: box.x + box.w / 2 - x * k, ty: box.y + box.h / 2 - y * k });
+    },
+    [applyT],
+  );
+
+  // Publish the imperative API for views ("To running", scope re-centers).
+  // A layout effect: views' passive effects must see the API on first mount.
+  useLayoutEffect(() => {
+    const api = { fit, panTo, openAt };
+    apiRef.current = api;
+    return () => {
+      if (apiRef.current === api) apiRef.current = null;
+    };
+  }, [apiRef, fit, panTo, openAt]);
+
+  // The opening view: fill the fit box the way the view asks — "fit" covers
+  // the whole world, "contain" keeps a legible scale and centers on `focus`
+  // (the flow tree opens on its root instead of shrunken to specks).
+  // Whichever of world/viewport arrives later fires it, so a remount after a
+  // tab change always ends fitted.
+  const openOnce = useCallback(() => {
+    if (initialDoneRef.current) return;
+    const sz = worldRef.current;
+    const { vw, vh } = sizeRef.current;
+    if (sz === null || sz.W <= 0 || sz.H <= 0 || vw <= 0 || vh <= 0) return;
+    initialDoneRef.current = true;
+    const box = fitBox(vw, vh);
+    if (zoomModeRef.current === "contain") {
+      const k = clampT(Math.min(1, box.w / sz.W), MIN_LEGIBLE, 1);
+      const f = focusRef.current;
+      applyT({
+        k,
+        tx: box.x + (box.w - sz.W * k) / 2,
+        ty: f !== null ? box.y + box.h / 2 - f.y * k : box.y + (box.h - sz.H * k) / 2,
+      });
+      return;
+    }
+    const k = clampT(Math.min(box.w / sz.W, box.h / sz.H, 1), ZOOM_MIN, 1);
+    applyT({ k, tx: box.x + (box.w - sz.W * k) / 2, ty: box.y + (box.h - sz.H * k) / 2 });
+  }, [applyT]);
+  useLayoutEffect(openOnce, [openOnce, world]);
+
+  // Measure the viewport and re-clamp the transform when it resizes.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    const read = () => {
+      sizeRef.current = { vw: view.clientWidth, vh: view.clientHeight };
+      if (sizeRef.current.vw > 0 && sizeRef.current.vh > 0) openOnce();
+      else applyT({ ...tRef.current });
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(view);
+    return () => ro.disconnect();
+  }, [applyT, openOnce]);
+
+  // Wheel zooms around the cursor (non-passive so the page never scrolls).
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = view.getBoundingClientRect();
+      zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0016));
+    };
+    view.addEventListener("wheel", onWheel, { passive: false });
+    return () => view.removeEventListener("wheel", onWheel);
+  }, [zoomAt]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button") !== null) return;
+    const cur = tRef.current;
+    dragRef.current = { id: e.pointerId, px: e.clientX, py: e.clientY, tx: cur.tx, ty: cur.ty, captured: false };
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (d === null || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.px;
+    const dy = e.clientY - d.py;
+    if (Math.abs(dx) + Math.abs(dy) <= 3) return;
+    if (!d.captured) {
+      // Capture only once the drag is real: while a capture is active the
+      // browser retargets clicks to the capturing element, which would eat
+      // the cards' click and double-click handlers.
+      e.currentTarget.setPointerCapture(e.pointerId);
+      d.captured = true;
+      setPanning(true);
+    }
+    lastPanRef.current = Date.now();
+    applyT({ k: tRef.current.k, tx: d.tx + dx, ty: d.ty + dy });
+  };
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (d === null || e.pointerId !== d.id) return;
+    dragRef.current = null;
+    setPanning(false);
+    if (d.captured && e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+  // A drag must not land as a click/double-click on a card under the cursor.
+  const swallowIfPanned = (e: React.SyntheticEvent) => {
+    if (Date.now() - lastPanRef.current < 200) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
+  return (
+    <>
+      <div
+        ref={viewRef}
+        className="absolute inset-0 touch-none select-none"
+        style={{ background: "#0f151d", cursor: panning ? "grabbing" : "grab" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onClickCapture={swallowIfPanned}
+        onDoubleClickCapture={swallowIfPanned}
+      >
+        <div
+          className="absolute left-0 top-0"
+          style={{
+            width: world?.W,
+            height: world?.H,
+            transform: `translate(${t.tx}px, ${t.ty}px) scale(${t.k})`,
+            transformOrigin: "0 0",
+          }}
+        >
+          {children}
+        </div>
+        {overlay != null ? (
+          <div className="pointer-events-none absolute inset-0 z-10">{overlay}</div>
+        ) : null}
+        <div className="absolute bottom-3 right-3 z-20 flex gap-1">
+          {(
+            [
+              ["Fit to view", "⤢", fit],
+              ["Zoom in", "+", () => zoomAt(sizeRef.current.vw / 2, sizeRef.current.vh / 2, 1.3)],
+              ["Zoom out", "−", () => zoomAt(sizeRef.current.vw / 2, sizeRef.current.vh / 2, 1 / 1.3)],
+            ] as Array<[string, string, () => void]>
+          ).map(([title, label, onClick]) => (
+            <button
+              key={title}
+              type="button"
+              title={title}
+              aria-label={title}
+              onClick={onClick}
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-card text-muted-foreground shadow-sm hover:text-foreground"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
 }
 
 function LegendRow({ counts }: { counts: Record<Status, number> }) {
@@ -113,12 +432,11 @@ function LegendRow({ counts }: { counts: Record<Status, number> }) {
   );
 }
 
-function Stage({ w, h, children }: { w: number; h: number; children: ReactNode }) {
+/** World-space root of a view: the fixed-region layer the map pans/zooms. */
+function Stage({ w, contentH, children }: { w: number; contentH: number; children: ReactNode }) {
   return (
-    <div className="overflow-x-auto rounded-md border border-border/60 p-3" style={{ background: "#0f151d" }}>
-      <div className="relative" style={{ width: w, height: Math.ceil(h) }}>
-        {children}
-      </div>
+    <div className="absolute left-0 top-0" style={{ width: w, height: Math.ceil(contentH) }}>
+      {children}
     </div>
   );
 }
@@ -142,15 +460,49 @@ function Dot({ cell, x, y, d, nowMs }: { cell: Cell; x: number; y: number; d: nu
 }
 
 // ---------- view 1: small-multiples board (fixed-slot cards) ----------
-export function BoardView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
+export function BoardView({
+  data,
+  nowMs,
+  w,
+  h,
+  onWorld,
+}: {
+  data: SidebarData;
+  nowMs: number;
+  w: number;
+  /** Fit-box height budget: shelves rescale to use it like the treemap. */
+  h: number;
+  onWorld: (s: WorldSize | null) => void;
+}) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
-    const cards = makeCards(projects, P, LBL, BOARD_MIN_CARD_W);
-    const packed = shelfPack(cards, w, 14, 14);
-    return { packed, count: projects.length };
-  }, [data, nowMs, w]);
+    // Fill the fit box the way the treemap fills its rect: grow the slot
+    // pitch and re-shelve so the shelves use the available height. Capped at
+    // 2× so one or two projects don't become a poster.
+    let scale = 1;
+    let packed = shelfPack(makeCards(projects, P, LBL, BOARD_MIN_CARD_W), w, 14, 14);
+    if (h > 0 && packed.H > 0) {
+      const s = Math.min(2, h / packed.H);
+      if (s > 1.02) {
+        scale = s;
+        packed = shelfPack(makeCards(projects, P * s, LBL * s, BOARD_MIN_CARD_W * s), w, 14, 14);
+        const s2 = h / packed.H;
+        if (s2 < 1 && s2 > 0.8) {
+          scale *= s2;
+          packed = shelfPack(makeCards(projects, P * scale, LBL * scale, BOARD_MIN_CARD_W * scale), w, 14, 14);
+        }
+      }
+    }
+    return { packed, scale, world: worldOf(w, packed.H) };
+  }, [data, nowMs, w, h]);
+  useEffect(() => {
+    onWorld(model.world);
+  }, [model.world, onWorld]);
+  const pitch = P * model.scale;
+  const labelH = LBL * model.scale;
+  const dot = DOT * model.scale;
   return (
-    <Stage w={w} h={model.packed.H}>
+    <Stage w={w} contentH={model.packed.H}>
       {model.packed.placed.map(({ card, x, y }) => (
         <div
           key={card.key}
@@ -161,14 +513,14 @@ export function BoardView({ data, nowMs, w }: { data: SidebarData; nowMs: number
           <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "#9fb4c8" }}>
             {card.name} · {card.n}
           </div>
-          <div className="absolute" style={{ left: 8, top: LBL + 6, width: card.cols * P, height: card.rows * P }}>
+          <div className="absolute" style={{ left: 8, top: labelH + 6, width: card.cols * pitch, height: card.rows * pitch }}>
             {card.cells.map((cell, i) => (
               <Dot
                 key={cell.t.id}
                 cell={cell}
-                x={(i % card.cols) * P + 2}
-                y={Math.floor(i / card.cols) * P + 2}
-                d={DOT}
+                x={(i % card.cols) * pitch + 2}
+                y={Math.floor(i / card.cols) * pitch + 2}
+                d={dot}
                 nowMs={nowMs}
               />
             ))}
@@ -180,9 +532,26 @@ export function BoardView({ data, nowMs, w }: { data: SidebarData; nowMs: number
 }
 
 // ---------- view 2: unit treemap (honest fill) ----------
-export function UnitTreemapView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
+export function UnitTreemapView({
+  data,
+  nowMs,
+  w,
+  h,
+  onWorld,
+}: {
+  data: SidebarData;
+  nowMs: number;
+  w: number;
+  /** Height budget from the panel viewport, so the treemap fills the view. */
+  h: number;
+  onWorld: (s: WorldSize | null) => void;
+}) {
+  const world = useMemo(() => worldOf(w, h), [w, h]);
+  useEffect(() => {
+    onWorld(world);
+  }, [world, onWorld]);
   const model = useMemo(() => {
-    const W = w, H = 240, INSET = 2;
+    const W = w, H = h, PAD = 2;
     const { projects, total } = buildProjects(data.threads, data.projects, nowMs);
     if (total === 0 || projects.length === 0) return null;
     const rect = squarify(projects.map((p, i) => ({ key: String(i), weight: p.n })), W, H);
@@ -190,7 +559,7 @@ export function UnitTreemapView({ data, nowMs, w }: { data: SidebarData; nowMs: 
     const d = Math.max(5, Math.min(22, Math.round(pitch * 0.38)));
     const regions = rect.map((r) => {
       const p = projects[Number(r.key)];
-      const x = r.x + INSET, y = r.y + INSET, w = r.w - 2 * INSET, h = r.h - 2 * INSET;
+      const x = r.x + PAD, y = r.y + PAD, w = r.w - 2 * PAD, h = r.h - 2 * PAD;
       const showLabel = w > 64 && h > 30;
       const top = showLabel ? 13 : 0;
       const h2 = Math.max(1, h - top);
@@ -206,12 +575,12 @@ export function UnitTreemapView({ data, nowMs, w }: { data: SidebarData; nowMs: 
       return { p, x, y, w, h, showLabel, top, cols, rows, cw, ch };
     });
     return { regions, pitch, d, projectCount: projects.length };
-  }, [data, nowMs, w]);
+  }, [data, nowMs, w, h]);
   if (!model) {
     return <p className="text-sm text-muted-foreground">No visible threads.</p>;
   }
   return (
-    <Stage w={w} h={240}>
+    <Stage w={w} contentH={h}>
       {model.regions.map((r) => (
         <div
           key={r.p.pid}
@@ -251,19 +620,48 @@ export function UnitTreemapView({ data, nowMs, w }: { data: SidebarData; nowMs: 
 }
 
 // ---------- view 3: strip tiles ----------
-export function StripTilesView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
+export function StripTilesView({
+  data,
+  nowMs,
+  w,
+  h,
+  onWorld,
+}: {
+  data: SidebarData;
+  nowMs: number;
+  w: number;
+  /** Fit-box height budget: tiles rescale to use it like the treemap. */
+  h: number;
+  onWorld: (s: WorldSize | null) => void;
+}) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
     const byN = [...projects].sort((a, b) => b.n - a.n);
-    const tiles = byN.map((p) => {
-      const w = Math.max(120, p.n * 5 + 20);
-      return { p, units: p.cells, w, h: 34 };
-    });
-    const packed = shelfPack(tiles, w, 12, 10);
-    return { packed };
-  }, [data, nowMs, w]);
+    const base = byN.map((p) => ({ p, units: p.cells, w: Math.max(120, p.n * 5 + 20), h: 34 }));
+    // Fill the fit box the way the treemap fills its rect: grow the tile
+    // scale and re-wrap until the tiles use the available height. Capped 2×.
+    let scale = 1;
+    let packed = shelfPack(base, w, 12, 10);
+    if (h > 0 && packed.H > 0) {
+      const s = Math.min(2, h / packed.H);
+      if (s > 1.02) {
+        scale = s;
+        packed = shelfPack(base.map((t) => ({ ...t, w: t.w * s, h: t.h * s })), w, 12, 10);
+        const s2 = h / packed.H;
+        if (s2 < 1 && s2 > 0.8) {
+          scale *= s2;
+          packed = shelfPack(base.map((t) => ({ ...t, w: t.w * scale, h: t.h * scale })), w, 12, 10);
+        }
+      }
+    }
+    return { packed, scale, world: worldOf(w, packed.H) };
+  }, [data, nowMs, w, h]);
+  useEffect(() => {
+    onWorld(model.world);
+  }, [model.world, onWorld]);
+  const scale = model.scale;
   return (
-    <Stage w={w} h={model.packed.H}>
+    <Stage w={w} contentH={model.packed.H}>
       {model.packed.placed.map(({ card, x, y }) => (
         <div
           key={card.p.pid}
@@ -271,7 +669,7 @@ export function StripTilesView({ data, nowMs, w }: { data: SidebarData; nowMs: n
           className="absolute"
           style={{ left: x, top: y, width: card.w }}
         >
-          <div className="truncate" style={{ fontSize: 11, color: "#9fb4c8", marginBottom: 4 }}>
+          <div className="truncate" style={{ fontSize: 11, color: "#9fb4c8", marginBottom: 4 * scale }}>
             {card.p.name} · {card.p.n}
           </div>
           <div className="flex">
@@ -280,7 +678,7 @@ export function StripTilesView({ data, nowMs, w }: { data: SidebarData; nowMs: n
                 key={cell.t.id}
                 title={tip(cell.t, nowMs)}
                 className="rounded-sm"
-                style={{ width: 4, height: 12, marginRight: 1, background: cellColor(cell.t, nowMs) }}
+                style={{ width: 4 * scale, height: 12 * scale, marginRight: scale, background: cellColor(cell.t, nowMs) }}
               />
             ))}
           </div>
@@ -291,18 +689,31 @@ export function StripTilesView({ data, nowMs, w }: { data: SidebarData; nowMs: n
 }
 
 // ---------- view 4: agent graph (edge-less lane tree) ----------
-export function AgentLanesView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
+export function AgentLanesView({
+  data,
+  nowMs,
+  w,
+  onWorld,
+}: {
+  data: SidebarData;
+  nowMs: number;
+  w: number;
+  onWorld: (s: WorldSize | null) => void;
+}) {
   const model = useMemo(() => {
     const { lanes, total } = laneRows(data.threads, data.projects, nowMs);
     const cards = makeLaneCards(lanes, LBL);
     const packed = shelfPack(cards, w, 14, 14);
-    return { packed, total };
+    return { packed, total, world: worldOf(w, packed.H) };
   }, [data, nowMs, w]);
+  useEffect(() => {
+    onWorld(model.world);
+  }, [model.world, onWorld]);
   if (model.total === 0) {
     return <p className="text-sm text-muted-foreground">No visible threads.</p>;
   }
   return (
-    <Stage w={w} h={model.packed.H}>
+    <Stage w={w} contentH={model.packed.H}>
       {model.packed.placed.map(({ card, x, y }) => (
         <div
           key={card.pid}
@@ -434,7 +845,11 @@ function useFold(shape: ShapeDto | null) {
   return { open, toggle, expandAll, collapseAll };
 }
 
-function ActivityFlowView() {
+function ActivityFlowView({
+  apiRef,
+}: {
+  apiRef: RefObject<MapApi | null>;
+}) {
   const { shape, error, retry } = useShape();
   const navigate = useBbNavigate();
   const fold = useFold(shape);
@@ -446,27 +861,31 @@ function ActivityFlowView() {
     new Set(["running", "waiting", "error", "queued"] as FlowStatus[]),
   );
   const [selected, setSelected] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const nowMs = Date.now();
   const layout = useMemo(
     () => (shape === null ? null : flowLayout(shape, fold.open, { scope: scopeId, statusFilter })),
     [shape, fold.open, scopeId, statusFilter],
   );
-
-  // Center the root card in the scroller whenever the layout changes, so the
-  // tall tree opens on the whole rather than on its top edge.
-  useEffect(() => {
-    const scroller = scrollRef.current;
-    if (scroller === null || layout === null) return;
+  // Opening/re-centering focus: the root card's center, the tree's entry.
+  const flowFocus = useMemo(() => {
+    if (layout === null) return null;
     const root = layout.placed.find((p) => p.node.kind === "root");
-    if (root !== undefined) {
-      scroller.scrollTop = Math.max(0, root.y + NODE_H / 2 - scroller.clientHeight / 2);
-    }
+    return root === undefined ? null : { x: root.x + NODE_W / 2, y: root.y + NODE_H / 2 };
   }, [layout]);
+  // Recenters on the root when the scope or the status filter changes; data
+  // refetches keep the operator's camera where they left it.
+  const scopeKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (flowFocus === null) return;
+    const key = `${scopeId ?? ""}|${[...statusFilter].sort().join(",")}`;
+    if (scopeKeyRef.current === key) return;
+    scopeKeyRef.current = key;
+    apiRef.current?.openAt(flowFocus.x, flowFocus.y);
+  }, [flowFocus, scopeId, statusFilter, apiRef]);
 
   if (error !== null && shape === null) {
     return (
-      <div>
+      <div className="p-4">
         <p className="text-sm text-muted-foreground">Could not load activity shape: {error}</p>
         <button type="button" onClick={retry} className="mt-2 text-xs text-muted-foreground underline">
           Retry
@@ -475,7 +894,17 @@ function ActivityFlowView() {
     );
   }
   if (layout === null || shape === null) {
-    return <p className="text-sm text-muted-foreground">Loading activity…</p>;
+    return (
+      <div className="p-4">
+        <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+          <span
+            className="h-4 w-4 flex-none animate-spin rounded-full border-2 border-muted-foreground/30"
+            style={{ borderTopColor: "#8fa3b5" }}
+          />
+          Loading activity — building the shape from live thread timelines…
+        </span>
+      </div>
+    );
   }
 
   const byId = new Map(layout.placed.map((p) => [p.node.id, p]));
@@ -542,61 +971,99 @@ function ActivityFlowView() {
   };
 
   return (
-    <div className="rounded-md border border-border/60" style={{ background: "#0f151d" }}>
-      <div className="flex flex-wrap items-center gap-2 p-2 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1">
-          <button
-            type="button"
-            className={scopeId === null ? "text-foreground underline" : "underline hover:text-foreground"}
-            onClick={() => setScopeId(null)}
-          >
-            All
-          </button>
-          {scopeProject !== null ? (
-            <>
-              <span>/</span>
-              <button
-                type="button"
-                onClick={() => setScopeId(scopeProject.id)}
-                className={scopeId === scopeProject.id ? "text-foreground underline" : "underline hover:text-foreground"}
-              >
-                {scopeProject.label}
-              </button>
-            </>
-          ) : null}
-          {scopeId !== null && shapeById.get(scopeId)?.kind === "thread" ? (
-            <>
-              <span>/</span>
-              <span className="truncate text-foreground" style={{ maxWidth: 180 }}>
-                {shapeById.get(scopeId)!.label}
+    <>
+      <MapCanvas
+        world={layout === null ? null : { W: layout.W, H: layout.H }}
+        apiRef={apiRef}
+        zoomMode="contain"
+        focus={flowFocus}
+        overlay={
+          <>
+            <div className="pointer-events-auto absolute right-3 top-3 z-10 flex max-w-[min(560px,calc(100%_-_18rem))] flex-wrap items-center gap-2 rounded-md border border-border/60 bg-card p-2 text-[11px] text-muted-foreground shadow-sm">
+              <span className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  className={scopeId === null ? "text-foreground underline" : "underline hover:text-foreground"}
+                  onClick={() => setScopeId(null)}
+                >
+                  All
+                </button>
+                {scopeProject !== null ? (
+                  <>
+                    <span>/</span>
+                    <button
+                      type="button"
+                      onClick={() => setScopeId(scopeProject.id)}
+                      className={scopeId === scopeProject.id ? "text-foreground underline" : "underline hover:text-foreground"}
+                    >
+                      {scopeProject.label}
+                    </button>
+                  </>
+                ) : null}
+                {scopeId !== null && shapeById.get(scopeId)?.kind === "thread" ? (
+                  <>
+                    <span>/</span>
+                    <span className="truncate text-foreground" style={{ maxWidth: 180 }}>
+                      {shapeById.get(scopeId)!.label}
+                    </span>
+                  </>
+                ) : null}
               </span>
-            </>
-          ) : null}
-        </span>
-        <ToolbarButton
-          pressed={activeOnlyPressed}
-          onClick={() => setStatusFilter(activeOnlyPressed ? new Set() : new Set(["running", "waiting", "error", "queued"] as FlowStatus[]))}
-        >
-          Active only
-        </ToolbarButton>
-        <ToolbarButton onClick={() => fold.expandAll(foldableIds)}>Expand</ToolbarButton>
-        <ToolbarButton onClick={() => fold.collapseAll(foldableIds)}>Collapse</ToolbarButton>
-        <ToolbarButton
-          onClick={() => {
-            if (running === undefined || scrollRef.current === null) return;
-            selected === running.node.id ? setSelected(null) : setSelected(running.node.id);
-            scrollRef.current.scrollTo({ left: Math.max(0, running.x - 120), behavior: "smooth" });
-          }}
-        >
-          To running
-        </ToolbarButton>
-        <span className="ml-auto">
-          {shape.nodes.filter((n) => n.kind === "thread").length} threads
-          {shape.truncated ? " · truncated (coldest dropped)" : ""}
-        </span>
-      </div>
-      <div ref={scrollRef} className="overflow-auto" style={{ maxHeight: "calc(100vh - 290px)" }}>
-        <div className="relative" style={{ width: layout.W, height: layout.H }}>
+              <ToolbarButton
+                pressed={activeOnlyPressed}
+                onClick={() => setStatusFilter(activeOnlyPressed ? new Set() : new Set(["running", "waiting", "error", "queued"] as FlowStatus[]))}
+              >
+                Active only
+              </ToolbarButton>
+              <ToolbarButton onClick={() => fold.expandAll(foldableIds)}>Expand</ToolbarButton>
+              <ToolbarButton onClick={() => fold.collapseAll(foldableIds)}>Collapse</ToolbarButton>
+              <ToolbarButton
+                onClick={() => {
+                  if (running === undefined) return;
+                  selected === running.node.id ? setSelected(null) : setSelected(running.node.id);
+                  apiRef.current?.panTo(running.x + NODE_W / 2, running.y + NODE_H / 2);
+                }}
+              >
+                To running
+              </ToolbarButton>
+              <span className="ml-auto">
+                {shape.nodes.filter((n) => n.kind === "thread").length} threads
+                {shape.truncated ? " · truncated (coldest dropped)" : ""}
+              </span>
+            </div>
+            <div className="pointer-events-auto absolute bottom-3 left-3 right-14 z-10 flex max-h-28 flex-wrap items-center gap-x-4 gap-y-1 overflow-y-auto rounded-md border border-border/60 bg-card p-2 text-[11px] text-muted-foreground shadow-sm">
+              {[...legendCounts].filter(([, n]) => n > 0).map(([status, n]) => (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => chipToggle(status)}
+                  title={statusFilter.has(status) ? `Showing only: ${[...statusFilter].join(", ")}` : `Show only ${status} threads`}
+                  className={
+                    "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 " +
+                    (statusFilter.has(status)
+                      ? "border border-border bg-background text-foreground"
+                      : "border border-transparent hover:bg-background/60")
+                  }
+                >
+                  <FlowDotSafe status={status} />
+                  {status}&thinsp;{n}
+                </button>
+              ))}
+              {statusFilter.size > 0 ? (
+                <button type="button" className="underline" onClick={() => setStatusFilter(new Set())}>
+                  clear filter
+                </button>
+              ) : null}
+              {selectedNode !== null ? (
+                <FlowDetails node={selectedNode} nowMs={nowMs} onOpenThread={() => selectedNode.threadId !== null && navigate.toThread(selectedNode.threadId)} />
+              ) : (
+                <span>Click a project or thread to focus it · turns and steps unlock inside a scope · drag to pan, scroll to zoom</span>
+              )}
+            </div>
+          </>
+        }
+      >
+        <div className="absolute left-0 top-0" style={{ width: layout.W, height: layout.H }}>
           <svg className="pointer-events-none absolute inset-0" width={layout.W} height={layout.H}>
             {layout.placed
               .filter((p) => p.parentId !== null && byId.has(p.parentId))
@@ -634,37 +1101,8 @@ function ActivityFlowView() {
             />
           ))}
         </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/40 p-2 text-[11px] text-muted-foreground">
-        {[...legendCounts].filter(([, n]) => n > 0).map(([status, n]) => (
-          <button
-            key={status}
-            type="button"
-            onClick={() => chipToggle(status)}
-            title={statusFilter.has(status) ? `Showing only: ${[...statusFilter].join(", ")}` : `Show only ${status} threads`}
-            className={
-              "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 " +
-              (statusFilter.has(status)
-                ? "border border-border bg-background text-foreground"
-                : "border border-transparent hover:bg-background/60")
-            }
-          >
-            <FlowDotSafe status={status} />
-            {status}&thinsp;{n}
-          </button>
-        ))}
-        {statusFilter.size > 0 ? (
-          <button type="button" className="underline" onClick={() => setStatusFilter(new Set())}>
-            clear filter
-          </button>
-        ) : null}
-        {selectedNode !== null ? (
-          <FlowDetails node={selectedNode} nowMs={nowMs} onOpenThread={() => selectedNode.threadId !== null && navigate.toThread(selectedNode.threadId)} />
-        ) : (
-          <span>Click a project or thread to focus it · turns and steps unlock inside a scope · scroll to pan</span>
-        )}
-      </div>
-    </div>
+      </MapCanvas>
+    </>
   );
 }
 
@@ -818,13 +1256,19 @@ const TABS = [
   { id: "flow", label: "Activity flow" },
 ] as const;
 
+type TabId = (typeof TABS)[number]["id"];
+
 export function OverviewPage() {
   const live = useLiveModel();
-  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("board");
-  // `w` is the pack width handed to every view: measured available stage width
-  // (the mount wrapper's client width minus the stage's own padding/border).
-  const [stageRef, measured] = useStageWidth(MIN_STAGE_W + STAGE_CHROME);
-  const w = Math.max(MIN_STAGE_W, measured - STAGE_CHROME);
+  const [tab, setTab] = useState<TabId>("board");
+  // World bounds of the active aggregate view, reported through onWorld.
+  const [world, setWorld] = useState<WorldSize | null>(null);
+  const onWorld = useCallback((size: WorldSize | null) => setWorld(size), []);
+  const apiRef = useRef<MapApi | null>(null);
+  // Panel viewport: views pack to its width; the treemap fills its height.
+  const [panelRef, vw, vh] = usePanelSize(MIN_STAGE_W);
+  const w = Math.max(MIN_STAGE_W, vw - SAFE.left - GAP - SAFE.right - GAP);
+  const hBudget = Math.max(200, vh - SAFE.top - GAP - SAFE.bottom - GAP);
   if (live.state === "loading") {
     return <p className="p-4 text-sm text-muted-foreground">Loading threads…</p>;
   }
@@ -835,42 +1279,51 @@ export function OverviewPage() {
   const built = buildProjects(live.data.threads, live.data.projects, nowMs);
   const counts = statusCounts(built.projects, nowMs);
   const total = built.total;
+  const switchTab = (id: TabId) => {
+    setTab(id);
+    setWorld(null); // drop the previous view's world before the canvas remounts
+  };
   return (
-    <div className="h-full min-h-0 flex-1 overflow-y-auto">
+    <div ref={panelRef} className="relative h-full min-h-0 flex-1 overflow-hidden">
       <style>{`.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } }`}</style>
-      <div className="mx-auto box-border w-full max-w-6xl px-4 pb-4 pt-3 md:px-5 md:pt-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex gap-1 rounded-md border border-border/60 bg-card p-1">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                aria-current={tab === t.id ? "page" : undefined}
-                className={
-                  "rounded px-3 py-1 text-xs " +
-                  (tab === t.id
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground")
-                }
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <LegendRow counts={counts} />
-        </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          one dot = one thread · {total} visible · color = status, volume = count · hover any dot for the thread
-        </p>
-        <div ref={stageRef} className="mt-3">
-          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} /> : null}
-          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} /> : null}
-          {tab === "graph" ? <AgentLanesView data={live.data} nowMs={nowMs} w={w} /> : null}
-          {tab === "flow" ? <ActivityFlowView /> : null}
+      {tab === "flow" ? (
+        <ActivityFlowView apiRef={apiRef} />
+      ) : (
+        <MapCanvas key={tab} world={world} apiRef={apiRef}>
+          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+          {tab === "graph" ? <AgentLanesView data={live.data} nowMs={nowMs} w={w} onWorld={onWorld} /> : null}
+        </MapCanvas>
+      )}
+      <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%_-_1.5rem)] flex-col items-start gap-2">
+        <div className="pointer-events-auto flex gap-1 rounded-md border border-border/60 bg-card p-1 shadow-sm">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => switchTab(t.id)}
+              aria-current={tab === t.id ? "page" : undefined}
+              className={
+                "rounded px-3 py-1 text-xs " +
+                (tab === t.id
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
+      {tab !== "flow" ? (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
+          <LegendRow counts={counts} />
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            one dot = one thread · {total} visible · color = status, volume = count · drag to pan, scroll to zoom
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

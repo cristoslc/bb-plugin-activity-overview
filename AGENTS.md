@@ -5,8 +5,9 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 ## What lives where
 
 - `app.tsx` — frontend entry: the navPanel registration. Point at `views/Views.tsx`.
-- `views/Views.tsx` — the five view components and the tab page (the
-  Activity flow view carries its own `useShape` RPC hook).
+- `views/Views.tsx` — the five view components, the `MapCanvas` pan/zoom
+  shell (drag/wheel/corner-controls map canvas with floating chrome), and the
+  tab page (the Activity flow view carries its own `useShape` RPC hook).
 - `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing, and the flow fold/layout pipeline (`indexShape`, `flowDefaultOpen`, `flowChildren`, `flowAge`, `flowLayout` — the latter enforces scope-gated depth and status filtering, `NODE_W`/`NODE_H`/`COL_GAP`/`ROW_GAP`).
 - `views/timeline.ts` — pure turn normalization over thread timeline rows (copied from the agent-graph plugin).
 - `server.ts` — the stateless read-only `shape` RPC: root → project → thread → turn → work node tree built from live timelines, plus a coalesced `thread:changed` realtime push (SHAPE_CHANGED; payload in shared.ts). This file is no longer an empty stub.
