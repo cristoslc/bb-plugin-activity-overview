@@ -26,14 +26,19 @@ tabs: four aggregate tabs rendered live from the host's sidebar thread data, plu
   (deleted, archived, or outside the page) promote to roots, and
   parentThreadId cycles are severed into roots so the walk stays finite.
 - **Activity flow** — the dive view: project → thread → turn → work, built
-  server-side from each thread's turn timeline. Threads render as rows in
-  flow-wrapped project cards (no Stage canvas): dot = status, 12px title,
-  age column; a thread expands into its turns (newest first), a turn into its
-  work rows (Bash commands, tool calls, subagents/workflows as work rows).
-  Fold policy is pure (views/model.ts): projects open, hot threads open,
-  only the newest turn of a running thread expands by default; "Hide idle"
-  (default on) drops idle thread rows; "+N earlier steps/turns" markers mark
-  what the server trimmed. Click a thread row to open the thread.
+  server-side from each thread's turn timeline and rendered as a horizontal
+  tidy tree (Agent Graph style): one node card per level (240×58px cards,
+  64px column gap), depth = column, children stack vertically under an
+  expanded parent, parent card centers on its children's extent, dashed
+  bezier connectors from parent right edge to child left edge, a chevron on
+  each foldable card. Fold policy is pure (views/model.ts): projects open,
+  hot threads open, only the newest turn of a running thread expands by
+  default; "Active only" (default on) drops idle thread rows and idle-only
+  projects; "+N earlier steps/turns" markers mark what the server trimmed
+  (the work-level marker unfolds on click). Click a node for details in the
+  footer; double-click a thread (or use its footer button) to open the thread;
+  a status legend with counts sits in the footer; the layout lives in
+  `flowLayout` (views/model.ts) with tests in tests/model.test.ts.
 
 ## Reading the dots
 
@@ -43,6 +48,10 @@ tabs: four aggregate tabs rendered live from the host's sidebar thread data, plu
   #2e9e45, idle grey fading with age (#a8b3bf toward #2a3038).
 - Dominance is always read from the dot color pattern; no region is ever
   painted with a status override.
+- The Activity flow tab reuses the four dot palette hues for its node dots
+  but is a structural tree, not an aggregate: it is the one view allowed
+  connector lines (dashed bezier edges), because grouping there is
+  parent-child structure, not dot dominance.
 - Hover any dot for the thread tooltip.
 
 ## Operating constraints

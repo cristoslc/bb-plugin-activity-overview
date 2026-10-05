@@ -11,4 +11,5 @@ All notable changes to this project are documented here. Format: keep-a-changelo
 - Changed: legend now shows per-status counts; label sizes/contrast bumped (treemap labels 10px #98a8b6, board/tile labels 11px #9fb4c8).
 - Chore: thread timestamps aligned to the SDK's epoch-number types; `tsc --noEmit` is clean.
 - Added: a fourth tab, Agent lanes — the thread-family tree as edge-less lane rows (dot per thread, indent per depth level, project regions).
-- Added: a fifth tab, Activity flow — the dive view: project → thread → turn → work rows, served by the new stateless `shape` RPC (backend built from live turn timelines) with hot-first fold defaults, a "Hide idle" toggle (default on), expand/collapse-all, "+N earlier steps/turns" trim markers, and click-through that opens the thread.
+- Added: a fifth tab, Activity flow — the dive view: project → thread → turn → work, served by the new stateless `shape` RPC (backend built from live turn timelines).
+- Changed: Activity flow rebuilt from nested lists into an Agent Graph-style tidy tree — node cards in depth columns, dashed bezier connectors, chevron folds, "Active only" (on by default), Expand/Collapse/To-running toolbar, a status legend with counts, click-for-details in the footer, and double-click to open the thread.

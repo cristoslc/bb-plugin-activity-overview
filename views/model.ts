@@ -581,3 +581,99 @@ function spanOf(ms: number): string {
   if (h < 48) return `${Math.round(h)}h`;
   return `${Math.round(h / 24)}d`;
 }
+
+// ---------- activity flow: tidy-tree layout over the fold policy ----------
+// Horizontal node cards, one column per depth level, like the Agent Graph
+// panel: children stack vertically under an expanded parent and the parent
+// card centers on its children's extent.
+
+export const NODE_W = 240;
+export const NODE_H = 58;
+export const COL_GAP = 64;
+export const ROW_GAP = 14;
+
+export type PlacedNode = {
+  node: FlowNode;
+  x: number;
+  y: number;
+  depth: number;
+  parentId: string | null;
+  childCount: number;
+  expanded: boolean;
+};
+
+/**
+ * Positions for the flow tree. Fold state decides which nodes expand;
+ * activeOnly drops idle thread rows and projects left with none.
+ */
+export function flowLayout(
+  shape: ShapeDto,
+  open: ReadonlySet<string>,
+  opts: { activeOnly?: boolean } = {},
+): { placed: PlacedNode[]; W: number; H: number } {
+  const index = indexShape(shape);
+  const kids = (node: FlowNode): FlowNode[] => {
+    switch (node.kind) {
+      case "root": {
+        const projects = (index.childrenOf.get(node.id) ?? []).filter((n) => n.kind === "project");
+        return opts.activeOnly
+          ? projects.filter((p) => (index.threadsOf.get(p.id) ?? []).some((t) => t.status !== "idle"))
+          : projects;
+      }
+      case "project": {
+        const threads = index.childrenOf.get(node.id) ?? [];
+        return opts.activeOnly ? threads.filter((t) => t.status !== "idle") : threads;
+      }
+      case "thread":
+        return index.childrenOf.get(node.id) ?? [];
+      case "turn":
+        return flowChildren(node.id, index, open, { foldWork: true });
+      default:
+        return [];
+    }
+  };
+  const root = shape.nodes.find((n) => n.kind === "root");
+  if (root === undefined) return { placed: [], W: 0, H: 0 };
+  const placed: PlacedNode[] = [];
+  const walk = (
+    node: FlowNode,
+    depth: number,
+    x: number,
+    top: number,
+  ): { h: number; mid: number } => {
+    // The root is the canvas anchor, not a fold: it always expands.
+    const nodeKids = (node.kind === "root" || open.has(node.id)) ? kids(node) : [];
+    const spans: Array<{ h: number; mid: number }> = [];
+    let cursor = top;
+    // Parent card is placed before its subtree (preorder) so lists read
+    // top-down in tree order; its y is filled in once children are placed.
+    const self: PlacedNode = {
+      node,
+      x,
+      y: top,
+      depth,
+      parentId: node.parentId,
+      childCount: nodeKids.length,
+      expanded: open.has(node.id),
+    };
+    placed.push(self);
+    for (const kid of nodeKids) {
+      const sub = walk(kid, depth + 1, x + NODE_W + COL_GAP, cursor);
+      spans.push(sub);
+      cursor += sub.h + ROW_GAP;
+    }
+    // `cursor` is absolute; the subtree height is the span from this
+    // subtree's own top to the packed bottom of the children.
+    const h = nodeKids.length === 0 ? NODE_H : Math.max(cursor - ROW_GAP - top, NODE_H);
+    const mid =
+      nodeKids.length === 0
+        ? top + NODE_H / 2
+        : (spans[0]!.mid + spans[spans.length - 1]!.mid) / 2;
+    self.y = mid - NODE_H / 2;
+    return { h, mid };
+  };
+  const tree = walk(root, 0, 0, 0);
+  const W = placed.reduce((m, p) => Math.max(m, p.x + NODE_W), 0);
+  const H = Math.max(tree.h, placed.reduce((m, p) => Math.max(m, p.y + NODE_H), 0));
+  return { placed, W, H };
+}

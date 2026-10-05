@@ -21,12 +21,12 @@ import {
   shelfPack,
   squarify,
   tip,
-  flowChildren,
+  flowLayout,
   flowDefaultOpen,
   flowAge,
-  indexShape,
   FLOW_COLORS,
-  ACTIVE_STATUSES,
+  NODE_W,
+  NODE_H,
   LANE_ROW_PITCH,
   LANE_INDENT,
   LANE_LABEL_W,
@@ -35,6 +35,8 @@ import {
   type AttnThread,
   type Cell,
   type FlowNode,
+  type FlowStatus,
+  type PlacedNode,
   type ShapeDto,
   type Status,
 } from "./model";
@@ -406,36 +408,6 @@ function useShape(): { shape: ShapeDto | null; error: string | null; retry: () =
   return { shape, error, retry: () => refetchRef.current() };
 }
 
-function FlowDot({ node, d }: { node: FlowNode; d: number }) {
-  const pulsing = node.status === "running";
-  return (
-    <span
-      className={pulsing ? "attn-pulse rounded-full" : "rounded-full"}
-      style={{ display: "inline-block", width: d, height: d, background: FLOW_COLORS[node.status], flex: "none" }}
-    />
-  );
-}
-
-function FoldToggle({
-  isOpen,
-  onClick,
-}: {
-  isOpen: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={isOpen ? "Collapse" : "Expand"}
-      className="text-muted-foreground hover:text-foreground"
-      style={{ fontSize: 9, width: 12, flex: "none" }}
-    >
-      {isOpen ? "▾" : "▸"}
-    </button>
-  );
-}
-
 /**
  * Fold state: the pure default policy, overlaid with explicit user toggles.
  * `overrides` wins over the default for any id it carries.
@@ -466,9 +438,25 @@ function ActivityFlowView() {
   const { shape, error, retry } = useShape();
   const navigate = useBbNavigate();
   const fold = useFold(shape);
-  const [hideIdle, setHideIdle] = useState(true);
-  const index = useMemo(() => (shape === null ? null : indexShape(shape)), [shape]);
+  const [activeOnly, setActiveOnly] = useState(true);
+  const [selected, setSelected] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const nowMs = Date.now();
+  const layout = useMemo(
+    () => (shape === null ? null : flowLayout(shape, fold.open, { activeOnly })),
+    [shape, fold.open, activeOnly],
+  );
+
+  // Center the root card in the scroller whenever the layout changes, so the
+  // tall tree opens on the whole rather than on its top edge.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller === null || layout === null) return;
+    const root = layout.placed.find((p) => p.node.kind === "root");
+    if (root !== undefined) {
+      scroller.scrollTop = Math.max(0, root.y + NODE_H / 2 - scroller.clientHeight / 2);
+    }
+  }, [layout]);
 
   if (error !== null && shape === null) {
     return (
@@ -480,211 +468,237 @@ function ActivityFlowView() {
       </div>
     );
   }
-  if (index === null || shape === null) {
+  if (layout === null || shape === null) {
     return <p className="text-sm text-muted-foreground">Loading activity…</p>;
   }
 
-  const projectById = new Map(
-    shape.nodes.filter((n) => n.kind === "project").map((n) => [n.id, n]),
-  );
-  const allProjectIds = [...projectById.keys()];
+  const byId = new Map(layout.placed.map((p) => [p.node.id, p]));
+  const selectedPlaced = selected !== null ? byId.get(selected) : undefined;
+  const selectedNode = selectedPlaced?.node ?? null;
+  // Expand/collapse-all fold projects, threads and turns; work-fold keys
+  // ("turn::all") ride along so Expand all also reveals trimmed step rows.
   const foldableIds: string[] = [];
   for (const node of shape.nodes) {
-    if (node.kind === "project" || node.kind === "thread" || node.kind === "turn") foldableIds.push(node.id);
+    if (node.kind === "project" || node.kind === "thread" || node.kind === "turn") {
+      foldableIds.push(node.id, `${node.id}::all`);
+    }
+  }
+  const running = layout.placed.find((p) => p.node.status === "running" && p.node.kind === "thread");
+  const legendCounts = new Map<FlowStatus, number>();
+  for (const node of shape.nodes) {
+    if (node.kind !== "thread") continue;
+    legendCounts.set(node.status, (legendCounts.get(node.status) ?? 0) + 1);
   }
 
   return (
-    <div>
-      <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-        <label className="inline-flex items-center gap-1.5">
-          <input type="checkbox" checked={hideIdle} onChange={() => setHideIdle((v) => !v)} />
-          Hide idle
-        </label>
-        <button type="button" className="underline" onClick={() => fold.expandAll(foldableIds)}>
-          Expand all
-        </button>
-        <button type="button" className="underline" onClick={() => fold.collapseAll(foldableIds)}>
-          Collapse all
-        </button>
-        <span>
+    <div className="rounded-md border border-border/60" style={{ background: "#0f151d" }}>
+      <div className="flex flex-wrap items-center gap-2 p-2 text-[11px] text-muted-foreground">
+        <ToolbarButton pressed={activeOnly} onClick={() => setActiveOnly((v) => !v)}>
+          Active only
+        </ToolbarButton>
+        <ToolbarButton onClick={() => fold.expandAll(foldableIds)}>Expand</ToolbarButton>
+        <ToolbarButton onClick={() => fold.collapseAll(foldableIds)}>Collapse</ToolbarButton>
+        <ToolbarButton
+          onClick={() => {
+            if (running === undefined || scrollRef.current === null) return;
+            selected === running.node.id ? setSelected(null) : setSelected(running.node.id);
+            scrollRef.current.scrollTo({ left: Math.max(0, running.x - 120), behavior: "smooth" });
+          }}
+        >
+          To running
+        </ToolbarButton>
+        <span className="ml-auto">
           {shape.nodes.filter((n) => n.kind === "thread").length} threads
-          {shape.truncated ? " · truncated (coldest threads dropped)" : ""}
+          {shape.truncated ? " · truncated (coldest dropped)" : ""}
         </span>
       </div>
-      <div className="flex flex-wrap items-start gap-3">
-        {allProjectIds.map((pid) => {
-          const project = projectById.get(pid);
-          if (project === undefined) return null;
-          const projectOpen = fold.open.has(pid);
-          const threadRows = flowChildren(pid, index, fold.open, { hideIdleThreads: hideIdle });
-          const headerDots = (index.threadsOf.get(pid) ?? []).slice(0, 40);
-          const openThreads = (index.threadsOf.get(pid) ?? []).filter((t) => ACTIVE_STATUSES.has(t.status)).length;
-          return (
-            <div
-              key={pid}
-              className="min-w-[320px] max-w-[520px] flex-1 rounded-md"
-              style={{ background: "#131a22", border: "1px solid #1c2430", padding: 10 }}
-            >
-              <div className="flex items-center gap-2">
-                <FoldToggle isOpen={projectOpen} onClick={() => fold.toggle(pid)} />
-                <span className="truncate text-[12px]" style={{ color: "#c3d0dc" }} title={`${project.label} · ${threadRows.length} thread${threadRows.length === 1 ? "" : "s"}`}>
-                  {project.label} · {threadRows.length}
-                </span>
-                <span className="ml-auto inline-flex gap-[2px]" title="thread statuses (first 40)">
-                  {headerDots.map((t) => (
-                    <FlowDot key={t.id} node={t} d={4} />
-                  ))}
-                </span>
-                <span className="text-[10px]" style={{ color: "#7d93a8" }}>
-                  {openThreads > 0 ? `${openThreads} hot` : ""}
-                </span>
-              </div>
-              {projectOpen ? (
-                <div className="mt-1.5 flex flex-col gap-[3px]">
-                  {threadRows.map((threadRow) => (
-                    <FlowThreadRow
-                      key={threadRow.id}
-                      threadRow={threadRow}
-                      index={index}
-                      fold={fold}
-                      nowMs={nowMs}
-                      onOpenThread={() => navigate.toThread(threadRow.id)}
-                    />
-                  ))}
-                  {threadRows.length === 0 ? (
-                    <span className="text-[10px]" style={{ color: "#5f6b76" }}>
-                      {hideIdle ? "no active threads" : "no threads"}
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
+      <div ref={scrollRef} className="overflow-auto" style={{ maxHeight: "calc(100vh - 290px)" }}>
+        <div className="relative" style={{ width: layout.W, height: layout.H }}>
+          <svg className="pointer-events-none absolute inset-0" width={layout.W} height={layout.H}>
+            {layout.placed
+              .filter((p) => p.parentId !== null && byId.has(p.parentId))
+              .map((p) => {
+                const parent = byId.get(p.parentId!)!;
+                const x1 = parent.x + NODE_W, y1 = parent.y + NODE_H / 2, x2 = p.x, y2 = p.y + NODE_H / 2;
+                const mx = (x1 + x2) / 2;
+                return (
+                  <path
+                    key={p.node.id}
+                    d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+                    fill="none"
+                    stroke={p.node.status === "running" ? "#3d84e0" : "#31415a"}
+                    strokeOpacity={0.55}
+                    strokeDasharray="4 5"
+                  />
+                );
+              })}
+          </svg>
+          {layout.placed.map((p) => (
+            <FlowCard
+              key={p.node.id}
+              p={p}
+              selected={selected === p.node.id}
+              nowMs={nowMs}
+              onSelect={() => setSelected((prev) => (prev === p.node.id ? null : p.node.id))}
+              onToggle={() =>
+                p.node.kind === "more"
+                  ? fold.toggle(`${p.node.parentId}::all`)
+                  : fold.toggle(p.node.id)
+              }
+              onOpenThread={() => p.node.threadId !== null && navigate.toThread(p.node.threadId)}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/40 p-2 text-[11px] text-muted-foreground">
+        {[...legendCounts].filter(([, n]) => n > 0).map(([status, n]) => (
+          <span key={status} className="inline-flex items-center gap-1.5">
+            <FlowDotSafe status={status} />
+            {status}&thinsp;{n}
+          </span>
+        ))}
+        {selectedNode !== null ? (
+          <FlowDetails node={selectedNode} nowMs={nowMs} onOpenThread={() => selectedNode.threadId !== null && navigate.toThread(selectedNode.threadId)} />
+        ) : (
+          <span>Click a node for details · double-click a thread to open it · scroll to pan</span>
+        )}
       </div>
     </div>
   );
 }
 
-function FlowThreadRow({
-  threadRow,
-  index,
-  fold,
+function ToolbarButton({
+  children,
+  onClick,
+  pressed,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  pressed?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "rounded border px-2 py-0.5 text-[11px] " +
+        (pressed
+          ? "border-border bg-background text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground")
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function FlowDotSafe({ status }: { status: FlowStatus }) {
+  return (
+    <span
+      className={status === "running" ? "attn-pulse rounded-full" : "rounded-full"}
+      style={{ display: "inline-block", width: 7, height: 7, background: FLOW_COLORS[status], flex: "none" }}
+    />
+  );
+}
+
+/** One node card in the tree; chevron folds turn/project/thread subtrees. */
+function FlowCard({
+  p,
+  selected,
+  nowMs,
+  onSelect,
+  onToggle,
+  onOpenThread,
+}: {
+  p: PlacedNode;
+  selected: boolean;
+  nowMs: number;
+  onSelect: () => void;
+  onToggle: () => void;
+  onOpenThread: () => void;
+}) {
+  const n = p.node;
+  const collapsible = n.kind === "project" || n.kind === "thread" || n.kind === "turn";
+  const isWorkMore = n.kind === "more" && n.id.endsWith("::earlier");
+  const sub =
+    n.kind === "thread"
+      ? `${p.childCount} turn${p.childCount === 1 ? "" : "s"}${p.childCount === 0 ? "" : ` · ${flowAge(n, nowMs)}`}`
+      : (n.sublabel ?? (isWorkMore ? "click to unfold" : n.kind === "more" ? "hidden on server" : ""));
+  const openable = n.threadId !== null;
+  return (
+    <div
+      onClick={onSelect}
+      onDoubleClick={() => openable && onOpenThread()}
+      title={`${n.label} · ${n.status}${n.sublabel ? ` · ${n.sublabel}` : ""}`}
+      className={openable ? "absolute cursor-pointer rounded-md" : "absolute rounded-md"}
+      style={{
+        left: p.x,
+        top: p.y,
+        width: NODE_W,
+        height: NODE_H,
+        background: selected ? "#1a2433" : "#131a22",
+        border: `1px solid ${selected ? "#2f4b74" : "#1c2430"}`,
+        padding: "7px 8px",
+        opacity: isWorkMore || n.kind === "more" ? 0.8 : 1,
+      }}
+    >
+      <div className="flex h-full items-start gap-2 overflow-hidden">
+        <span className="mt-1 flex-none">
+          <FlowDotSafe status={n.status} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[11px]" style={{ color: n.kind === "thread" ? "#a5b8c9" : "#8fa3b5" }}>
+            {n.label}
+          </div>
+          <div className="truncate text-[10px]" style={{ color: "#5f6b76" }}>
+            {sub}
+          </div>
+        </div>
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle();
+            }}
+            aria-label={p.expanded ? "Collapse" : "Expand"}
+            className="mt-0.5 flex-none text-[9px] text-muted-foreground hover:text-foreground"
+          >
+            {p.expanded ? "▾" : "▸"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Selected-node details, shown inline in the footer. */
+function FlowDetails({
+  node,
   nowMs,
   onOpenThread,
 }: {
-  threadRow: FlowNode;
-  index: ReturnType<typeof indexShape>;
-  fold: { open: ReadonlySet<string>; toggle: (id: string) => void };
+  node: FlowNode;
   nowMs: number;
   onOpenThread: () => void;
 }) {
-  const isOpen = fold.open.has(threadRow.id);
-  const hasTurns = (index.childrenOf.get(threadRow.id) ?? []).length > 0;
-  // Turns render newest-first: what the agent is doing now sits on top.
-  const turns = isOpen ? [...(index.childrenOf.get(threadRow.id) ?? [])].reverse() : [];
   return (
-    <div style={{ paddingLeft: 12 }}>
-      <div className="flex items-center gap-2 py-[1px]" title={`${threadRow.label} · ${threadRow.status} · ${flowAge(threadRow, nowMs)}`}>
-        {hasTurns ? (
-          <FoldToggle isOpen={isOpen} onClick={() => fold.toggle(threadRow.id)} />
-        ) : (
-          <span style={{ width: 12, flex: "none" }} />
-        )}
-        <span onClick={onOpenThread} className="flex cursor-pointer items-center gap-2 hover:opacity-80" style={{ minWidth: 0, flex: "1 1 auto" }}>
-          <FlowDot node={threadRow} d={7} />
-          <span className="truncate text-[12px]" style={{ color: "#a5b8c9" }}>
-            {threadRow.label}
-          </span>
-          <span className="text-[10px]" style={{ color: "#7d93a8", flex: "none" }}>
-            {flowAge(threadRow, nowMs)}
-          </span>
-        </span>
-      </div>
-      {turns.map((turnRow) => (
-        <FlowTurnRow key={turnRow.id} turnRow={turnRow} index={index} fold={fold} nowMs={nowMs} />
-      ))}
-    </div>
-  );
-}
-
-function FlowTurnRow({
-  turnRow,
-  index,
-  fold,
-  nowMs,
-}: {
-  turnRow: FlowNode;
-  index: ReturnType<typeof indexShape>;
-  fold: { open: ReadonlySet<string>; toggle: (id: string) => void };
-  nowMs: number;
-}) {
-  if (turnRow.kind === "more") {
-    // "+N earlier turns" — the shape caps how deep the server builds; this is
-    // a marker, not a fold: expanding it client-side cannot reveal trimmed data.
-    return (
-      <div style={{ paddingLeft: 20 }}>
-        <span className="text-[10px]" style={{ color: "#5f6b76" }}>
-          {turnRow.label}
-        </span>
-      </div>
-    );
-  }
-  const isOpen = fold.open.has(turnRow.id);
-  const work = isOpen ? flowChildren(turnRow.id, index, fold.open, { foldWork: true }) : [];
-  const lastStep = turnRow.meta["last step"];
-  return (
-    <div style={{ paddingLeft: 20 }}>
-      <div className="flex items-center gap-2 py-[1px]">
-        <FoldToggle isOpen={isOpen} onClick={() => fold.toggle(turnRow.id)} />
-        <span className="truncate text-[11px]" style={{ color: "#8fa3b5" }} title={turnRow.input ?? turnRow.label}>
-          {turnRow.label}
-        </span>
-        <span className="truncate text-[10px]" style={{ color: "#5f6b76" }}>
-          {turnRow.sublabel}
-          {lastStep !== undefined && lastStep !== "" ? ` · last: ${lastStep}` : ""}
-        </span>
-        <span className="ml-auto text-[10px]" style={{ color: "#5f6b76", flex: "none" }}>
-          {flowAge(turnRow, nowMs)}
-        </span>
-      </div>
-      {work.map((workRow) =>
-        workRow.kind === "more" ? (
-          <button
-            key={workRow.id}
-            type="button"
-            className="text-[10px] underline"
-            style={{ color: "#5f6b76", paddingLeft: 52, alignSelf: "flex-start" }}
-            onClick={() => fold.toggle(`${turnRow.id}::all`)}
-          >
-            {workRow.label}
+    <span className="w-full min-w-0 text-[10px]" style={{ color: "#8fa3b5" }}>
+      <span style={{ color: "#c3d0dc" }}>{node.label}</span>
+      {" · "}
+      {node.status}
+      {node.kind === "thread" ? ` · ${flowAge(node, nowMs)}` : ""}
+      {node.input !== null ? ` · in: ${node.input.slice(0, 140)}` : ""}
+      {node.output !== null ? ` · out: ${node.output.slice(0, 140)}` : ""}
+      {node.threadId !== null ? (
+        <>
+          {" · "}
+          <button type="button" className="underline" onClick={onOpenThread}>
+            open thread
           </button>
-        ) : (
-          <FlowWorkRow key={workRow.id} workRow={workRow} nowMs={nowMs} />
-        ),
-      )}
-    </div>
-  );
-}
-
-function FlowWorkRow({ workRow, nowMs }: { workRow: FlowNode; nowMs: number }) {
-  return (
-    <div
-      className="flex items-center gap-2 py-[1px]"
-      style={{ paddingLeft: 46 }}
-      title={`${workRow.label}${workRow.sublabel ? ` · ${workRow.sublabel}` : ""} · ${workRow.status} · ${flowAge(workRow, nowMs)}`}
-    >
-      <FlowDot node={workRow} d={6} />
-      <span className="truncate text-[11px]" style={{ color: "#8fa3b5" }}>
-        {workRow.label}
-      </span>
-      <span className="truncate text-[10px]" style={{ color: "#5f6b76" }}>
-        {workRow.sublabel}
-      </span>
-      <span className="ml-auto text-[10px]" style={{ color: "#5f6b76", flex: "none" }}>
-        {flowAge(workRow, nowMs)}
-      </span>
-    </div>
+        </>
+      ) : null}
+    </span>
   );
 }
 

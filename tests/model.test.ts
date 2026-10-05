@@ -4,7 +4,8 @@ import { test } from "node:test";
 import {
   classify, buildProjects, buildAgentTree, laneRows, makeLaneCards,
   squarify, makeCards, shelfPack, attentionScore,
-  indexShape, flowDefaultOpen, flowChildren, flowAge, WORK_SHOWN,
+  indexShape, flowDefaultOpen, flowChildren, flowAge, flowLayout, WORK_SHOWN,
+  NODE_W, NODE_H, COL_GAP, ROW_GAP,
   type AttnThread, type AttnProject, type FlowNode, type ShapeDto,
 } from "../views/model.ts";
 
@@ -312,4 +313,98 @@ test("activity flow: ages — threads age since meta.updated; running work shows
   assert.match(flowAge(runningWork, NOW), /running/);
   const doneWork = fnode({ kind: "work", status: "done", startedAt: NOW - 240000, completedAt: NOW - 20000 });
   assert.equal(flowAge(doneWork, NOW), "<1m");
+});
+
+test("activity flow: tidy tree — expanded threads put turns one column right; no two cards overlap", () => {
+  const shape = shapeFrom([
+    fnode({ id: "root", parentId: null, kind: "root" }),
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_run", parentId: "project:a", kind: "thread", threadId: "thr_run", status: "running" }),
+    fnode({ id: "thr_run:turn:t1", parentId: "thr_run", kind: "turn", threadId: "thr_run" }),
+    fnode({ id: "t1:w1", parentId: "thr_run:turn:t1", kind: "work", threadId: "thr_run" }),
+    fnode({ id: "t1:w2", parentId: "thr_run:turn:t1", kind: "work", threadId: "thr_run" }),
+    fnode({ id: "thr_idle", parentId: "project:a", kind: "thread", threadId: "thr_idle", status: "idle" }),
+  ]);
+  const open = flowDefaultOpen(shape);
+  const { placed } = flowLayout(shape, open, { activeOnly: false });
+  // Default policy: project open, running thread open, its newest turn open,
+  // idle thread collapsed.
+  const byId = new Map(placed.map((p) => [p.node.id, p]));
+  assert.ok(byId.has("root"));
+  assert.equal(byId.get("thr_run")?.x, NODE_W * 2 + COL_GAP * 2);
+  assert.equal(byId.get("thr_run:turn:t1")?.x, NODE_W * 3 + COL_GAP * 3);
+  assert.ok(byId.has("t1:w1") && byId.has("t1:w2"));
+  assert.ok(!byId.has("thr_idle:turn:undefined")); // idle thread's subtree hidden
+  const idleRow = byId.get("thr_idle");
+  assert.ok(idleRow !== undefined && idleRow.childCount === 0);
+  // Pairwise overlap check on every placed card.
+  for (let i = 0; i < placed.length; i++) {
+    for (let j = i + 1; j < placed.length; j++) {
+      const a = placed[i]!, b = placed[j]!;
+      const apart =
+        a.x + NODE_W <= b.x + 0.001 || b.x + NODE_W <= a.x + 0.001 ||
+        a.y + NODE_H <= b.y + 0.001 || b.y + NODE_H <= a.y + 0.001;
+      assert.ok(apart, `cards ${a.node.id} and ${b.node.id} overlap at (${a.x},${a.y}) / (${b.x},${b.y})`);
+    }
+  }
+});
+
+test("activity flow: activeOnly drops idle thread rows and projects left with none", () => {
+  const shape = shapeFrom([
+    fnode({ id: "root", parentId: null, kind: "root" }),
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_hot", parentId: "project:a", kind: "thread", threadId: "thr_hot", status: "running" }),
+    fnode({ id: "project:b", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_cold", parentId: "project:b", kind: "thread", threadId: "thr_cold", status: "idle" }),
+  ]);
+  const closed = new Set<string>();
+  const { placed } = flowLayout(shape, closed, { activeOnly: true });
+  const ids = placed.map((p) => p.node.id);
+  assert.ok(ids.includes("project:a")); // keeps its hot thread visible when expanded
+  assert.ok(!ids.includes("project:b")); // idle-only project disappears
+  assert.ok(!ids.includes("thr_cold"));
+});
+
+test("activity flow: sibling subtree heights do not compound — deep-tree tops stay linear", () => {
+  // Regression: walk() returned absolute bottoms as subtree heights, so each
+  // later sibling accumulated the whole preceding bottom (live shape exploded
+  // to ~4M px while tests with tiny tops passed).
+  const nodes = [
+    fnode({ id: "root", parentId: null, kind: "root", threadId: null }),
+  ];
+  for (let i = 0; i < 5; i++) {
+    nodes.push(fnode({ id: `project:${i}`, parentId: "root", kind: "project", threadId: null }));
+    nodes.push(fnode({ id: `thr_${i}`, parentId: `project:${i}`, kind: "thread", threadId: `thr_${i}` }));
+  }
+  const shape = shapeFrom(nodes);
+  // Projects open; every thread closed: five one-thread chains.
+  const open = new Set(["root", "project:0", "project:1", "project:2", "project:3", "project:4"]);
+  const { placed, H } = flowLayout(shape, open, { activeOnly: false });
+  const linearMax = (placed.length + 1) * (NODE_H + ROW_GAP);
+  const maxTop = Math.max(...placed.map((p) => p.y));
+  assert.ok(maxTop < linearMax, `top exploded: ${maxTop} ≥ ${linearMax}`);
+  assert.ok(H < linearMax + NODE_H, `H exploded: ${H}`);
+});
+
+test("activity flow: collapsed nodes hide their whole subtree; W/H cover the placed extent", () => {
+  const shape = shapeFrom([
+    fnode({ id: "root", parentId: null, kind: "root" }),
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_1", parentId: "project:a", kind: "thread", threadId: "thr_1" }),
+    fnode({ id: "thr_1:turn:t1", parentId: "thr_1", kind: "turn", threadId: "thr_1" }),
+    fnode({ id: "t1:w1", parentId: "thr_1:turn:t1", kind: "work", threadId: "thr_1" }),
+  ]);
+  const closed = flowLayout(shape, new Set(["root"]), { activeOnly: false });
+  // A closed node still gets a card (it's the thing you expand); only its
+  // descendants are hidden.
+  assert.deepEqual(closed.placed.map((p) => p.node.id), ["root", "project:a"]);
+  assert.equal(closed.W, NODE_W * 2 + COL_GAP);
+  assert.equal(closed.H, NODE_H);
+
+  const partial = flowLayout(shape, new Set(["root", "project:a"]), { activeOnly: false });
+  const ids = partial.placed.map((p) => p.node.id);
+  assert.deepEqual(ids, ["root", "project:a", "thr_1"]);
+  assert.equal(partial.W, NODE_W * 3 + COL_GAP * 2);
+  // Single visible child chain, so vertical span is just one card.
+  assert.equal(partial.H, NODE_H);
 });
