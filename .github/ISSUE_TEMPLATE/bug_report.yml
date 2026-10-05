@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a defect against the Attention plugin
+labels: ["bug"]
+body:
+  - type: input
+    id: env
+    attributes: { label: Environment, description: "bb version, OS, install source" }
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes: { label: Reproduction steps }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected result }
+    validations: { required: true }
+  - type: textarea
+    id: actual
+    attributes: { label: Actual result }
+    validations: { required: true }
+  - type: textarea
+    id: workaround
+    attributes: { label: Workarounds }
+  - type: input
+    id: ref
+    attributes: { label: Related issue/ticket reference }
+  - type: textarea
+    id: recommendation
+    attributes: { label: Recommended fix }
