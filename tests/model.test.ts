@@ -14,8 +14,8 @@ function thread(over: Partial<AttnThread> = {}): AttnThread {
     parentThreadId: over.parentThreadId ?? null, status: over.status ?? "idle",
     runtimeStatus: over.runtimeStatus ?? "idle", hasPendingInteraction: over.hasPendingInteraction ?? false,
     isUnread: over.isUnread ?? false, archivedAt: over.archivedAt ?? null,
-    lastReadAt: ISO_NOW, latestAttentionAt: ISO_NOW,
-    updatedAt: ISO_NOW, createdAt: ISO_NOW,
+    lastReadAt: over.lastReadAt ?? NOW, latestAttentionAt: over.latestAttentionAt ?? NOW,
+    updatedAt: over.updatedAt ?? NOW, createdAt: over.createdAt ?? NOW,
   };
 }
 
@@ -74,6 +74,47 @@ test("shelf pack places every card without overlap row overflow", () => {
   const placed = shelfPack(cards, 1120, 14, 14);
   assert.equal(placed.placed.length, 20);
   for (const p of placed.placed) assert.ok(p.x + p.card.w <= 1121);
+});
+
+const projectOfN = (n: number, i: number) => ({
+  pid: `p${i}`, name: `prowd-${i}`, cells: [], n, best: i, hot: 0,
+});
+
+test("makeCards honours minW by widening slot cols so the grid fills the card", () => {
+  const projects = [projectOfN(1, 0), projectOfN(3, 1), projectOfN(30, 2)];
+  const cards = makeCards(projects, 13, 13, 120);
+  for (const c of cards) {
+    assert.ok(c.w >= 120, `card width ${c.w} below minW`);
+    assert.ok(c.cols * 13 + 16 >= 120, `cols ${c.cols} too narrow for minW`);
+    assert.ok(c.rows >= 1 && c.rows * c.cols >= c.n, `grid ${c.cols}x${c.rows} cannot hold ${c.n} dots`);
+  }
+  // a 1-thread project widens to fill minW; a large project keeps its natural cols
+  assert.ok(cards[0].cols > 2);
+  assert.ok(cards[2].cols >= Math.ceil(Math.sqrt(30 * 1.35)));
+});
+
+test("shelf pack reflows to any target width (no fixed 1120 assumption)", () => {
+  const projects = Array.from({ length: 12 }, (_, i) => projectOfN((i % 7) + 1, i));
+  for (const W of [360, 600, 480, 1400]) {
+    const cards = makeCards(projects, 13, 13, 120);
+    const placed = shelfPack(cards, W, 14, 14);
+    assert.equal(placed.placed.length, 12, `W=${W}`);
+    for (const p of placed.placed) {
+      assert.ok(p.x + p.card.w <= W + 0.5, `card overflows W=${W}: x=${p.x} w=${p.card.w}`);
+      assert.ok(p.x >= 0);
+    }
+    // no two cards on the same shelf overlap
+    const byShelf = new Map<number, Array<{ x0: number; x1: number }>>();
+    for (const p of placed.placed) {
+      const list = byShelf.get(p.y) ?? [];
+      list.push({ x0: p.x, x1: p.x + p.card.w });
+      byShelf.set(p.y, list);
+    }
+    for (const rows of byShelf.values()) {
+      rows.sort((a, b) => a.x0 - b.x0);
+      for (let i = 1; i < rows.length; i++) assert.ok(rows[i].x0 >= rows[i - 1].x1, `overlap at W=${W}`);
+    }
+  }
 });
 
 test("attention score orders error < needs-you < working < unread < idle", () => {

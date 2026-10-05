@@ -6,17 +6,17 @@
 export type AttnThread = {
   id: string;
   projectId: string | null;
-  title: string;
+  title: string | null;
   parentThreadId: string | null;
   status: string;
   runtimeStatus: string;
   hasPendingInteraction: boolean;
   isUnread: boolean;
-  archivedAt: string | null;
-  lastReadAt: string | null;
-  latestAttentionAt: string | null;
-  updatedAt: string | null;
-  createdAt: string | null;
+  archivedAt: number | null;
+  lastReadAt: number | null;
+  latestAttentionAt: number;
+  updatedAt: number;
+  createdAt: number;
 };
 
 export type AttnProject = { id: string; name: string };
@@ -60,7 +60,7 @@ export function classify(t: AttnThread): Status {
 
 export function ageMs(t: AttnThread, nowMs: number): number {
   const at = t.latestAttentionAt ?? t.updatedAt ?? t.createdAt;
-  return at ? nowMs - Date.parse(at) : Number.MAX_SAFE_INTEGER;
+  return typeof at === "number" ? nowMs - at : Number.MAX_SAFE_INTEGER;
 }
 
 export function ageLabel(t: AttnThread, nowMs: number): string {
@@ -115,8 +115,8 @@ export type ProjectModel = {
  * attention-ascending; projects sorted hottest-first.
  */
 export function buildProjects(
-  threads: AttnThread[],
-  projects: AttnProject[],
+  threads: readonly AttnThread[],
+  projects: readonly AttnProject[],
   nowMs: number,
 ): { projects: ProjectModel[]; total: number } {
   const visible = threads.filter((t) => !t.archivedAt);
@@ -173,7 +173,7 @@ export function buildProjects(
 
 export function statusCounts(projects: ProjectModel[], nowMs: number): Record<Status, number> {
   const counts: Record<Status, number> = { error: 0, "needs-you": 0, working: 0, unread: 0, idle: 0 };
-  for (const p of projects) for (const c of p.cells) counts[classify(c.t, nowMs)]++;
+  for (const p of projects) for (const c of p.cells) counts[classify(c.t)]++;
   return counts;
 }
 
@@ -250,12 +250,18 @@ export type CardSpec = {
   cells: Cell[];
 };
 
-export function makeCards(projects: ProjectModel[], P: number, label: number): CardSpec[] {
+/**
+ * minW: optional minimum card width in px. When a card's dot grid is narrower
+ * than minW minus the 8px side padding, cols widen so the slot grid fills the
+ * card — keeps short project names truncating instead of vanishing.
+ */
+export function makeCards(projects: ProjectModel[], P: number, label: number, minW = 0): CardSpec[] {
   const byN = [...projects].sort((a, b) => b.n - a.n || a.best - b.best);
   return byN.map((p) => {
-    const cols = Math.max(1, Math.ceil(Math.sqrt(p.n * 1.35)));
+    const minCols = minW > P + 16 ? Math.ceil((minW - 16) / P) : 1;
+    const cols = Math.max(1, Math.ceil(Math.sqrt(p.n * 1.35)), minCols);
     const rows = Math.ceil(p.n / cols);
-    const w = cols * P + 16;
+    const w = Math.max(minW, cols * P + 16);
     const h = rows * P + label + 16;
     return { key: p.pid, name: p.name, n: p.n, hot: p.hot, cols, rows, w, h, cells: p.cells };
   });

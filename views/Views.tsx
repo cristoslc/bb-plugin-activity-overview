@@ -1,6 +1,6 @@
 // bb-plugin-activity-overview — the three views (tab pages) rendered from live
 // sidebar thread data. Pure functions of the model; no server state.
-import { useMemo, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { experimental_useSidebarThreads } from "@get-bb/plugin-sdk/app";
 import {
   buildProjects,
@@ -17,14 +17,16 @@ import {
   type Status,
 } from "./model";
 
-const BOARD_W = 1120;
+const MIN_STAGE_W = 320; // pack floor for very narrow panels
+const STAGE_CHROME = 26; // stage p-3 (2×12) + 1px border each side
 const P = 13; // card slot pitch
 const DOT = 8;
 const LBL = 13;
+const BOARD_MIN_CARD_W = 120; // keeps one-dot cards readable (name fits)
 
 type SidebarData = {
-  threads: AttnThread[];
-  projects: AttnProject[];
+  threads: readonly AttnThread[];
+  projects: readonly AttnProject[];
 };
 
 type LiveModel = {
@@ -39,6 +41,28 @@ function useLiveModel(): LiveModel {
     if (status === "error" || !threads) return { data: null, state: "error" as const };
     return { data: { threads, projects }, state: "ready" as const };
   }, [status, threads, projects]);
+}
+
+/**
+ * Measure the width available for the stage (the wrapper the views mount into)
+ * so packing reflows to the panel instead of overflowing it.
+ */
+function useStageWidth(min: number): [React.RefObject<HTMLDivElement | null>, number] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [w, setW] = useState(min);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const cw = el.clientWidth;
+      if (cw > 0) setW(Math.floor(cw));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
 }
 
 function LegendRow({ counts }: { counts: Record<Status, number> }) {
@@ -57,7 +81,7 @@ function LegendRow({ counts }: { counts: Record<Status, number> }) {
             className="inline-block rounded-full"
             style={label === "idle aging" ? { width: 5, height: 5, background: color, boxShadow: "5px 0 0 #545b63" } : { width: 5, height: 5, background: color }}
           />
-          {label}
+          {label}&thinsp;{n}
         </span>
       ))}
     </div>
@@ -75,7 +99,7 @@ function Stage({ w, h, children }: { w: number; h: number; children: ReactNode }
 }
 
 function Dot({ cell, x, y, d, nowMs }: { cell: Cell; x: number; y: number; d: number; nowMs: number }) {
-  const working = classify(cell.t, nowMs) === "working";
+  const working = classify(cell.t) === "working";
   return (
     <div
       title={tip(cell.t, nowMs)}
@@ -93,15 +117,15 @@ function Dot({ cell, x, y, d, nowMs }: { cell: Cell; x: number; y: number; d: nu
 }
 
 // ---------- view 1: small-multiples board (fixed-slot cards) ----------
-export function BoardView({ data, nowMs }: { data: SidebarData; nowMs: number }) {
+export function BoardView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
-    const cards = makeCards(projects, P, LBL);
-    const packed = shelfPack(cards, BOARD_W, 14, 14);
+    const cards = makeCards(projects, P, LBL, BOARD_MIN_CARD_W);
+    const packed = shelfPack(cards, w, 14, 14);
     return { packed, count: projects.length };
-  }, [data, nowMs]);
+  }, [data, nowMs, w]);
   return (
-    <Stage w={BOARD_W} h={model.packed.H}>
+    <Stage w={w} h={model.packed.H}>
       {model.packed.placed.map(({ card, x, y }) => (
         <div
           key={card.key}
@@ -109,7 +133,7 @@ export function BoardView({ data, nowMs }: { data: SidebarData; nowMs: number })
           className="absolute rounded-md"
           style={{ left: x, top: y, width: card.w, height: card.h, background: "#10161f", border: "1px solid #1c2430" }}
         >
-          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 10, color: "#8fa3b8" }}>
+          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "#9fb4c8" }}>
             {card.name} · {card.n}
           </div>
           <div className="absolute" style={{ left: 8, top: LBL + 6, width: card.cols * P, height: card.rows * P }}>
@@ -131,9 +155,9 @@ export function BoardView({ data, nowMs }: { data: SidebarData; nowMs: number })
 }
 
 // ---------- view 2: unit treemap (honest fill) ----------
-export function UnitTreemapView({ data, nowMs }: { data: SidebarData; nowMs: number }) {
+export function UnitTreemapView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
   const model = useMemo(() => {
-    const W = BOARD_W, H = 240, INSET = 2;
+    const W = w, H = 240, INSET = 2;
     const { projects, total } = buildProjects(data.threads, data.projects, nowMs);
     if (total === 0 || projects.length === 0) return null;
     const rect = squarify(projects.map((p, i) => ({ key: String(i), weight: p.n })), W, H);
@@ -157,12 +181,12 @@ export function UnitTreemapView({ data, nowMs }: { data: SidebarData; nowMs: num
       return { p, x, y, w, h, showLabel, top, cols, rows, cw, ch };
     });
     return { regions, pitch, d, projectCount: projects.length };
-  }, [data, nowMs]);
+  }, [data, nowMs, w]);
   if (!model) {
     return <p className="text-sm text-muted-foreground">No visible threads.</p>;
   }
   return (
-    <Stage w={BOARD_W} h={240}>
+    <Stage w={w} h={240}>
       {model.regions.map((r) => (
         <div
           key={r.p.pid}
@@ -192,7 +216,7 @@ export function UnitTreemapView({ data, nowMs }: { data: SidebarData; nowMs: num
           <div
             key={`lbl-${r.p.pid}`}
             className="pointer-events-none absolute truncate"
-            style={{ left: r.x + 5, top: r.y + 2, maxWidth: r.w - 10, fontSize: 9, color: "#55636f", zIndex: 3 }}
+            style={{ left: r.x + 5, top: r.y + 2, maxWidth: r.w - 10, fontSize: 10, color: "#98a8b6", zIndex: 3 }}
           >
             {r.p.name} · {r.p.n}
           </div>
@@ -202,7 +226,7 @@ export function UnitTreemapView({ data, nowMs }: { data: SidebarData; nowMs: num
 }
 
 // ---------- view 3: strip tiles ----------
-export function StripTilesView({ data, nowMs }: { data: SidebarData; nowMs: number }) {
+export function StripTilesView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
     const byN = [...projects].sort((a, b) => b.n - a.n);
@@ -210,11 +234,11 @@ export function StripTilesView({ data, nowMs }: { data: SidebarData; nowMs: numb
       const w = Math.max(120, p.n * 5 + 20);
       return { p, units: p.cells, w, h: 34 };
     });
-    const packed = shelfPack(tiles, BOARD_W, 12, 10);
+    const packed = shelfPack(tiles, w, 12, 10);
     return { packed };
-  }, [data, nowMs]);
+  }, [data, nowMs, w]);
   return (
-    <Stage w={BOARD_W} h={model.packed.H}>
+    <Stage w={w} h={model.packed.H}>
       {model.packed.placed.map(({ card, x, y }) => (
         <div
           key={card.p.pid}
@@ -222,7 +246,7 @@ export function StripTilesView({ data, nowMs }: { data: SidebarData; nowMs: numb
           className="absolute"
           style={{ left: x, top: y, width: card.w }}
         >
-          <div className="truncate" style={{ fontSize: 10, color: "#8fa3b8", marginBottom: 4 }}>
+          <div className="truncate" style={{ fontSize: 11, color: "#9fb4c8", marginBottom: 4 }}>
             {card.p.name} · {card.p.n}
           </div>
           <div className="flex">
@@ -251,6 +275,10 @@ const TABS = [
 export function OverviewPage() {
   const live = useLiveModel();
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("board");
+  // `w` is the pack width handed to every view: measured available stage width
+  // (the mount wrapper's client width minus the stage's own padding/border).
+  const [stageRef, measured] = useStageWidth(MIN_STAGE_W + STAGE_CHROME);
+  const w = Math.max(MIN_STAGE_W, measured - STAGE_CHROME);
   if (live.state === "loading") {
     return <p className="p-4 text-sm text-muted-foreground">Loading threads…</p>;
   }
@@ -258,11 +286,9 @@ export function OverviewPage() {
     return <p className="p-4 text-sm text-muted-foreground">Could not read thread data.</p>;
   }
   const nowMs = Date.now();
-  const counts = statusCounts(
-    buildProjects(live.data.threads, live.data.projects, nowMs).projects,
-    nowMs,
-  );
-  const total = buildProjects(live.data.threads, live.data.projects, nowMs).total;
+  const built = buildProjects(live.data.threads, live.data.projects, nowMs);
+  const counts = statusCounts(built.projects, nowMs);
+  const total = built.total;
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
       <style>{`.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } }`}</style>
@@ -291,10 +317,10 @@ export function OverviewPage() {
         <p className="mt-2 text-[11px] text-muted-foreground">
           one dot = one thread · {total} visible · color = status, volume = count · hover any dot for the thread
         </p>
-        <div className="mt-3">
-          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} /> : null}
-          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} /> : null}
+        <div ref={stageRef} className="mt-3">
+          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} /> : null}
+          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} /> : null}
         </div>
       </div>
     </div>
