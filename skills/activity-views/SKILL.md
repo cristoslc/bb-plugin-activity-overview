@@ -14,7 +14,19 @@ tabs: four aggregate tabs rendered live from the host's sidebar thread data, plu
   lands in a familiar spot.
 - **Unit treemap** — region area = thread count (squarified); each thread
   occupies its true unit area as one constant-size dot; neutral region fill,
-  thin voids separate projects, no strokes.
+  thin voids separate projects, no strokes. The tab is a zoomable board
+  (`views/Views.tsx`): wheel zooms around the cursor (1×–6×, 1× = fit, which
+  fills the board exactly), drag pans, two-finger pinch zooms. Zoomed in
+  past 1.2×, hovering a project previews its family structure — one subtle
+  background tint per thread family (`familyTints`, `FAMILY_TINTS` in
+  views/model.ts; family-derived, never status-derived). On touch,
+  press-and-hold (~400ms) on a project gives the same preview, which stays
+  on until the next press. Clicking/tapping a project focuses it: the other
+  projects dim to 30% opacity and the board zooms so the project fills the
+  viewport with its family tints locked on. Tapping anything else (or the
+  ⤢ fit button) restores the zoomed-out fit view. Helpers are pure
+  (`familyTints`, `zoomToRect`, `clampPan`) with tests in
+  tests/model.test.ts.
 - **Strip tiles** — one small tile per project: name over a strip, one 4px
   unit per thread (4px + 1px gap), hottest statuses at the left edge. Tiles
   flow-wrap to fill the panel width.

@@ -2,7 +2,7 @@
 // views render from live sidebar thread data; the Activity flow tab reads the
 // turn/work shape from the plugin's own `shape` RPC. Pure functions of the
 // model; no other server state.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   experimental_useSidebarThreads,
   useBbNavigate,
@@ -25,6 +25,10 @@ import {
   flowDefaultOpen,
   flowAge,
   FLOW_COLORS,
+  familyTints,
+  FAMILY_TINTS,
+  zoomToRect,
+  clampPan,
   NODE_W,
   NODE_H,
   LANE_ROW_PITCH,
@@ -179,10 +183,20 @@ export function BoardView({ data, nowMs, w }: { data: SidebarData; nowMs: number
   );
 }
 
-// ---------- view 2: unit treemap (honest fill) ----------
+// ---------- view 2: unit treemap (honest fill + zoom-to-project) ----------
+const TREEMAP_H = 360; // board viewport height; the world fills it at 1× (fit)
+const MAX_ZOOM = 6; // wheel/pinch ceiling
+const ZOOM_SENS = 0.0025; // wheel pixels → zoom-factor exponent
+const HOVER_TINT_SCALE = 1.2; // family tints preview only when zoomed in past this
+const LONG_PRESS_MS = 400; // touch hold previews family tints
+const FOCUS_PAD = 28; // zoom-to-project padding, world px
+
+type ViewState = { scale: number; tx: number; ty: number };
+const FIT: ViewState = { scale: 1, tx: 0, ty: 0 };
+
 export function UnitTreemapView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
   const model = useMemo(() => {
-    const W = w, H = 240, INSET = 2;
+    const W = w, H = TREEMAP_H, INSET = 2;
     const { projects, total } = buildProjects(data.threads, data.projects, nowMs);
     if (total === 0 || projects.length === 0) return null;
     const rect = squarify(projects.map((p, i) => ({ key: String(i), weight: p.n })), W, H);
@@ -203,50 +217,310 @@ export function UnitTreemapView({ data, nowMs, w }: { data: SidebarData; nowMs: 
         cap = cols * rows;
       }
       const cw = w / cols, ch = h2 / rows;
-      return { p, x, y, w, h, showLabel, top, cols, rows, cw, ch };
+      return {
+        p,
+        x,
+        y,
+        w,
+        h,
+        showLabel,
+        top,
+        cols,
+        rows,
+        cw,
+        ch,
+        cellTints: familyTints(p.cells.map((c) => c.fam)),
+      };
     });
-    return { regions, pitch, d, projectCount: projects.length };
+    return { regions, d };
   }, [data, nowMs, w]);
+
+  const boxRef = useRef<HTMLDivElement>(null);
+  // Board pan/zoom (wheel = around the cursor; pinch = two pointers; fit = 1×).
+  const [view, setView] = useState<ViewState>(FIT);
+  // Focus: clicking/tapping a project dims the rest, zooms the board until the
+  // project fills the viewport, and locks the family tints on. Tapping
+  // anywhere else (or ⤢) restores the fit view.
+  const [focusPid, setFocusPid] = useState<string | null>(null);
+  const [hoverPid, setHoverPid] = useState<string | null>(null);
+  const [panning, setPanning] = useState(false);
+
+  const dragRef = useRef<{ moved: boolean; lastX: number; lastY: number } | null>(null);
+  const pinchRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchDistRef = useRef(0);
+  const holdRef = useRef<number | null>(null);
+  const suppressTapRef = useRef(false);
+  const modelRef = useRef(model);
+  modelRef.current = model;
+
+  const restore = () => {
+    setHoverPid(null);
+    setFocusPid(null);
+  };
+
+  // Wheel zoom requires a non-passive listener. When the zoom lands back at
+  // 1× the pan clamp re-centers the world, so fit is always {1, 0, 0}.
+  useEffect(() => {
+    const el = boxRef.current;
+    if (el === null) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      setView((prev) => {
+        const scale = Math.max(1, Math.min(MAX_ZOOM, prev.scale * Math.exp(-e.deltaY * ZOOM_SENS)));
+        const k = scale / prev.scale;
+        const { tx, ty } = clampPan(cx - (cx - prev.tx) * k, cy - (cy - prev.ty) * k, scale, w, TREEMAP_H, w, TREEMAP_H);
+        return { scale, tx, ty };
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [w, model]);
+
+  // Focus zooms the tapped project to fill the board; clearing focus re-fits.
+  // Model data drift re-reading is accepted; only focus changes re-aim the view.
+  useEffect(() => {
+    if (focusPid === null) {
+      setView(FIT);
+      setHoverPid(null);
+      return;
+    }
+    const regions = modelRef.current?.regions ?? [];
+    const r = regions.find((rr) => rr.p.pid === focusPid);
+    if (r === undefined) {
+      // The focused project dropped out of the live data.
+      setFocusPid(null);
+      setView(FIT);
+      return;
+    }
+    const zoom = zoomToRect({ x: r.x, y: r.y, w: r.w, h: r.h }, w, TREEMAP_H, { pad: FOCUS_PAD, maxScale: MAX_ZOOM });
+    const { tx, ty } = clampPan(zoom.tx, zoom.ty, zoom.scale, w, TREEMAP_H, w, TREEMAP_H);
+    setView({ scale: zoom.scale, tx, ty });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPid]);
+
+  const zoomAround = (mx: number, my: number, factor: number) => {
+    setView((prev) => {
+      const scale = Math.max(1, Math.min(MAX_ZOOM, prev.scale * factor));
+      const k = scale / prev.scale;
+      const { tx, ty } = clampPan(mx - (mx - prev.tx) * k, my - (my - prev.ty) * k, scale, w, TREEMAP_H, w, TREEMAP_H);
+      return { scale, tx, ty };
+    });
+  };
+
+  const onBoxDown = (e: ReactPointerEvent) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    pinchRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinchRef.current.size === 2) {
+      const [a, b] = [...pinchRef.current.values()];
+      pinchDistRef.current = Math.hypot(a.x - b.x, a.y - b.y);
+    }
+    dragRef.current = { moved: false, lastX: e.clientX, lastY: e.clientY };
+    setPanning(true);
+  };
+
+  const onBoxMove = (e: ReactPointerEvent) => {
+    if (pinchRef.current.has(e.pointerId)) pinchRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const d = dragRef.current;
+    if (d === null) return;
+    if (pinchRef.current.size === 2) {
+      const [a, b] = [...pinchRef.current.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const prev = pinchDistRef.current;
+      const box = boxRef.current;
+      if (prev > 0 && dist > 0 && box !== null) {
+        const rect = box.getBoundingClientRect();
+        zoomAround((a.x + b.x) / 2 - rect.left, (a.y + b.y) / 2 - rect.top, dist / prev);
+      }
+      pinchDistRef.current = dist;
+      d.moved = true;
+      return;
+    }
+    const dx = e.clientX - d.lastX;
+    const dy = e.clientY - d.lastY;
+    if (!d.moved && Math.hypot(dx, dy) > 3) d.moved = true;
+    setView((prev) => {
+      const { tx, ty } = clampPan(prev.tx + dx, prev.ty + dy, prev.scale, w, TREEMAP_H, w, TREEMAP_H);
+      return { scale: prev.scale, tx, ty };
+    });
+    d.lastX = e.clientX;
+    d.lastY = e.clientY;
+  };
+
+  // One release path for taps, pans and pinch ends. A tap on a region while
+  // nothing is focused focuses it; a tap while focused (on anything, region
+  // or void) restores. Pans and long-press releases never tap.
+  const onBoxUp = (e: ReactPointerEvent) => {
+    const moved = dragRef.current?.moved ?? false;
+    dragRef.current = null;
+    pinchRef.current.delete(e.pointerId);
+    if (pinchRef.current.size < 2) pinchDistRef.current = 0;
+    setPanning(false);
+    if (holdRef.current !== null) {
+      clearTimeout(holdRef.current);
+      holdRef.current = null;
+    }
+    if (moved || suppressTapRef.current) {
+      suppressTapRef.current = false;
+      return;
+    }
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const pid = (e.target as HTMLElement).closest<HTMLElement>("[data-region]")?.dataset.region ?? null;
+    if (focusPid !== null) {
+      restore();
+      return;
+    }
+    if (pid !== null) setFocusPid(pid);
+  };
+
+  const onBoxCancel = (e: ReactPointerEvent) => {
+    dragRef.current = null;
+    pinchRef.current.delete(e.pointerId);
+    if (pinchRef.current.size < 2) pinchDistRef.current = 0;
+    setPanning(false);
+    if (holdRef.current !== null) {
+      clearTimeout(holdRef.current);
+      holdRef.current = null;
+    }
+    suppressTapRef.current = false;
+  };
+
   if (!model) {
     return <p className="text-sm text-muted-foreground">No visible threads.</p>;
   }
+
+  const tintedPid = (pid: string) => focusPid === pid || (focusPid === null && hoverPid === pid);
+
   return (
-    <Stage w={w} h={240}>
-      {model.regions.map((r) => (
-        <div
-          key={r.p.pid}
-          title={`${r.p.name} · ${r.p.n} threads`}
-          className="absolute rounded-sm"
-          style={{ left: r.x, top: r.y, width: r.w, height: r.h, background: "#131a22" }}
-        />
-      ))}
-      {model.regions.flatMap((r) =>
-        r.p.cells.map((cell, i) => {
-          const j = i % r.cols, k = Math.floor(i / r.cols);
+    <div
+      ref={boxRef}
+      className="relative touch-none select-none overflow-hidden rounded-md border border-border/60"
+      style={{ width: w, height: TREEMAP_H, background: "#0f151d", cursor: panning ? "grabbing" : "grab" }}
+      onPointerDown={onBoxDown}
+      onPointerMove={onBoxMove}
+      onPointerUp={onBoxUp}
+      onPointerCancel={onBoxCancel}
+    >
+      <div
+        className="absolute"
+        style={{
+          width: w,
+          height: TREEMAP_H,
+          transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`,
+          transformOrigin: "0 0",
+          transition: panning ? "none" : "transform 220ms ease",
+        }}
+      >
+        {model.regions.map((r) => {
+          const tinted = tintedPid(r.p.pid) && (focusPid !== null || view.scale > HOVER_TINT_SCALE);
+          const dim = focusPid !== null && focusPid !== r.p.pid;
           return (
-            <Dot
-              key={cell.t.id}
-              cell={cell}
-              x={r.x + (j + 0.5) * r.cw - model.d / 2}
-              y={r.y + r.top + (k + 0.5) * r.ch - model.d / 2}
-              d={model.d}
-              nowMs={nowMs}
-            />
+            <div
+              key={r.p.pid}
+              data-region={r.p.pid}
+              title={`${r.p.name} · ${r.p.n} threads`}
+              className="absolute overflow-hidden rounded-sm"
+              style={{
+                left: r.x,
+                top: r.y,
+                width: r.w,
+                height: r.h,
+                background: "#131a22",
+                opacity: dim ? 0.3 : 1,
+                cursor: "pointer",
+                transition: "opacity 200ms ease",
+              }}
+              onPointerLeave={() => {
+                if (holdRef.current !== null) {
+                  clearTimeout(holdRef.current);
+                  holdRef.current = null;
+                }
+                if (hoverPid === r.p.pid) setHoverPid(null);
+              }}
+              onPointerEnter={(e) => {
+                if (e.pointerType === "mouse") setHoverPid(r.p.pid);
+              }}
+              onPointerDown={(e) => {
+                if (e.pointerType === "touch") {
+                  suppressTapRef.current = false;
+                  if (holdRef.current !== null) clearTimeout(holdRef.current);
+                  // A press-and-hold previews the family tints (peek); the
+                  // preview stays on until the next press.
+                  holdRef.current = window.setTimeout(() => {
+                    suppressTapRef.current = true;
+                    setHoverPid(r.p.pid);
+                  }, LONG_PRESS_MS);
+                }
+              }}
+            >
+              {tinted
+                ? r.cellTints.map((tint, i) => (
+                    <div
+                      key={i}
+                      className="pointer-events-none absolute"
+                      style={{
+                        left: (i % r.cols) * r.cw,
+                        top: r.top + Math.floor(i / r.cols) * r.ch,
+                        width: r.cw,
+                        height: r.ch,
+                        background: FAMILY_TINTS[tint],
+                        opacity: 0.5,
+                      }}
+                    />
+                  ))
+                : null}
+              {r.p.cells.map((cell, i) => {
+                const j = i % r.cols;
+                const k = Math.floor(i / r.cols);
+                return (
+                  <Dot
+                    key={cell.t.id}
+                    cell={cell}
+                    x={(j + 0.5) * r.cw - model.d / 2}
+                    y={r.top + (k + 0.5) * r.ch - model.d / 2}
+                    d={model.d}
+                    nowMs={nowMs}
+                  />
+                );
+              })}
+            </div>
           );
-        }),
-      )}
-      {model.regions
-        .filter((r) => r.showLabel)
-        .map((r) => (
-          <div
-            key={`lbl-${r.p.pid}`}
-            className="pointer-events-none absolute truncate"
-            style={{ left: r.x + 5, top: r.y + 2, maxWidth: r.w - 10, fontSize: 10, color: "#98a8b6", zIndex: 3 }}
-          >
-            {r.p.name} · {r.p.n}
-          </div>
-        ))}
-    </Stage>
+        })}
+        {model.regions
+          .filter((r) => r.showLabel)
+          .map((r) => (
+            <div
+              key={`lbl-${r.p.pid}`}
+              className="pointer-events-none absolute truncate"
+              style={{
+                left: r.x + 5,
+                top: r.y + 2,
+                maxWidth: r.w - 10,
+                fontSize: 10,
+                color: "#98a8b6",
+                opacity: focusPid !== null && focusPid !== r.p.pid ? 0.3 : 1,
+                zIndex: 3,
+              }}
+            >
+              {r.p.name} · {r.p.n}
+            </div>
+          ))}
+      </div>
+      <button
+        type="button"
+        title="Fit view (leave the focused project)"
+        onClick={(e) => {
+          e.stopPropagation();
+          restore();
+        }}
+        className="absolute right-2 bottom-2 rounded-md border border-border/60 bg-card px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+        style={{ zIndex: 4 }}
+      >
+        ⤢
+      </button>
+    </div>
   );
 }
 
