@@ -48,6 +48,9 @@ import {
   flowDefaultOpen,
   flowAge,
   FLOW_COLORS,
+  familyTints,
+  FAMILY_TINTS,
+  zoomToRect,
   NODE_W,
   NODE_H,
   LANE_ROW_PITCH,
@@ -82,6 +85,8 @@ const ZOOM_MIN = 0.2; // zoom-out floor
 const ZOOM_MAX = 5; // zoom-in ceiling
 /** Contain-mode zoom floor: card labels stay readable when opening flow. */
 const MIN_LEGIBLE = 0.8;
+/** Padding around a treemap project the focus zoom keeps visible. */
+const FOCUS_PAD = 28;
 const P = 13; // card slot pitch
 const DOT = 8;
 const LBL = 13;
@@ -105,6 +110,10 @@ type MapApi = {
   panTo: (x: number, y: number) => void;
   /** Legible contain-width opening centered on a world point (a scope change). */
   openAt: (x: number, y: number) => void;
+  /** Zoom (past 1×) so the treemap's focused project fills the fit box. */
+  openRect: (rect: { x: number; y: number; w: number; h: number }) => void;
+  /** The live camera scale (the treemap's hover gates read it at event time). */
+  scale: () => number;
 };
 
 /** World bounds that Stage renders a content region of `contentH` px into. */
@@ -295,15 +304,26 @@ function MapCanvas({
     [applyT],
   );
 
+  /** Zoom so a world rect fills the chrome-free fit box (treemap focus). */
+  const openRect = useCallback(
+    (rect: { x: number; y: number; w: number; h: number }) => {
+      const box = fitBox(sizeRef.current.vw, sizeRef.current.vh);
+      if (box.w <= 1 || box.h <= 1) return;
+      const { scale, tx, ty } = zoomToRect(rect, box.w, box.h, { pad: FOCUS_PAD, maxScale: ZOOM_MAX });
+      applyT({ k: scale, tx: box.x + tx, ty: box.y + ty });
+    },
+    [applyT],
+  );
+
   // Publish the imperative API for views ("To running", scope re-centers).
   // A layout effect: views' passive effects must see the API on first mount.
   useLayoutEffect(() => {
-    const api = { fit, panTo, openAt };
+    const api = { fit, panTo, openAt, openRect, scale: () => tRef.current.k };
     apiRef.current = api;
     return () => {
       if (apiRef.current === api) apiRef.current = null;
     };
-  }, [apiRef, fit, panTo, openAt]);
+  }, [apiRef, fit, panTo, openAt, openRect]);
 
   // The opening view: fill the fit box the way the view asks — "fit" covers
   // the whole world, "contain" keeps a legible scale and centers on `focus`
@@ -589,13 +609,19 @@ export function BoardView({
   );
 }
 
-// ---------- view 2: unit treemap (honest fill) ----------
+// ---------- view 2: unit treemap (honest fill + zoom-to-project) ----------
+/** Zoom-in scale past which hovering a project previews family tints. */
+const HOVER_TINT_SCALE = 1.2;
+/** Touch press-and-hold duration for the same family-tint preview. */
+const LONG_PRESS_MS = 400;
+
 export function UnitTreemapView({
   data,
   nowMs,
   w,
   h,
   onWorld,
+  apiRef,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -603,6 +629,7 @@ export function UnitTreemapView({
   /** Height budget from the panel viewport, so the treemap fills the view. */
   h: number;
   onWorld: (s: WorldSize | null) => void;
+  apiRef: RefObject<MapApi | null>;
 }) {
   const world = useMemo(() => worldOf(w, h), [w, h]);
   useEffect(() => {
@@ -630,45 +657,153 @@ export function UnitTreemapView({
         cap = cols * rows;
       }
       const cw = w / cols, ch = h2 / rows;
-      return { p, x, y, w, h, showLabel, top, cols, rows, cw, ch };
+      const cellTints = familyTints(p.cells.map((c) => c.fam));
+      return { p, x, y, w, h, showLabel, top, cols, rows, cw, ch, cellTints };
     });
     return { regions, pitch, d, projectCount: projects.length };
   }, [data, nowMs, w, h]);
+
+  // Focus: tapping a project dims the rest and zooms the board until the
+  // project fills the fit box with its family tints locked on (family-derived
+  // only, never status-derived). Tapping anything else — another project, a
+  // void, the fit box — fits the zoomed-out world back out. The camera
+  // itself stays with MapCanvas; the view only aims it.
+  const [focusPid, setFocusPid] = useState<string | null>(null);
+  // Hover (mouse) / press-and-hold (touch) family-tint preview target.
+  const [hoverPid, setHoverPid] = useState<string | null>(null);
+  const holdRef = useRef<number | null>(null);
+  const suppressTapRef = useRef(false);
+  const clearHold = () => {
+    if (holdRef.current !== null) {
+      clearTimeout(holdRef.current);
+      holdRef.current = null;
+    }
+  };
+
   if (!model) {
     return <p className="text-sm text-muted-foreground">No visible threads.</p>;
   }
+
+  // Family tints are a zoomed-in affordance: the camera must be past
+  // HOVER_TINT_SCALE (a focused project keeps them regardless of scale).
+  const zoomedIn = () => apiRef.current !== null && apiRef.current.scale() > HOVER_TINT_SCALE;
+  const setFocus = (pid: string | null) => {
+    setHoverPid(null);
+    suppressTapRef.current = false;
+    setFocusPid(pid);
+    if (pid === null) apiRef.current?.fit();
+    else {
+      const r = model.regions.find((rr) => rr.p.pid === pid);
+      if (r !== undefined) apiRef.current?.openRect({ x: r.x, y: r.y, w: r.w, h: r.h });
+    }
+  };
+
   return (
     <Stage w={w} contentH={h}>
-      {model.regions.map((r) => (
-        <div
-          key={r.p.pid}
-          title={`${r.p.name} · ${r.p.n} threads`}
-          className="absolute rounded-sm"
-          style={{ left: r.x, top: r.y, width: r.w, height: r.h, background: "#131a22" }}
-        />
-      ))}
-      {model.regions.flatMap((r) =>
-        r.p.cells.map((cell, i) => {
-          const j = i % r.cols, k = Math.floor(i / r.cols);
-          return (
-            <Dot
-              key={cell.t.id}
-              cell={cell}
-              x={r.x + (j + 0.5) * r.cw - model.d / 2}
-              y={r.y + r.top + (k + 0.5) * r.ch - model.d / 2}
-              d={model.d}
-              nowMs={nowMs}
-            />
-          );
-        }),
-      )}
+      {/* Voids leave the fold: any tap that is not a region (or a pan) leaves focus. */}
+      <div
+        className="pointer-events-auto absolute inset-0"
+        style={{ width: w, height: h }}
+        onClick={() => {
+          suppressTapRef.current = false;
+          if (focusPid !== null) setFocus(null);
+        }}
+      />
+      {model.regions.map((r) => {
+        const dim = focusPid !== null && focusPid !== r.p.pid;
+        const tinted = focusPid === r.p.pid || hoverPid === r.p.pid;
+        return (
+          <div
+            key={r.p.pid}
+            title={`${r.p.name} · ${r.p.n} threads`}
+            className="absolute overflow-hidden rounded-sm"
+            style={{
+              left: r.x,
+              top: r.y,
+              width: r.w,
+              height: r.h,
+              background: "#131a22",
+              opacity: dim ? 0.3 : 1,
+              cursor: "pointer",
+              transition: "opacity 200ms ease",
+            }}
+            onClick={() => {
+              // MapCanvas swallows clicks right after a pan; a held tap (the
+              // touch peek) also never lands as a click.
+              if (suppressTapRef.current) {
+                suppressTapRef.current = false;
+                return;
+              }
+              setFocus(focusPid === null ? r.p.pid : null);
+            }}
+            onPointerDown={(e) => {
+              if (e.pointerType === "touch") {
+                suppressTapRef.current = false;
+                clearHold();
+                // Press-and-hold previews the family tints (peek); the
+                // preview stays on until the next press.
+                holdRef.current = window.setTimeout(() => {
+                  suppressTapRef.current = true;
+                  if (zoomedIn()) setHoverPid(r.p.pid);
+                }, LONG_PRESS_MS);
+              }
+            }}
+            onPointerUp={clearHold}
+            onPointerLeave={() => {
+              clearHold();
+              if (hoverPid === r.p.pid) setHoverPid(null);
+            }}
+            onPointerEnter={(e) => {
+              if (e.pointerType === "mouse" && zoomedIn()) setHoverPid(r.p.pid);
+            }}
+          >
+            {tinted
+              ? r.cellTints.map((tint, i) => (
+                  <div
+                    key={i}
+                    className="pointer-events-none absolute"
+                    style={{
+                      left: (i % r.cols) * r.cw,
+                      top: r.top + Math.floor(i / r.cols) * r.ch,
+                      width: r.cw,
+                      height: r.ch,
+                      background: FAMILY_TINTS[tint],
+                      opacity: 0.5,
+                    }}
+                  />
+                ))
+              : null}
+            {r.p.cells.map((cell, i) => {
+              const j = i % r.cols, k = Math.floor(i / r.cols);
+              return (
+                <Dot
+                  key={cell.t.id}
+                  cell={cell}
+                  x={(j + 0.5) * r.cw - model.d / 2}
+                  y={r.top + (k + 0.5) * r.ch - model.d / 2}
+                  d={model.d}
+                  nowMs={nowMs}
+                />
+              );
+            })}
+          </div>
+        );
+      })}
       {model.regions
         .filter((r) => r.showLabel)
         .map((r) => (
           <div
             key={`lbl-${r.p.pid}`}
             className="pointer-events-none absolute truncate"
-            style={{ left: r.x + 5, top: r.y + 2, maxWidth: r.w - 10, fontSize: 10, color: "#98a8b6", zIndex: 3 }}
+            style={{
+              left: r.x + 5,
+              top: r.y + 2,
+              maxWidth: r.w - 10,
+              fontSize: 10,
+              color: "#98a8b6",
+              opacity: focusPid !== null && focusPid !== r.p.pid ? 0.3 : 1,
+              zIndex: 3,
+            }}
           >
             {r.p.name} · {r.p.n}
           </div>
@@ -1370,7 +1505,7 @@ export function OverviewPage() {
       ) : (
         <MapCanvas key={tab} world={world} apiRef={apiRef} persistKey={tab}>
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
           {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
           {tab === "graph" ? <AgentLanesView data={live.data} nowMs={nowMs} w={w} onWorld={onWorld} /> : null}
         </MapCanvas>

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   classify, buildProjects, buildAgentTree, laneRows, makeLaneCards,
   squarify, makeCards, shelfPack, attentionScore,
+  familyTints, FAMILY_TINTS, zoomToRect, clampPan,
   indexShape, flowDefaultOpen, flowChildren, flowAge, flowLayout, WORK_SHOWN,
   NODE_W, NODE_H, COL_GAP, ROW_GAP,
   type AttnThread, type AttnProject, type FlowNode, type ShapeDto,
@@ -475,4 +476,66 @@ test("activity flow: focusing a thread isolates it in its project and beats the 
   // The scoped idle thread survives the idle filter; hot threads outside
   // the scope do not appear; only the scope chain is laid out.
   assert.deepEqual(ids, ["root", "project:a", "thr_cold"]);
+});
+
+// ---------- treemap: family tints + zoom-to-project ----------
+
+test("family tints rely on contiguous family cells in buildProjects", () => {
+  const threads = [
+    thread({ id: "p1", projectId: "proj", runtimeStatus: "active" }),
+    thread({ id: "p1-c", parentThreadId: "p1" }),
+    thread({ id: "p2", projectId: "proj", runtimeStatus: "error" }),
+    thread({ id: "p2-c", parentThreadId: "p2", isUnread: true }),
+    thread({ id: "p3", projectId: "proj" }),
+  ];
+  const { projects } = buildProjects(threads, [{ id: "proj", name: "P" }], NOW);
+  const fams = projects[0].cells.map((c) => c.fam);
+  // each family's cells must be one contiguous run of `fam` ids
+  const seen = new Set<string>();
+  let prev: string | null = null;
+  for (const fam of fams) {
+    if (fam !== prev) {
+      assert.ok(!seen.has(fam), `family ${fam} is not contiguous`);
+      seen.add(fam);
+      prev = fam;
+    }
+  }
+});
+
+test("familyTints: each contiguous family run gets one palette slot; adjacent runs differ", () => {
+  assert.deepEqual(familyTints(["a", "a", "b", "c", "c", "c"]), [0, 0, 1, 2, 2, 2]);
+  // palette wrap reuses slots only for non-adjacent runs
+  assert.deepEqual(familyTints(Array.from({ length: 7 }, (_, i) => `f${i}`)), [0, 1, 2, 3, 4, 5, 0]);
+  // every tint index lands inside the palette
+  for (const idx of familyTints(Array.from({ length: 20 }, (_, i) => `f${i}`))) {
+    assert.ok(idx >= 0 && idx < FAMILY_TINTS.length);
+  }
+});
+
+function approx(actual: number, expected: number, eps = 1e-9) {
+  assert.ok(Math.abs(actual - expected) < eps, `expected ≈ ${expected}, got ${actual}`);
+}
+
+test("zoomToRect fills the viewport with padding, centers the region, clamps scale", () => {
+  // width bound (1000-48)/200 = 4.76 vs height bound (400-48)/80 = 4.4 → height bound wins
+  const t = zoomToRect({ x: 100, y: 50, w: 200, h: 80 }, 1000, 400, { pad: 24 });
+  approx(t.scale, 4.4);
+  approx(t.tx, 500 - 4.4 * 200); // centers region x-mid (200)
+  approx(t.ty, 200 - 4.4 * 90); // centers region y-mid (90)
+  // regions larger than the viewport never zoom out below 1×
+  const big = zoomToRect({ x: 0, y: 0, w: 1400, h: 700 }, 1000, 400, { pad: 24 });
+  assert.equal(big.scale, 1);
+  // tiny regions clamp to maxScale
+  const tiny = zoomToRect({ x: 5, y: 5, w: 10, h: 10 }, 1000, 400, { maxScale: 5 });
+  assert.equal(tiny.scale, 5);
+});
+
+test("clampPan keeps the scaled world inside the viewport on every axis", () => {
+  const v = clampPan(-5000, -2000, 2, 1000, 400, 1000, 400);
+  // world is 2000×800 at 2×: tx ∈ [-1000, 0], ty ∈ [-400, 0]
+  approx(v.tx, -1000);
+  approx(v.ty, -400);
+  const fit = clampPan(0, 0, 1, 1000, 400, 1000, 400);
+  approx(fit.tx, 0);
+  approx(fit.ty, 0);
 });

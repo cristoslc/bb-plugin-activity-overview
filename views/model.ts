@@ -210,6 +210,82 @@ export function statusCounts(projects: ProjectModel[], nowMs: number): Record<St
   return counts;
 }
 
+// ---------- unit treemap: family tints + zoom-to-project ----------
+
+/**
+ * Subtle family background tints over the neutral region fill (#131a22): each
+ * family inside a project gets one slightly-hued slot so its dots' grouping
+ * is visible without painting any status-derived color.
+ */
+export const FAMILY_TINTS: readonly string[] = [
+  "#1a2431", // blue-grey
+  "#19261f", // green-grey
+  "#221e2a", // purple-grey
+  "#252023", // warm grey
+  "#1a2030", // indigo
+  "#20241a", // olive
+];
+
+/**
+ * Per-cell tint-index for a project's ordered cells (families contiguous from
+ * their root in cell order): cell i belongs to family run i, and run r gets
+ * `r % paletteSize`. So every family tints, adjacent runs always differ, and
+ * the assignment is deterministic.
+ */
+export function familyTints(fams: readonly string[], paletteSize = FAMILY_TINTS.length): number[] {
+  const out: number[] = [];
+  let run = -1;
+  let prev: string | null = null;
+  for (const fam of fams) {
+    if (fam !== prev) {
+      run++;
+      prev = fam;
+    }
+    out.push(run % paletteSize);
+  }
+  return out;
+}
+
+export type ZoomTransform = { scale: number; tx: number; ty: number };
+
+export type ClampOpts = { pad?: number; maxScale?: number };
+
+/** Scale + translate so `rect` fills the (vw × vh) viewport with padding. */
+export function zoomToRect(
+  rect: { x: number; y: number; w: number; h: number },
+  vw: number,
+  vh: number,
+  opts: ClampOpts = {},
+): ZoomTransform {
+  const pad = opts.pad ?? 24;
+  const max = opts.maxScale ?? 6;
+  const scale = Math.min(
+    max,
+    Math.max(1, Math.min((vw - 2 * pad) / rect.w, (vh - 2 * pad) / rect.h)),
+  );
+  const tx = vw / 2 - scale * (rect.x + rect.w / 2);
+  const ty = vh / 2 - scale * (rect.y + rect.h / 2);
+  return { scale, tx, ty };
+}
+
+/** Clamp a pan so the scaled world never fully leaves the viewport. */
+export function clampPan(
+  tx: number,
+  ty: number,
+  scale: number,
+  vw: number,
+  vh: number,
+  W: number,
+  H: number,
+): { tx: number; ty: number } {
+  const axis = (t: number, world: number, view: number) => {
+    const span = world * scale;
+    if (span <= view) return (view - span) / 2;
+    return Math.max(view - span, Math.min(0, t));
+  };
+  return { tx: axis(tx, W, vw), ty: axis(ty, H, vh) };
+}
+
 // ---------- squarified treemap (Bruls/Huizing/van Wijk) ----------
 export type SquarifyInput = { key: string; weight: number };
 export type Rect = { key: string; x: number; y: number; w: number; h: number };
