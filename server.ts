@@ -1,6 +1,6 @@
 // bb-plugin-activity-overview — backend entry.
 //
-// The three views (Board, Unit treemap, Strip tiles) are entirely
+// The four views (Board, Unit treemap, Strip tiles, Agent lanes) are entirely
 // frontend-rendered from the host's live sidebar thread data, so the backend
 // owns no state. It exists only to make the package loadable (bb.server is
 // required) and to log lifecycle.
