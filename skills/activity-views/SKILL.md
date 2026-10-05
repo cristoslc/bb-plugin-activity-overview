@@ -5,8 +5,9 @@ description: "What the Activity Overview plugin shows and how it reads thread da
 
 # Activity Overview plugin views
 
-The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with four
-tabs, all rendered live from the host's sidebar thread data:
+The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with five
+tabs: four aggregate tabs rendered live from the host's sidebar thread data, plus the
+**Activity flow** tab, served by the plugin's own backend over the `shape` RPC.
 
 - **Board** — one card per project, fixed dot slots (13px pitch). Volume of
   dots = thread count; color = status; empty slots stay put so daily change
@@ -24,6 +25,15 @@ tabs, all rendered live from the host's sidebar thread data:
   connector lines and no outlines. Threads whose parent is invisible
   (deleted, archived, or outside the page) promote to roots, and
   parentThreadId cycles are severed into roots so the walk stays finite.
+- **Activity flow** — the dive view: project → thread → turn → work, built
+  server-side from each thread's turn timeline. Threads render as rows in
+  flow-wrapped project cards (no Stage canvas): dot = status, 12px title,
+  age column; a thread expands into its turns (newest first), a turn into its
+  work rows (Bash commands, tool calls, subagents/workflows as work rows).
+  Fold policy is pure (views/model.ts): projects open, hot threads open,
+  only the newest turn of a running thread expands by default; "Hide idle"
+  (default on) drops idle thread rows; "+N earlier steps/turns" markers mark
+  what the server trimmed. Click a thread row to open the thread.
 
 ## Reading the dots
 
@@ -37,6 +47,17 @@ tabs, all rendered live from the host's sidebar thread data:
 
 ## Operating constraints
 
-- The plugin has no CLI commands, no settings, and no server state; it is a
-  pure frontend view. Data refreshes when BB's sidebar data refreshes.
-- Rendering constants live in views/model.ts and views/Views.tsx.
+- The four aggregate tabs are pure frontend views over sidebar thread data;
+  they have no CLI commands, no settings, and no server state. Data
+  refreshes when BB's sidebar data refreshes.
+- The Activity flow tab has one backend: the stateless read-only `shape`
+  RPC (server.ts) plus a coalesced `thread:changed` realtime push. Timelines
+  are cached per thread (200 entries) and every structural change evicts the
+  cache before the push.
+- Flow shape caps: hot threads keep 8 turns, cold threads 1; each turn keeps
+  its newest 8 work rows (+4 for cold threads) behind a "+N earlier steps"
+  marker; turns beyond the cap collapse into a "+N earlier turns" marker;
+  a 2500-node ceiling drops the coldest threads last (the header shows
+  "truncated" when it engages).
+- Rendering constants live in views/model.ts, views/Views.tsx and server.ts;
+  the fold policy tests are in tests/model.test.ts.

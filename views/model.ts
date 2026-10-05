@@ -399,3 +399,185 @@ export function makeLaneCards(lanes: LaneProject[], label: number): LaneCard[] {
     return { ...p, maxDepth, w, h };
   });
 }
+
+// ---------- activity flow: fold policy over the server shape ----------
+// The server (`shape` RPC) sends a flat node tree: root → project → thread →
+// turn → work, plus static "more" nodes where it capped turns/steps. These
+// helpers are pure so the fold policy is unit-testable.
+
+export type FlowKind = "root" | "project" | "thread" | "turn" | "work" | "more";
+export type FlowStatus =
+  | "running"
+  | "waiting"
+  | "queued"
+  | "done"
+  | "error"
+  | "interrupted"
+  | "idle";
+
+export type FlowNode = {
+  id: string;
+  parentId: string | null;
+  kind: FlowKind;
+  label: string;
+  sublabel: string | null;
+  status: FlowStatus;
+  threadId: string | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  input: string | null;
+  output: string | null;
+  meta: Record<string, string>;
+};
+
+export type ShapeDto = { nodes: FlowNode[]; generatedAt: number; truncated: boolean };
+
+/** Same five-hue contract as the dots: running/waiting/error hot, greys otherwise. */
+export const FLOW_COLORS: Record<FlowStatus, string> = {
+  running: "#3d84e0",
+  waiting: "#d9a53f",
+  error: "#e5534b",
+  done: "#6e7681",
+  interrupted: "#8b949e",
+  queued: "#545b63",
+  idle: "#3d444c",
+};
+
+/** Statuses worth showing expanded by default. */
+export const ACTIVE_STATUSES: ReadonlySet<FlowStatus> = new Set([
+  "running",
+  "waiting",
+  "queued",
+  "error",
+]);
+
+/** Newest work rows shown per expanded turn; older ones fold under "+N". */
+export const WORK_SHOWN = 8;
+
+export type FlowIndex = {
+  childrenOf: Map<string, FlowNode[]>;
+  /** threadId → its newest turn's id (empty when the thread has no turns). */
+  newestTurn: Map<string, string>;
+  threadsOf: Map<string, FlowNode[]>; // projectId → thread nodes, server order
+};
+
+export function indexShape(shape: ShapeDto): FlowIndex {
+  const childrenOf = new Map<string, FlowNode[]>();
+  for (const node of shape.nodes) {
+    if (node.parentId === null) continue;
+    const list = childrenOf.get(node.parentId);
+    if (list) list.push(node);
+    else childrenOf.set(node.parentId, [node]);
+  }
+  const newestTurn = new Map<string, string>();
+  for (const node of shape.nodes) {
+    if (node.kind === "turn" && node.threadId !== null) {
+      newestTurn.set(node.threadId, node.id); // server order: oldest → newest
+    }
+  }
+  const threadsOf = new Map<string, FlowNode[]>();
+  for (const node of shape.nodes) {
+    if (node.kind !== "thread") continue;
+    const pid = node.parentId ?? "";
+    const list = threadsOf.get(pid);
+    if (list) list.push(node);
+    else threadsOf.set(pid, [node]);
+  }
+  return { childrenOf, newestTurn, threadsOf };
+}
+
+/**
+ * Default fold policy: projects open, active threads open, idle/done threads
+ * closed, and only the newest turn of a *running* thread expanded (its work
+ * list stays closed until clicked).
+ */
+export function flowDefaultOpen(shape: ShapeDto): Set<string> {
+  const index = indexShape(shape);
+  const open = new Set<string>();
+  for (const node of shape.nodes) {
+    if (node.kind === "project") open.add(node.id);
+    if (node.kind === "thread" && ACTIVE_STATUSES.has(node.status)) open.add(node.id);
+  }
+  for (const thread of shape.nodes) {
+    if (thread.kind !== "thread" || thread.status !== "running") continue;
+    const newest = index.newestTurn.get(thread.id);
+    if (newest !== undefined) open.add(newest);
+  }
+  return open;
+}
+
+/**
+ * Children of `parentId` as the view renders them. `hideIdleThreads` drops
+ * idle thread rows of a project card. `foldWork` trims a turn's work list to
+ * the newest WORK_SHOWN rows behind a synthetic "+N earlier steps" node
+ * (id `parentId::earlier`); expanding that turn's `parentId::all` key reveals
+ * every row the server kept.
+ */
+export function flowChildren(
+  parentId: string,
+  index: FlowIndex,
+  open: ReadonlySet<string>,
+  opts: { hideIdleThreads?: boolean; foldWork?: boolean } = {},
+): FlowNode[] {
+  let children = index.childrenOf.get(parentId) ?? [];
+  if (opts.hideIdleThreads) {
+    children = children.filter((c) => !(c.kind === "thread" && c.status === "idle"));
+  }
+  if (opts.foldWork && children.length > WORK_SHOWN && !open.has(`${parentId}::all`)) {
+    const shown = children.slice(-WORK_SHOWN);
+    const folded = children.length - shown.length;
+    return [
+      {
+        id: `${parentId}::earlier`,
+        parentId,
+        kind: "more",
+        label: `+${folded} earlier steps`,
+        sublabel: null,
+        status: "done",
+        threadId: shown[0]?.threadId ?? null,
+        startedAt: null,
+        completedAt: null,
+        input: null,
+        output: null,
+        meta: {},
+      },
+      ...shown,
+    ];
+  }
+  return children;
+}
+
+/** "now · Xm · Xh · Xd" for a past timestamp. */
+export function sinceLabel(at: number, nowMs: number): string {
+  const m = (nowMs - at) / 60000;
+  if (m < 1) return "now";
+  if (m < 60) return `${Math.round(m)}m`;
+  const h = m / 60;
+  if (h < 48) return `${Math.round(h)}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+/**
+ * Right-aligned age: threads age since their last update (meta.updated);
+ * turns and work rows show their duration while done, or running time.
+ */
+export function flowAge(node: FlowNode, nowMs: number): string {
+  if (node.kind === "thread") {
+    const at = Number(node.meta.updated ?? "");
+    return Number.isFinite(at) && at > 0 ? sinceLabel(at, nowMs) : "";
+  }
+  const end = node.completedAt ?? (node.status === "running" || node.status === "waiting" ? null : node.startedAt);
+  if (end !== null && node.startedAt !== null && end >= node.startedAt) {
+    return sinceLabel(end, nowMs) === "now" ? "<1m" : spanOf(end - node.startedAt);
+  }
+  return node.startedAt !== null ? `${sinceLabel(node.startedAt, nowMs)} running` : "";
+}
+
+function spanOf(ms: number): string {
+  const m = ms / 60000;
+  if (m < 1) return "<1m";
+  if (m < 60) return `${Math.round(m)}m`;
+  const h = m / 60;
+  if (h < 48) return `${Math.round(h)}h`;
+  return `${Math.round(h / 24)}d`;
+}

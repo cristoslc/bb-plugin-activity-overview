@@ -5,9 +5,11 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 ## What lives where
 
 - `app.tsx` — frontend entry: the navPanel registration. Point at `views/Views.tsx`.
-- `views/Views.tsx` — the four view components and the tab page.
-- `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing.
-- `server.ts` — backend stub (required by the manifest; the plugin owns no server state).
+- `views/Views.tsx` — the five view components and the tab page (the
+  Activity flow view carries its own `useShape` RPC hook).
+- `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing, and the flow fold policy (`indexShape`, `flowDefaultOpen`, `flowChildren`, `flowAge`).
+- `views/timeline.ts` — pure turn normalization over thread timeline rows (copied from the agent-graph plugin).
+- `server.ts` — the stateless read-only `shape` RPC: root → project → thread → turn → work node tree built from live timelines, plus a coalesced `thread:changed` realtime push (SHAPE_CHANGED; payload in shared.ts). This file is no longer an empty stub.
 - `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.
 - Design history and verdicts for the encodings live in the bb thread that commissioned this plugin, not in this repo.
 

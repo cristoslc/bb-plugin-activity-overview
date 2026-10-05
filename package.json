@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Activity Overview",
-    "description": "Glanceable thread activity views: fixed-slot dot cards, unit treemap, strip tiles.",
+    "description": "Glanceable thread activity views: fixed-slot dot cards, unit treemap, strip tiles, lane tree, and the foldable Activity flow.",
     "branding": {
       "icon": "./icons/pulse.svg"
     },

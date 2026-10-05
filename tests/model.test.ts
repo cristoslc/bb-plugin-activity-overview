@@ -4,7 +4,8 @@ import { test } from "node:test";
 import {
   classify, buildProjects, buildAgentTree, laneRows, makeLaneCards,
   squarify, makeCards, shelfPack, attentionScore,
-  type AttnThread, type AttnProject,
+  indexShape, flowDefaultOpen, flowChildren, flowAge, WORK_SHOWN,
+  type AttnThread, type AttnProject, type FlowNode, type ShapeDto,
 } from "../views/model.ts";
 
 const NOW = Date.parse("2026-10-04T19:00:00Z");
@@ -211,4 +212,104 @@ test("agent lanes: lane cards pack inside the canvas width with no overflow", ()
   const placed = shelfPack(cards, 1120, 14, 14);
   assert.equal(placed.placed.length, lanes.length);
   for (const p of placed.placed) assert.ok(p.x + p.card.w <= 1121);
+});
+
+// ---------- activity flow: fold policy over the server shape ----------
+
+let flowSeq = 0;
+function fnode(over: Partial<FlowNode> = {}): FlowNode {
+  flowSeq += 1;
+  return {
+    id: over.id ?? `n${flowSeq}`, parentId: over.parentId ?? "root",
+    kind: over.kind ?? "work", label: over.label ?? "L", sublabel: over.sublabel ?? null,
+    status: over.status ?? "done", threadId: over.threadId ?? null,
+    startedAt: over.startedAt !== undefined ? over.startedAt : NOW,
+    completedAt: over.completedAt !== undefined ? over.completedAt : NOW,
+    input: over.input ?? null, output: over.output ?? null, meta: over.meta ?? {},
+  };
+}
+function shapeFrom(nodes: FlowNode[]): ShapeDto {
+  return { nodes, generatedAt: NOW, truncated: false };
+}
+
+test("activity flow: project cards list their threads in server order, with rollups indexed", () => {
+  const shape = shapeFrom([
+    fnode({ id: "root", parentId: null, kind: "root" }),
+    fnode({ id: "project:a", parentId: "root", kind: "project", label: "Alpha" }),
+    fnode({ id: "thr_1", parentId: "project:a", kind: "thread", threadId: "thr_1", status: "running" }),
+    fnode({ id: "thr_2", parentId: "project:a", kind: "thread", threadId: "thr_2", status: "idle" }),
+    fnode({ id: "project:b", parentId: "root", kind: "project", label: "Beta" }),
+    fnode({ id: "thr_3", parentId: "project:b", kind: "thread", threadId: "thr_3", status: "waiting" }),
+  ]);
+  const index = indexShape(shape);
+  assert.deepEqual([...(index.threadsOf.get("project:a") ?? [])].map((n) => n.id), ["thr_1", "thr_2"]);
+  assert.equal(index.newestTurn.get("thr_1"), undefined);
+});
+
+test("activity flow: default fold opens projects and hot threads, closes idle threads and done turns", () => {
+  const shape = shapeFrom([
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_run", parentId: "project:a", kind: "thread", threadId: "thr_run", status: "running" }),
+    fnode({ id: "thr_run:turn:t1", parentId: "thr_run", kind: "turn", threadId: "thr_run", status: "done", completedAt: NOW - 60000 }),
+    fnode({ id: "thr_run:turn:t2", parentId: "thr_run", kind: "turn", threadId: "thr_run", status: "running", completedAt: null }),
+    fnode({ id: "thr_idle", parentId: "project:a", kind: "thread", threadId: "thr_idle", status: "idle" }),
+    fnode({ id: "thr_idle:turn:t9", parentId: "thr_idle", kind: "turn", threadId: "thr_idle" }),
+  ]);
+  const open = flowDefaultOpen(shape);
+  assert.ok(open.has("project:a"));
+  assert.ok(open.has("thr_run"));
+  assert.ok(!open.has("thr_idle"));
+  // Only the newest turn of a running thread expands by default.
+  assert.ok(open.has("thr_run:turn:t2"));
+  assert.ok(!open.has("thr_run:turn:t1"));
+  assert.ok(!open.has("thr_idle:turn:t9"));
+});
+
+test("activity flow: expanded turns fold their work list to the newest rows behind a synthetic +N node, unfoldable on demand", () => {
+  const work = (i: number, turnId: string): FlowNode =>
+    fnode({ id: `${turnId}:w${i}`, parentId: turnId, kind: "work", threadId: "thr_run", startedAt: NOW - (20 - i) * 1000, completedAt: NOW });
+  const turnId = "thr_run:turn:t2";
+  const shape = shapeFrom([
+    fnode({ id: turnId, parentId: "thr_run", kind: "turn", threadId: "thr_run" }),
+    ...Array.from({ length: WORK_SHOWN + 3 }, (_, i) => work(i, turnId)),
+  ]);
+  const index = indexShape(shape);
+  const folded = flowChildren(turnId, index, new Set([turnId]), { foldWork: true });
+  assert.equal(folded.length, WORK_SHOWN + 1);
+  assert.equal(folded[0]?.kind, "more");
+  assert.equal(folded[0]?.label, "+3 earlier steps");
+  // The newest rows keep their order after the fold marker.
+  assert.equal(folded[1]?.id, `${turnId}:w3`);
+  assert.equal(folded[folded.length - 1]?.id, `${turnId}:w${WORK_SHOWN + 2}`);
+  // Unfolding reveals everything the server kept.
+  const unfolded = flowChildren(turnId, index, new Set([turnId, `${turnId}::all`]), { foldWork: true });
+  assert.equal(unfolded.length, WORK_SHOWN + 3);
+  assert.ok(!unfolded.some((n) => n.kind === "more"));
+  // A short turn is never folded.
+  const tiny = flowChildren("nope-turn", index, new Set(), { foldWork: true });
+  assert.deepEqual(tiny, []);
+});
+
+test("activity flow: hideIdle drops idle thread rows only", () => {
+  const shape = shapeFrom([
+    fnode({ id: "project:a", parentId: "root", kind: "project" }),
+    fnode({ id: "thr_run", parentId: "project:a", kind: "thread", threadId: "thr_run", status: "running" }),
+    fnode({ id: "thr_idle", parentId: "project:a", kind: "thread", threadId: "thr_idle", status: "idle" }),
+    fnode({ id: "thr_wait", parentId: "project:a", kind: "thread", threadId: "thr_wait", status: "waiting" }),
+    fnode({ id: "t0", parentId: "thr_idle", kind: "work", threadId: "thr_idle" }),
+  ]);
+  const index = indexShape(shape);
+  const visible = flowChildren("project:a", index, new Set(), { hideIdleThreads: true });
+  assert.deepEqual(visible.map((n) => n.id), ["thr_run", "thr_wait"]);
+  const all = flowChildren("project:a", index, new Set(), { hideIdleThreads: false });
+  assert.equal(all.length, 3);
+});
+
+test("activity flow: ages — threads age since meta.updated; running work shows running time; done work shows duration", () => {
+  const threadNode = fnode({ id: "thr_x", kind: "thread", threadId: "thr_x", meta: { updated: String(NOW - 5 * 60000) } });
+  assert.equal(flowAge(threadNode, NOW), "5m");
+  const runningWork = fnode({ kind: "work", status: "running", startedAt: NOW - 93000, completedAt: null });
+  assert.match(flowAge(runningWork, NOW), /running/);
+  const doneWork = fnode({ kind: "work", status: "done", startedAt: NOW - 240000, completedAt: NOW - 20000 });
+  assert.equal(flowAge(doneWork, NOW), "<1m");
 });

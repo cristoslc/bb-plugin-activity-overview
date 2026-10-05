@@ -1,7 +1,15 @@
-// bb-plugin-activity-overview — the four views (tab pages) rendered from live
-// sidebar thread data. Pure functions of the model; no server state.
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { experimental_useSidebarThreads } from "@get-bb/plugin-sdk/app";
+// bb-plugin-activity-overview — the views (tab pages). The four aggregate
+// views render from live sidebar thread data; the Activity flow tab reads the
+// turn/work shape from the plugin's own `shape` RPC. Pure functions of the
+// model; no other server state.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  experimental_useSidebarThreads,
+  useBbNavigate,
+  useRealtime,
+  useRpc,
+} from "@get-bb/plugin-sdk/app";
+import type { Shape, rpcContract } from "../server";
 import {
   buildProjects,
   statusCounts,
@@ -13,6 +21,12 @@ import {
   shelfPack,
   squarify,
   tip,
+  flowChildren,
+  flowDefaultOpen,
+  flowAge,
+  indexShape,
+  FLOW_COLORS,
+  ACTIVE_STATUSES,
   LANE_ROW_PITCH,
   LANE_INDENT,
   LANE_LABEL_W,
@@ -20,8 +34,11 @@ import {
   type AttnProject,
   type AttnThread,
   type Cell,
+  type FlowNode,
+  type ShapeDto,
   type Status,
 } from "./model";
+import { SHAPE_CHANGED, type ShapeChangedPayload } from "../shared";
 
 const MIN_STAGE_W = 320; // pack floor for very narrow panels
 const STAGE_CHROME = 26; // stage p-3 (2×12) + 1px border each side
@@ -312,12 +329,372 @@ export function AgentLanesView({ data, nowMs, w }: { data: SidebarData; nowMs: n
   );
 }
 
+// ---------- view 5: activity flow (project → thread → turn → work) ----------
+/** The shape from the plugin's `shape` RPC, refetched on live changes. */
+function useShape(): { shape: ShapeDto | null; error: string | null; retry: () => void } {
+  const rpc = useRpc<typeof rpcContract>();
+  const [shape, setShape] = useState<Shape | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const shapeRef = useRef<Shape | null>(null);
+  const refetchRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    let again = false;
+    shapeRef.current = null;
+    setShape(null);
+    setError(null);
+    const refetch = () => {
+      // One request at a time; a change during a fetch schedules one more.
+      if (inFlight) {
+        again = true;
+        return;
+      }
+      inFlight = true;
+      rpc
+        .call("shape", {})
+        .then(
+          (result) => {
+            if (cancelled) return;
+            shapeRef.current = result;
+            setShape(result);
+            setError(null);
+          },
+          (cause: unknown) => {
+            if (cancelled) return;
+            setError(cause instanceof Error ? cause.message : String(cause));
+          },
+        )
+        .finally(() => {
+          inFlight = false;
+          if (again && !cancelled) {
+            again = false;
+            refetch();
+          }
+        });
+    };
+    refetchRef.current = refetch;
+    refetch();
+    // A slow heartbeat keeps ages honest, but only while someone can see it.
+    const timer = setInterval(() => {
+      if (!document.hidden) refetch();
+    }, 15_000);
+    const onVisible = () => {
+      if (!document.hidden) refetch();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [rpc]);
+
+  useRealtime(SHAPE_CHANGED, (payload: unknown) => {
+    if (document.hidden) return;
+    const current = shapeRef.current;
+    const changed = (payload as Partial<ShapeChangedPayload> | null)?.threadIds;
+    // Skip pushes that only touch threads the shape cut off.
+    if (current !== null && changed && changed.length > 0) {
+      const known = new Set(current.nodes.map((node) => node.threadId));
+      if (!changed.some((id) => known.has(id))) return;
+    }
+    refetchRef.current();
+  });
+
+  return { shape, error, retry: () => refetchRef.current() };
+}
+
+function FlowDot({ node, d }: { node: FlowNode; d: number }) {
+  const pulsing = node.status === "running";
+  return (
+    <span
+      className={pulsing ? "attn-pulse rounded-full" : "rounded-full"}
+      style={{ display: "inline-block", width: d, height: d, background: FLOW_COLORS[node.status], flex: "none" }}
+    />
+  );
+}
+
+function FoldToggle({
+  isOpen,
+  onClick,
+}: {
+  isOpen: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={isOpen ? "Collapse" : "Expand"}
+      className="text-muted-foreground hover:text-foreground"
+      style={{ fontSize: 9, width: 12, flex: "none" }}
+    >
+      {isOpen ? "▾" : "▸"}
+    </button>
+  );
+}
+
+/**
+ * Fold state: the pure default policy, overlaid with explicit user toggles.
+ * `overrides` wins over the default for any id it carries.
+ */
+function useFold(shape: ShapeDto | null) {
+  const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
+  const open = useMemo(() => {
+    const base = shape === null ? new Set<string>() : flowDefaultOpen(shape);
+    for (const [id, value] of overrides) {
+      if (value) base.add(id);
+      else base.delete(id);
+    }
+    return base;
+  }, [shape, overrides]);
+  const toggle = (id: string) => {
+    setOverrides((prev) => new Map(prev).set(id, !open.has(id)));
+  };
+  const expandAll = (ids: Iterable<string>) => {
+    setOverrides(() => new Map(Array.from(ids, (id) => [id, true] as const)));
+  };
+  const collapseAll = (ids: Iterable<string>) => {
+    setOverrides(() => new Map(Array.from(ids, (id) => [id, false] as const)));
+  };
+  return { open, toggle, expandAll, collapseAll };
+}
+
+function ActivityFlowView() {
+  const { shape, error, retry } = useShape();
+  const navigate = useBbNavigate();
+  const fold = useFold(shape);
+  const [hideIdle, setHideIdle] = useState(true);
+  const index = useMemo(() => (shape === null ? null : indexShape(shape)), [shape]);
+  const nowMs = Date.now();
+
+  if (error !== null && shape === null) {
+    return (
+      <div>
+        <p className="text-sm text-muted-foreground">Could not load activity shape: {error}</p>
+        <button type="button" onClick={retry} className="mt-2 text-xs text-muted-foreground underline">
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (index === null || shape === null) {
+    return <p className="text-sm text-muted-foreground">Loading activity…</p>;
+  }
+
+  const projectById = new Map(
+    shape.nodes.filter((n) => n.kind === "project").map((n) => [n.id, n]),
+  );
+  const allProjectIds = [...projectById.keys()];
+  const foldableIds: string[] = [];
+  for (const node of shape.nodes) {
+    if (node.kind === "project" || node.kind === "thread" || node.kind === "turn") foldableIds.push(node.id);
+  }
+
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+        <label className="inline-flex items-center gap-1.5">
+          <input type="checkbox" checked={hideIdle} onChange={() => setHideIdle((v) => !v)} />
+          Hide idle
+        </label>
+        <button type="button" className="underline" onClick={() => fold.expandAll(foldableIds)}>
+          Expand all
+        </button>
+        <button type="button" className="underline" onClick={() => fold.collapseAll(foldableIds)}>
+          Collapse all
+        </button>
+        <span>
+          {shape.nodes.filter((n) => n.kind === "thread").length} threads
+          {shape.truncated ? " · truncated (coldest threads dropped)" : ""}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-start gap-3">
+        {allProjectIds.map((pid) => {
+          const project = projectById.get(pid);
+          if (project === undefined) return null;
+          const projectOpen = fold.open.has(pid);
+          const threadRows = flowChildren(pid, index, fold.open, { hideIdleThreads: hideIdle });
+          const headerDots = (index.threadsOf.get(pid) ?? []).slice(0, 40);
+          const openThreads = (index.threadsOf.get(pid) ?? []).filter((t) => ACTIVE_STATUSES.has(t.status)).length;
+          return (
+            <div
+              key={pid}
+              className="min-w-[320px] max-w-[520px] flex-1 rounded-md"
+              style={{ background: "#131a22", border: "1px solid #1c2430", padding: 10 }}
+            >
+              <div className="flex items-center gap-2">
+                <FoldToggle isOpen={projectOpen} onClick={() => fold.toggle(pid)} />
+                <span className="truncate text-[12px]" style={{ color: "#c3d0dc" }} title={`${project.label} · ${threadRows.length} thread${threadRows.length === 1 ? "" : "s"}`}>
+                  {project.label} · {threadRows.length}
+                </span>
+                <span className="ml-auto inline-flex gap-[2px]" title="thread statuses (first 40)">
+                  {headerDots.map((t) => (
+                    <FlowDot key={t.id} node={t} d={4} />
+                  ))}
+                </span>
+                <span className="text-[10px]" style={{ color: "#7d93a8" }}>
+                  {openThreads > 0 ? `${openThreads} hot` : ""}
+                </span>
+              </div>
+              {projectOpen ? (
+                <div className="mt-1.5 flex flex-col gap-[3px]">
+                  {threadRows.map((threadRow) => (
+                    <FlowThreadRow
+                      key={threadRow.id}
+                      threadRow={threadRow}
+                      index={index}
+                      fold={fold}
+                      nowMs={nowMs}
+                      onOpenThread={() => navigate.toThread(threadRow.id)}
+                    />
+                  ))}
+                  {threadRows.length === 0 ? (
+                    <span className="text-[10px]" style={{ color: "#5f6b76" }}>
+                      {hideIdle ? "no active threads" : "no threads"}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FlowThreadRow({
+  threadRow,
+  index,
+  fold,
+  nowMs,
+  onOpenThread,
+}: {
+  threadRow: FlowNode;
+  index: ReturnType<typeof indexShape>;
+  fold: { open: ReadonlySet<string>; toggle: (id: string) => void };
+  nowMs: number;
+  onOpenThread: () => void;
+}) {
+  const isOpen = fold.open.has(threadRow.id);
+  const hasTurns = (index.childrenOf.get(threadRow.id) ?? []).length > 0;
+  // Turns render newest-first: what the agent is doing now sits on top.
+  const turns = isOpen ? [...(index.childrenOf.get(threadRow.id) ?? [])].reverse() : [];
+  return (
+    <div style={{ paddingLeft: 12 }}>
+      <div className="flex items-center gap-2 py-[1px]" title={`${threadRow.label} · ${threadRow.status} · ${flowAge(threadRow, nowMs)}`}>
+        {hasTurns ? (
+          <FoldToggle isOpen={isOpen} onClick={() => fold.toggle(threadRow.id)} />
+        ) : (
+          <span style={{ width: 12, flex: "none" }} />
+        )}
+        <span onClick={onOpenThread} className="flex cursor-pointer items-center gap-2 hover:opacity-80" style={{ minWidth: 0, flex: "1 1 auto" }}>
+          <FlowDot node={threadRow} d={7} />
+          <span className="truncate text-[12px]" style={{ color: "#a5b8c9" }}>
+            {threadRow.label}
+          </span>
+          <span className="text-[10px]" style={{ color: "#7d93a8", flex: "none" }}>
+            {flowAge(threadRow, nowMs)}
+          </span>
+        </span>
+      </div>
+      {turns.map((turnRow) => (
+        <FlowTurnRow key={turnRow.id} turnRow={turnRow} index={index} fold={fold} nowMs={nowMs} />
+      ))}
+    </div>
+  );
+}
+
+function FlowTurnRow({
+  turnRow,
+  index,
+  fold,
+  nowMs,
+}: {
+  turnRow: FlowNode;
+  index: ReturnType<typeof indexShape>;
+  fold: { open: ReadonlySet<string>; toggle: (id: string) => void };
+  nowMs: number;
+}) {
+  if (turnRow.kind === "more") {
+    // "+N earlier turns" — the shape caps how deep the server builds; this is
+    // a marker, not a fold: expanding it client-side cannot reveal trimmed data.
+    return (
+      <div style={{ paddingLeft: 20 }}>
+        <span className="text-[10px]" style={{ color: "#5f6b76" }}>
+          {turnRow.label}
+        </span>
+      </div>
+    );
+  }
+  const isOpen = fold.open.has(turnRow.id);
+  const work = isOpen ? flowChildren(turnRow.id, index, fold.open, { foldWork: true }) : [];
+  const lastStep = turnRow.meta["last step"];
+  return (
+    <div style={{ paddingLeft: 20 }}>
+      <div className="flex items-center gap-2 py-[1px]">
+        <FoldToggle isOpen={isOpen} onClick={() => fold.toggle(turnRow.id)} />
+        <span className="truncate text-[11px]" style={{ color: "#8fa3b5" }} title={turnRow.input ?? turnRow.label}>
+          {turnRow.label}
+        </span>
+        <span className="truncate text-[10px]" style={{ color: "#5f6b76" }}>
+          {turnRow.sublabel}
+          {lastStep !== undefined && lastStep !== "" ? ` · last: ${lastStep}` : ""}
+        </span>
+        <span className="ml-auto text-[10px]" style={{ color: "#5f6b76", flex: "none" }}>
+          {flowAge(turnRow, nowMs)}
+        </span>
+      </div>
+      {work.map((workRow) =>
+        workRow.kind === "more" ? (
+          <button
+            key={workRow.id}
+            type="button"
+            className="text-[10px] underline"
+            style={{ color: "#5f6b76", paddingLeft: 52, alignSelf: "flex-start" }}
+            onClick={() => fold.toggle(`${turnRow.id}::all`)}
+          >
+            {workRow.label}
+          </button>
+        ) : (
+          <FlowWorkRow key={workRow.id} workRow={workRow} nowMs={nowMs} />
+        ),
+      )}
+    </div>
+  );
+}
+
+function FlowWorkRow({ workRow, nowMs }: { workRow: FlowNode; nowMs: number }) {
+  return (
+    <div
+      className="flex items-center gap-2 py-[1px]"
+      style={{ paddingLeft: 46 }}
+      title={`${workRow.label}${workRow.sublabel ? ` · ${workRow.sublabel}` : ""} · ${workRow.status} · ${flowAge(workRow, nowMs)}`}
+    >
+      <FlowDot node={workRow} d={6} />
+      <span className="truncate text-[11px]" style={{ color: "#8fa3b5" }}>
+        {workRow.label}
+      </span>
+      <span className="truncate text-[10px]" style={{ color: "#5f6b76" }}>
+        {workRow.sublabel}
+      </span>
+      <span className="ml-auto text-[10px]" style={{ color: "#5f6b76", flex: "none" }}>
+        {flowAge(workRow, nowMs)}
+      </span>
+    </div>
+  );
+}
+
 // ---------- the tabbed page ----------
 const TABS = [
   { id: "board", label: "Board" },
   { id: "treemap", label: "Unit treemap" },
   { id: "tiles", label: "Strip tiles" },
   { id: "graph", label: "Agent lanes" },
+  { id: "flow", label: "Activity flow" },
 ] as const;
 
 export function OverviewPage() {
@@ -370,6 +747,7 @@ export function OverviewPage() {
           {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} /> : null}
           {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} /> : null}
           {tab === "graph" ? <AgentLanesView data={live.data} nowMs={nowMs} w={w} /> : null}
+          {tab === "flow" ? <ActivityFlowView /> : null}
         </div>
       </div>
     </div>
