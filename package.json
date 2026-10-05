@@ -10,7 +10,7 @@
     "name": "Activity Overview",
     "description": "Glanceable thread activity views: fixed-slot dot cards, unit treemap, strip tiles.",
     "branding": {
-      "icon": "Activity"
+      "icon": "./icons/pulse.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
