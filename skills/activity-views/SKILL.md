@@ -1,11 +1,11 @@
 ---
-name: attention-views
-description: "What the Attention plugin shows and how it reads thread data."
+name: activity-views
+description: "What the Activity Overview plugin shows and how it reads thread data."
 ---
 
-# Attention plugin views
+# Activity Overview plugin views
 
-The Attention plugin adds an "Attention" nav panel in the BB sidebar with three
+The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with three
 tabs, all rendered live from the host's sidebar thread data:
 
 - **Board** — one card per project, fixed dot slots (13px pitch). Volume of

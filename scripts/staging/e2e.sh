@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 npm test
 listing=$(bb plugin list 2>&1)
-echo "$listing" | grep -q '^attention@' && echo "[e2e] plugin running"
+echo "$listing" | grep -q '^activity-overview@' && echo "[e2e] plugin running"
 grep -q 'navPanel' app.tsx && echo "[e2e] nav panel registered"
 bb plugin types || true
 echo "[e2e] done"

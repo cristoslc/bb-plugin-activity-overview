@@ -1,9 +1,9 @@
-# Attention
+# Activity Overview
 
-A BB plugin that adds an "Attention" nav panel with three live tabs over all visible threads. One dot = one thread: color reads status, dot volume reads count, dominance emerges from the color pattern.
+A BB plugin that adds an "Activity Overview" nav panel with three live tabs over all visible threads. One dot = one thread: color reads status, dot volume reads count, dominance emerges from the color pattern.
 
 ## Surfaces
-- Nav panel `Attention` (icon: Activity) routed at `/plugins/attention/board`
+- Nav panel `Activity Overview` (icon: Activity) routed at `/plugins/activity-overview/board`
   - Tab **Board** — fixed-slot project cards, shelf-packed.
   - Tab **Unit treemap** — squarified regions, honest constant-pitch dot fill.
   - Tab **Strip tiles** — 4px-per-thread strips reflowed to fill the width.

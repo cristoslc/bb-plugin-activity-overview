@@ -1,5 +1,5 @@
 {
-  "name": "bb-plugin-attention",
+  "name": "bb-plugin-activity-overview",
   "version": "0.1.0",
   "type": "module",
   "engines": {
@@ -7,8 +7,8 @@
     "bbPluginSdk": ">=0.6.15"
   },
   "bb": {
-    "name": "Attention",
-    "description": "Glanceable thread status views: fixed-slot dot cards, unit treemap, strip tiles.",
+    "name": "Activity Overview",
+    "description": "Glanceable thread activity views: fixed-slot dot cards, unit treemap, strip tiles.",
     "branding": {
       "icon": "Activity"
     },

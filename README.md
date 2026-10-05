@@ -1,16 +1,16 @@
-# bb-plugin-attention
+# bb-plugin-activity-overview
 
-Attention: three glanceable status views of all visible BB threads, in one sidebar nav panel. One dot = one thread.
+Overview: three glanceable status views of all visible BB threads, in one sidebar nav panel. One dot = one thread.
 
 ## Install
 
 ```sh
-git clone <repo> bb-plugin-attention && cd bb-plugin-attention
+git clone <repo> bb-plugin-activity-overview && cd bb-plugin-activity-overview
 npm install
 bb plugin install . --yes
 ```
 
-The **Attention** panel appears in the sidebar (routed at `/plugins/attention/board`).
+The **Activity Overview** panel appears in the sidebar (routed at `/plugins/activity-overview/board`).
 
 ## Views (tabs)
 

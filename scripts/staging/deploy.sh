@@ -5,6 +5,6 @@ cd "$(dirname "$0")/../.."
 npm install
 bb plugin build
 bb plugin install . --yes
-bb plugin reload attention
-bb plugin list 2>&1 | grep -A2 '^attention@'
+bb plugin reload activity-overview
+bb plugin list 2>&1 | grep -A2 '^activity-overview@'
 echo "[deploy] staging done"

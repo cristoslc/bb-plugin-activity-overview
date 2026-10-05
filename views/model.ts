@@ -1,4 +1,4 @@
-// bb-plugin-attention — shared model + layout math for the three views.
+// bb-plugin-activity-overview — shared model + layout math for the three views.
 // Ported from the prototype generators (gen-attention-board.js): one thread is
 // one status light; color = status, volume = count. Dominance is read from the
 // dot color pattern only — no painted project health anywhere.

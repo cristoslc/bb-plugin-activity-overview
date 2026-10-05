@@ -1,4 +1,4 @@
-// bb-plugin-attention — the three views (tab pages) rendered from live
+// bb-plugin-activity-overview — the three views (tab pages) rendered from live
 // sidebar thread data. Pure functions of the model; no server state.
 import { useMemo, useState, type ReactNode } from "react";
 import { experimental_useSidebarThreads } from "@get-bb/plugin-sdk/app";
@@ -248,7 +248,7 @@ const TABS = [
   { id: "tiles", label: "Strip tiles" },
 ] as const;
 
-export function AttentionPage() {
+export function OverviewPage() {
   const live = useLiveModel();
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("board");
   if (live.state === "loading") {

@@ -1,4 +1,4 @@
-// bb-plugin-attention — backend entry.
+// bb-plugin-activity-overview — backend entry.
 //
 // The three views (Board, Unit treemap, Strip tiles) are entirely
 // frontend-rendered from the host's live sidebar thread data, so the backend
@@ -7,8 +7,8 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
 export default async function plugin(bb: BbPluginApi) {
-  bb.log.info("attention plugin loaded (views are client-rendered)");
+  bb.log.info("activity-overview plugin loaded (views are client-rendered)");
   bb.onDispose(() => {
-    bb.log.info("attention plugin disposed");
+    bb.log.info("activity-overview plugin disposed");
   });
 }

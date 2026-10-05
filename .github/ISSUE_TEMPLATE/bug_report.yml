@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect against the Attention plugin
+description: Report a defect against the Activity Overview plugin
 labels: ["bug"]
 body:
   - type: input

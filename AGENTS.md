@@ -1,4 +1,4 @@
-# Attention plugin — agent guidance
+# Activity Overview plugin — agent guidance
 
 See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standards live in `~/.agents/AGENTS.md`; this file adds project specifics.
 
@@ -8,7 +8,7 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 - `views/Views.tsx` — the three view components and the tab page.
 - `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing.
 - `server.ts` — backend stub (required by the manifest; the plugin owns no server state).
-- `skills/attention-views/` — the plugin's own skill: what the views show and their constraints.
+- `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.
 - Design history and verdicts for the encodings live in the bb thread that commissioned this plugin, not in this repo.
 
 ## Invariants
@@ -24,4 +24,4 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 
 ## Build
 
-`bb plugin build` before any install or release; `bb plugin reload attention` after path-install changes.
+`bb plugin build` before any install or release; `bb plugin reload activity-overview` after path-install changes.
