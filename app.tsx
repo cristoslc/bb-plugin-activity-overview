@@ -4,8 +4,9 @@
 // bundled), so this file must be loaded by BB, not imported directly.
 //
 // One sidebar nav panel ("Activity Overview") with an internal tab bar carrying the
-// three views: Board (fixed-slot cards), Unit treemap (honest fill), and
-// Strip tiles. All views render from the host's live sidebar thread data.
+// four views: Board (fixed-slot cards), Unit treemap (honest fill), Strip
+// tiles, and Agent lanes (edge-less thread-family tree). All views render
+// from the host's live sidebar thread data.
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import { OverviewPage } from "./views/Views";
 

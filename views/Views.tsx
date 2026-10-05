@@ -1,4 +1,4 @@
-// bb-plugin-activity-overview — the three views (tab pages) rendered from live
+// bb-plugin-activity-overview — the four views (tab pages) rendered from live
 // sidebar thread data. Pure functions of the model; no server state.
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { experimental_useSidebarThreads } from "@get-bb/plugin-sdk/app";
@@ -8,9 +8,15 @@ import {
   cellColor,
   classify,
   makeCards,
+  laneRows,
+  makeLaneCards,
   shelfPack,
   squarify,
   tip,
+  LANE_ROW_PITCH,
+  LANE_INDENT,
+  LANE_LABEL_W,
+  LANE_DOT,
   type AttnProject,
   type AttnThread,
   type Cell,
@@ -265,11 +271,53 @@ export function StripTilesView({ data, nowMs, w }: { data: SidebarData; nowMs: n
   );
 }
 
+// ---------- view 4: agent graph (edge-less lane tree) ----------
+export function AgentLanesView({ data, nowMs, w }: { data: SidebarData; nowMs: number; w: number }) {
+  const model = useMemo(() => {
+    const { lanes, total } = laneRows(data.threads, data.projects, nowMs);
+    const cards = makeLaneCards(lanes, LBL);
+    const packed = shelfPack(cards, w, 14, 14);
+    return { packed, total };
+  }, [data, nowMs, w]);
+  if (model.total === 0) {
+    return <p className="text-sm text-muted-foreground">No visible threads.</p>;
+  }
+  return (
+    <Stage w={w} h={model.packed.H}>
+      {model.packed.placed.map(({ card, x, y }) => (
+        <div
+          key={card.pid}
+          title={`${card.name} · ${card.n} threads · ${card.hot} hot`}
+          className="absolute rounded-md"
+          style={{ left: x, top: y, width: card.w, height: card.h, background: "#131a22" }}
+        >
+          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "#9fb4c8" }}>
+            {card.name} · {card.n}
+          </div>
+          {card.rows.map((row, i) => (
+            <div
+              key={row.t.id}
+              className="absolute flex items-center"
+              style={{ left: 8 + row.depth * LANE_INDENT, top: LBL + 6 + i * LANE_ROW_PITCH, width: LANE_LABEL_W, height: LANE_DOT }}
+            >
+              <Dot cell={{ t: row.t, fam: row.fam }} x={0} y={0} d={LANE_DOT} nowMs={nowMs} />
+              <span className="ml-2 truncate" style={{ fontSize: 9, color: "#7d93a8" }}>
+                {row.t.title || row.t.id}
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </Stage>
+  );
+}
+
 // ---------- the tabbed page ----------
 const TABS = [
   { id: "board", label: "Board" },
   { id: "treemap", label: "Unit treemap" },
   { id: "tiles", label: "Strip tiles" },
+  { id: "graph", label: "Agent lanes" },
 ] as const;
 
 export function OverviewPage() {
@@ -321,6 +369,7 @@ export function OverviewPage() {
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} /> : null}
           {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} /> : null}
           {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} /> : null}
+          {tab === "graph" ? <AgentLanesView data={live.data} nowMs={nowMs} w={w} /> : null}
         </div>
       </div>
     </div>

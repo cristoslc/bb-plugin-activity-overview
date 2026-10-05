@@ -5,7 +5,7 @@ description: "What the Activity Overview plugin shows and how it reads thread da
 
 # Activity Overview plugin views
 
-The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with three
+The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with four
 tabs, all rendered live from the host's sidebar thread data:
 
 - **Board** — one card per project, fixed dot slots (13px pitch). Volume of
@@ -17,6 +17,13 @@ tabs, all rendered live from the host's sidebar thread data:
 - **Strip tiles** — one small tile per project: name over a strip, one 4px
   unit per thread (4px + 1px gap), hottest statuses at the left edge. Tiles
   flow-wrap to fill the panel width.
+- **Agent lanes** — the thread-family tree (parent/spawned-under links from
+  the sidebar data), encoded edge-less: one unit dot per thread, hierarchy =
+  horizontal indent per depth level, family blocks contiguous, projects
+  packed as neutral-fill regions (`#131a22`) with voids between cards, no
+  connector lines and no outlines. Threads whose parent is invisible
+  (deleted, archived, or outside the page) promote to roots, and
+  parentThreadId cycles are severed into roots so the walk stays finite.
 
 ## Reading the dots
 

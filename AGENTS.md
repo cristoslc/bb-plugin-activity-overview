@@ -5,7 +5,7 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 ## What lives where
 
 - `app.tsx` — frontend entry: the navPanel registration. Point at `views/Views.tsx`.
-- `views/Views.tsx` — the three view components and the tab page.
+- `views/Views.tsx` — the four view components and the tab page.
 - `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing.
 - `server.ts` — backend stub (required by the manifest; the plugin owns no server state).
 - `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.

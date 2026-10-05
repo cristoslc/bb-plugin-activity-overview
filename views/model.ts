@@ -111,6 +111,49 @@ export type ProjectModel = {
 };
 
 /**
+ * Resolve the thread-family tree for the agent graph: archived threads are
+ * filtered out, parents that are themselves invisible promote their children
+ * to roots, and any parentThreadId cycle is severed so a tree walk stays
+ * finite (every thread caught inside a loop becomes a root).
+ */
+export type Family = { visible: readonly AttnThread[]; roots: readonly AttnThread[]; childrenOf: Map<string, AttnThread[]> };
+
+export function buildAgentTree(threads: readonly AttnThread[]): Family {
+  const visible = threads.filter((t) => !t.archivedAt);
+  const ids = new Set(visible.map((t) => t.id));
+  const directParent = new Map<string, string | null>();
+  for (const t of visible) {
+    directParent.set(
+      t.id,
+      t.parentThreadId && t.parentThreadId !== t.id && ids.has(t.parentThreadId) ? t.parentThreadId : null,
+    );
+  }
+  const cyclic = new Set<string>();
+  for (const t of visible) {
+    const seen = new Set<string>([t.id]);
+    let cur = directParent.get(t.id) ?? null;
+    while (cur !== null && !seen.has(cur)) {
+      seen.add(cur);
+      cur = directParent.get(cur) ?? null;
+    }
+    if (cur !== null) cyclic.add(t.id);
+  }
+  const childrenOf = new Map<string, AttnThread[]>();
+  const roots: AttnThread[] = [];
+  for (const t of visible) {
+    const p = cyclic.has(t.id) ? null : (directParent.get(t.id) ?? null);
+    if (p) {
+      const list = childrenOf.get(p);
+      if (list) list.push(t);
+      else childrenOf.set(p, [t]);
+    } else {
+      roots.push(t);
+    }
+  }
+  return { visible, roots, childrenOf };
+}
+
+/**
  * Group visible threads by project, parents before their children, both
  * attention-ascending; projects sorted hottest-first.
  */
@@ -119,20 +162,10 @@ export function buildProjects(
   projects: readonly AttnProject[],
   nowMs: number,
 ): { projects: ProjectModel[]; total: number } {
-  const visible = threads.filter((t) => !t.archivedAt);
-  const ids = new Set(visible.map((t) => t.id));
-  const childrenOf = new Map<string, AttnThread[]>();
-  const roots: AttnThread[] = [];
-  for (const t of visible) {
-    const p = t.parentThreadId && ids.has(t.parentThreadId) ? t.parentThreadId : null;
-    if (p && p !== t.id) {
-      const list = childrenOf.get(p);
-      if (list) list.push(t);
-      else childrenOf.set(p, [t]);
-    } else {
-      roots.push(t);
-    }
-  }
+  const family = buildAgentTree(threads);
+  const visible = family.visible;
+  const childrenOf = family.childrenOf;
+  const roots = family.roots;
   const nameOf = new Map(projects.map((p) => [p.id, p.name]));
   const byPid = new Map<string, AttnThread[]>();
   for (const t of visible) {
@@ -285,4 +318,84 @@ export function shelfPack<T extends { w: number; h: number }>(cards: T[], W: num
     shelfH = Math.max(shelfH, card.h);
   }
   return { placed, H: y + shelfH };
+}
+
+// ---------- agent graph: lane rows (edge-less family tree) ----------
+export const LANE_ROW_PITCH = 18;
+export const LANE_INDENT = 16;
+export const LANE_LABEL_W = 220;
+export const LANE_DOT = 8;
+
+export type LaneRow = { t: AttnThread; fam: string; depth: number };
+
+export type LaneProject = {
+  pid: string;
+  name: string;
+  rows: LaneRow[];
+  n: number;
+  best: number;
+  hot: number;
+};
+
+/**
+ * One projected lane list per project: families contiguous from their root,
+ * depth = hierarchy level (the hierarchy encoding of the graph view; no
+ * connector line-work), children attention-ascending under each parent,
+ * projects hottest-first.
+ */
+export function laneRows(
+  threads: readonly AttnThread[],
+  projects: readonly AttnProject[],
+  nowMs: number,
+): { lanes: LaneProject[]; total: number } {
+  const family = buildAgentTree(threads);
+  const nameOf = new Map(projects.map((p) => [p.id, p.name]));
+  const byPid = new Map<string, AttnThread[]>();
+  for (const t of family.visible) {
+    const pid = t.projectId ?? "projectless";
+    const list = byPid.get(pid);
+    if (list) list.push(t);
+    else byPid.set(pid, [t]);
+  }
+  const lanes: LaneProject[] = [];
+  for (const [pid, pool] of byPid) {
+    const projRoots = family.roots
+      .filter((t) => (t.projectId ?? "projectless") === pid)
+      .sort((a, b) => attentionScore(a, nowMs) - attentionScore(b, nowMs));
+    const rows: LaneRow[] = [];
+    const walk = (t: AttnThread, depth: number, fam: string) => {
+      rows.push({ t, fam, depth });
+      for (const k of (family.childrenOf.get(t.id) ?? []).slice().sort(
+        (a, b) => attentionScore(a, nowMs) - attentionScore(b, nowMs),
+      )) {
+        walk(k, depth + 1, fam);
+      }
+    };
+    for (const r of projRoots) walk(r, 0, r.id);
+    if (rows.length === 0) continue;
+    const best = Math.min(...rows.map((r) => attentionScore(r.t, nowMs)));
+    const hot = rows.filter((r) => classify(r.t) !== "idle").length;
+    lanes.push({
+      pid,
+      name: nameOf.get(pid) ?? (pid === "projectless" ? "Projectless" : pid),
+      rows,
+      n: rows.length,
+      best,
+      hot,
+    });
+  }
+  lanes.sort((a, b) => a.best - b.best || b.hot - a.hot);
+  return { lanes, total: family.visible.length };
+}
+
+export type LaneCard = LaneProject & { w: number; h: number; maxDepth: number };
+
+/** Region card per project lane list: widest depth sets the card width. */
+export function makeLaneCards(lanes: LaneProject[], label: number): LaneCard[] {
+  return [...lanes].sort((a, b) => b.n - a.n || a.best - b.best).map((p) => {
+    const maxDepth = p.rows.reduce((m, r) => Math.max(m, r.depth), 0);
+    const w = 16 + (maxDepth + 1) * LANE_INDENT + LANE_LABEL_W;
+    const h = p.rows.length * LANE_ROW_PITCH + label + 16;
+    return { ...p, maxDepth, w, h };
+  });
 }

@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  classify, buildProjects, squarify, makeCards, shelfPack, attentionScore,
+  classify, buildProjects, buildAgentTree, laneRows, makeLaneCards,
+  squarify, makeCards, shelfPack, attentionScore,
   type AttnThread, type AttnProject,
 } from "../views/model.ts";
 
@@ -126,4 +127,88 @@ test("attention score orders error < needs-you < working < unread < idle", () =>
     attentionScore(thread(), NOW),
   ];
   for (let i = 1; i < scores.length; i++) assert.ok(scores[i] > scores[i - 1]);
+});
+
+// ---------- agent graph (lane tree) ----------
+
+test("agent tree: orphans and self-parents promote to roots; children follow visible parents", () => {
+  const threads = [
+    thread({ id: "child", parentThreadId: "parent" }),
+    thread({ id: "parent" }),
+    thread({ id: "orphan", parentThreadId: "ghost" }),
+    thread({ id: "self", parentThreadId: "self" }),
+  ];
+  const fam = buildAgentTree(threads);
+  assert.deepEqual(fam.roots.map((t) => t.id).sort(), ["orphan", "parent", "self"]);
+  assert.deepEqual(fam.childrenOf.get("parent")!.map((t) => t.id), ["child"]);
+});
+
+test("agent tree: parentThreadId cycles are severed into roots instead of hanging a walk", () => {
+  const threads = [
+    thread({ id: "a", parentThreadId: "b" }),
+    thread({ id: "b", parentThreadId: "a" }),
+  ];
+  const { lanes, total } = laneRows(threads, [{ id: "proj_a", name: "A" }], NOW);
+  assert.equal(total, 2);
+  const rows = lanes[0].rows;
+  assert.equal(rows.length, 2);
+  for (const r of rows) assert.equal(r.depth, 0);
+});
+
+test("agent lanes: children sort attention-ascending and depth tracks hierarchy", () => {
+  const threads = [
+    thread({ id: "parent" }),
+    thread({ id: "calm", parentThreadId: "parent" }),
+    thread({ id: "hot", parentThreadId: "parent", runtimeStatus: "error" }),
+  ];
+  const { lanes } = laneRows(threads, [{ id: "proj_a", name: "A" }], NOW);
+  assert.deepEqual(
+    lanes[0].rows.map((r) => [r.t.id, r.depth]),
+    [["parent", 0], ["hot", 1], ["calm", 1]],
+  );
+});
+
+test("agent lanes: deep chains carry depth 2+; family blocks stay contiguous", () => {
+  const threads = [
+    thread({ id: "r1" }),
+    thread({ id: "c1", parentThreadId: "r1" }),
+    thread({ id: "mid", parentThreadId: "c1" }),
+    thread({ id: "r2" }),
+  ];
+  const { lanes } = laneRows(threads, [{ id: "proj_a", name: "A" }], NOW);
+  const rows = lanes[0].rows;
+  assert.deepEqual(
+    rows.map((r) => [r.t.id, r.depth]),
+    [["r1", 0], ["c1", 1], ["mid", 2], ["r2", 0]],
+  );
+});
+
+test("agent lanes: archived threads excluded; hottest project first", () => {
+  const threads = [
+    thread({ id: "dead", projectId: "proj_a", archivedAt: NOW }),
+    thread({ id: "p2t", projectId: "proj_b", runtimeStatus: "active" }),
+    thread({ id: "p1t", projectId: "proj_a" }),
+  ];
+  const { lanes, total } = laneRows(threads, [
+    { id: "proj_a", name: "A" }, { id: "proj_b", name: "B" },
+  ], NOW);
+  assert.equal(total, 2);
+  assert.deepEqual(lanes.map((l) => l.pid), ["proj_b", "proj_a"]);
+  assert.equal(lanes[0].hot, 1);
+  assert.equal(lanes[0].rows.length, 1);
+});
+
+test("agent lanes: lane cards pack inside the canvas width with no overflow", () => {
+  const threads = [
+    thread({ id: "r" }),
+    thread({ id: "c", parentThreadId: "r" }),
+    thread({ id: "m", parentThreadId: "c" }),
+    thread({ id: "leaf", parentThreadId: "m" }),
+    thread({ id: "other" }),
+  ];
+  const { lanes } = laneRows(threads, [{ id: "proj_a", name: "A" }], NOW);
+  const cards = makeLaneCards(lanes, 13);
+  const placed = shelfPack(cards, 1120, 14, 14);
+  assert.equal(placed.placed.length, lanes.length);
+  for (const p of placed.placed) assert.ok(p.x + p.card.w <= 1121);
 });
