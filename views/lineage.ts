@@ -20,7 +20,7 @@ export type LineageThread = {
  * renders plainly as "archived or hidden thread" rather than staying silent.
  */
 export function spawnHint(
-  thread: { projectId: string | null; parentThreadId: string | null },
+  thread: { id: string; projectId: string | null; parentThreadId: string | null },
   byId: ReadonlyMap<string, LineageThread>,
   projectName: (projectId: string) => string | null,
 ): string | null {
