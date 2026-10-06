@@ -14,6 +14,7 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
   All view colors and the status/flow/grey constants in `model.ts` are `var(--attn-…)`
   tokens declared there — no hardcoded hexes in the views.
 - `views/timeline.ts` — pure turn normalization over thread timeline rows (copied from the agent-graph plugin).
+- `views/lineage.ts` — pure lineage decoration for the shape build: cross-project spawn hints (`spawnHint`) and delegation `childRef` → child-thread links (`delegationChildId`); tests in tests/lineage.test.ts.
 - `server.ts` — the stateless read-only `shape` RPC: root → project → thread → turn → work node tree built from live timelines, plus a coalesced `thread:changed` realtime push (SHAPE_CHANGED; payload in shared.ts). This file is no longer an empty stub.
 - `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.
 - `lib/whats-new.ts`, `lib/changelog-markdown.ts`, `lib/unreleased-changelog.ts` — the What's-new surface ported from the Focus Board plugin: version/prerelease pulse logic, the changelog parsers, and the derivations (see `## Release & What's-new discipline`).

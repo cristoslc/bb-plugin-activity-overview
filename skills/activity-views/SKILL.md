@@ -56,6 +56,14 @@ tabs: four aggregate tabs rendered live from the host's sidebar thread data, plu
     toolbar climbs back out; clicking the focused card steps up one level).
     Turns and work only unfold inside a scope; a cold scoped thread survives
     its status filter.
+  - **Cross-project lineage**: a thread card whose parent thread lives in a
+    different project shows `· ↳ <project name>` on its sub line (and in the
+    footer details); a parent outside the visible roster renders plainly as
+    "archived or hidden thread". A Subagent work card whose bb `childRef`
+    resolves to a roster thread points its open-thread affordance (double-click
+    or the footer button) at the spawned child thread, even when that thread
+    sits under another project. Same-project families stay unlabeled — the
+    parent's delegation rows already show the linkage.
   - **Filters**: the footer legend counts double as solo status-filter
     chips: click "error 4" to see only error threads, click it again to show
     all. The "Active only" toolbar button is the idle-excluding preset
