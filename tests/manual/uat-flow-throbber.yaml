@@ -1,0 +1,111 @@
+test_suite:
+  id: uat-flow-throbber-001
+  title: Activity flow loading throbber — visibility and paint profile
+  description: >
+    Headless regression suite for the flow tab's loading throbber
+    (thread thr_9scswb966s). Every phase that delays the flow view must show
+    an animated, painted throbber — the shape RPC load (ActivityFlowView's
+    own guard) AND the restored-tab live-data load (OverviewPage's early
+    returns). The mock SDK stalls the shape RPC (?shapeDelay=) and the
+    sidebar data (?sideDelay=) to widen each phase; paint timings are
+    profiled per case.
+  tags: [flow, throbber, uat, headless, profiling]
+
+test_cases:
+  - id: TC-01
+    title: Throbber is mounted, sized, animated, and painted during the shape RPC load
+    criticality: blocker
+    preconditions:
+      - dist/ has been built (`npm run build`); the harness serves it from vite
+      - Headless Chrome is available at CHROME_PATH (default: system Chrome)
+    steps:
+      - order: 1
+        action: goto
+        params:
+          query: "?shapeDelay=2000"
+        instruction: Open the panel with the shape RPC stalled for 2000ms.
+        expected: Board tab paints; harness is live with console-error capture on.
+      - order: 2
+        action: clickTab
+        params:
+          label: Activity flow
+        instruction: Switch to the Activity flow tab (marks the click in the paint profile).
+        expected: The loading throbber appears within roughly 250ms.
+      - order: 3
+        action: assertThrobber
+        instruction: >
+          Assert the throbber's box is non-zero, its computed animation-name
+          is attn-spin, its Animation.currentTime advances across a 300ms
+          sample, and capture a mid-spin screenshot as evidence.
+        expected: All assertions hold; screenshot saved under docs/uat/.
+      - order: 4
+        action: waitFor
+        params:
+          text: Refactor the export path
+          timeout: 8000
+        instruction: Wait for the flow tree to paint (the fixture thread's card title).
+        expected: The throbber is gone and the tree is present.
+      - order: 5
+        action: profile
+        instruction: Record the paint marks, first-paint/FCP entries, longtasks, and Chrome metrics.
+        expected: The report carries a timing table for this suite run.
+  - id: TC-02
+    title: Throbber unmounts once the shape resolves
+    criticality: standard
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params:
+          query: "?shapeDelay=400"
+        instruction: Reopen the panel with a short shape delay.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Activity flow
+        instruction: Switch to the activity flow tab.
+        expected: Tab switches without error.
+      - order: 3
+        action: waitFor
+        params:
+          text: Refactor the export path
+          timeout: 8000
+        instruction: Wait for the flow tree.
+        expected: Tree painted; no spinner remains.
+      - order: 4
+        action: assertGone
+        params:
+          selector: 'span[style*="attn-spin"]'
+        instruction: Confirm no spinner element remains mounted after load.
+        expected: Selector matches nothing.
+  - id: TC-03
+    title: Restored flow tab shows the throbber during the live-data load too
+    criticality: blocker
+    description: >
+      Camera persistence restores tab=flow, so reopening the panel mounts
+      straight into the flow view while the sidebar data is still loading —
+      OverviewPage's own early return serves that phase, and it must carry
+      the same animated throbber, not bare text.
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params:
+          query: "?tab=flow&cams=%7B%7D&sideDelay=1500&shapeDelay=300"
+          ready: profile
+        instruction: Reopen the panel with the flow tab restored and sidebar data stalled 1500ms.
+        expected: The panel mounts into a loading state with the flow tab pending.
+      - order: 2
+        action: assertThrobber
+        instruction: During the live-data load, assert the throbber is mounted, sized, and animating.
+        expected: All assertions hold; screenshot saved.
+      - order: 3
+        action: waitFor
+        params:
+          text: Refactor the export path
+          timeout: 10000
+        instruction: Wait for the flow tree through both load phases.
+        expected: Tree painted; no spinner remains.

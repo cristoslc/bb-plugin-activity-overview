@@ -1108,23 +1108,12 @@ function ActivityFlowView({
     );
   }
   if (layout === null || shape === null) {
-    // The host's CSS does not compile plugin tailwind, so the spinner is
-    // inline styles over a plugin-local keyframes rule (see OverviewPage).
-    return (
-      <div className="p-4">
-        <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-          <span
-            className="h-4 w-4 flex-none rounded-full"
-            style={{
-              animation: "attn-spin 0.9s linear infinite",
-              border: "2px solid color-mix(in srgb, var(--attn-dim) 30%, transparent)",
-              borderTopColor: "var(--attn-dim)",
-            }}
-          />
-          Loading activity — building the shape from live thread timelines…
-        </span>
-      </div>
-    );
+    // Fully inline-styled throbber (see FlowThrobber): the compiled tailwind
+    // only matches inside the host's data-bb-plugin scope, so anything the
+    // spinner needs from a utility class is invisible in some mounts (UAT
+    // TC-01 caught a 4×22px sliver). Shared component + plugin-local
+    // keyframes.
+    return <FlowThrobber label="Loading activity — building the shape from live thread timelines…" />;
   }
 
   const byId = new Map(layout.placed.map((p) => [p.node.id, p]));
@@ -1482,6 +1471,35 @@ const TABS = [
   { id: "flow", label: "Activity flow" },
 ] as const;
 
+/** The plugin-local keyframes + the shared inline-styled throbber. The <style> must be present for ALL states a page can render (the loader included) or the spinner has no keyframes to run (UAT TC-03). */
+const PANEL_STYLE = THEME_CSS + "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }";
+
+function FlowThrobber({ label }: { label: string }) {
+  // Centered in the panel: the loading states would otherwise paint the
+  // throbber at the panel's top-left, underneath the floating tabs bar —
+  // mounted and animating, yet visually occluded (UAT TC-01's screenshot).
+  return (
+    <div className="flex h-full w-full items-center justify-center p-4">
+      <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+        <span
+          aria-hidden="true"
+          style={{
+            width: 16,
+            height: 16,
+            flexShrink: 0,
+            alignSelf: "center",
+            borderRadius: "9999px",
+            animation: "attn-spin 0.9s linear infinite",
+            border: "2px solid color-mix(in srgb, var(--attn-dim) 30%, transparent)",
+            borderTopColor: "var(--attn-dim)",
+          }}
+        />
+        {label}
+      </span>
+    </div>
+  );
+}
+
 /** The gift glyph for the What's-new button (no host icon to lean on). */
 function GiftIcon({ className }: { className?: string }) {
   return (
@@ -1646,11 +1664,21 @@ export function OverviewPage() {
   const [panelRef, vw, vh] = usePanelSize(MIN_STAGE_W);
   const w = Math.max(MIN_STAGE_W, vw - SAFE.left - GAP - SAFE.right - GAP);
   const hBudget = Math.max(200, vh - SAFE.top - GAP - SAFE.bottom - GAP);
-  if (live.state === "loading") {
-    return <p className="p-4 text-sm text-muted-foreground">Loading threads…</p>;
-  }
-  if (live.state === "error" || live.data === null) {
-    return <p className="p-4 text-sm text-muted-foreground">Could not read thread data.</p>;
+  if (live.state != "ready" || live.data === null) {
+    // Loading and error states stay INSIDE the panel wrapper so the plugin's
+    // <style> block (the attn-spin keyframes) is always in the document — the
+    // loading throbber depends on it (UAT TC-03 caught its absence: a mounted
+    // spinner with no Animation object is a static ring).
+    return (
+      <div ref={panelRef} className="attn-theme relative h-full min-h-0 flex-1 overflow-hidden">
+        <style>{PANEL_STYLE}</style>
+        {live.state === "loading" ? (
+          <FlowThrobber label="Loading threads…" />
+        ) : (
+          <p className="p-4 text-sm text-muted-foreground">Could not read thread data.</p>
+        )}
+      </div>
+    );
   }
   const nowMs = Date.now();
   const built = buildProjects(live.data.threads, live.data.projects, nowMs);
@@ -1663,10 +1691,7 @@ export function OverviewPage() {
   };
   return (
     <div ref={panelRef} className="attn-theme relative h-full min-h-0 flex-1 overflow-hidden">
-      <style>
-        {THEME_CSS +
-          "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
-      </style>
+      <style>{PANEL_STYLE}</style>
       {tab === "flow" ? (
         <ActivityFlowView apiRef={apiRef} />
       ) : (

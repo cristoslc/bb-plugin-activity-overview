@@ -25,6 +25,8 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ### Fixed
 
+- **The Activity flow's loading throbber is actually visible now.** Headless UAT (puppeteer + paint profiling) caught it as a 4×22px unstyled sliver — the compiled tailwind only matches inside the host's plugin scope — and later as hidden behind the tab bar: the spinner is now fully inline-styled (no class dependencies), centered in the panel clear of the chrome, and the plugin's keyframes `<style>` block stays mounted through every loading state.
+
 - **The Activity flow loading spinner is actually visible now.** It uses inline styles over a plugin-local `attn-spin` keyframes rule instead of host-compiled tailwind classes, which the host's CSS did not include for plugin content.
 
 ### Changed

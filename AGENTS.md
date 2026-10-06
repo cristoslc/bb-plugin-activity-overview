@@ -35,6 +35,8 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 
 `npm test` (generates the what's-new feeds from `CHANGELOG.md`, then `node --test tests/*.test.ts`) — layout invariants, classification precedence, lockstep version pins, and the changelog parse contract. Run before any commit touching `views/` or `CHANGELOG.md`.
 
+`npm run uat -- tests/manual/<suite>.yaml` — headless UAT (vite harness + system Chrome, puppeteer-core): machine-executed YAML suites with screenshots, occlusion checks, and paint profiling; evidence and reports land in `docs/uat/`. The harness mounts the real app under a `data-bb-plugin` scope wrapper (scripts/screenshot/mock-sdk.tsx) — the compiled tailwind only matches inside that scope — with a mock SDK whose `shape` RPC stalls via `?shapeDelay=` and whose sidebar stalls via `?sideDelay=` (fixture + simulator in scripts/screenshot/fixture.ts and main.tsx). Required before shipping anything touching the flow view's loading states.
+
 ## Release & What's-new discipline
 
 Full reference: `.agents/agents-md-detail/release.md` (ported from the Focus Board plugin). The short form:

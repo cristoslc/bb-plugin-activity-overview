@@ -32,6 +32,10 @@ export const DERIVED_WHATS_NEW: readonly { version: string; items: readonly { le
         "children": []
       },
       {
+        "lead": "The Activity flow's loading throbber is actually visible now.",
+        "children": []
+      },
+      {
         "lead": "The Activity flow loading spinner is actually visible now.",
         "children": []
       },
