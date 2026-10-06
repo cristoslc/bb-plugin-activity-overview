@@ -1642,8 +1642,18 @@ export function OverviewPage() {
     return TABS.some((t) => t.id === stored) ? (stored as TabId) : "board";
   });
   // World bounds of the active aggregate view, reported through onWorld.
+  // The report is cached per tab: re-clicking the active tab (or landing on a
+  // view that re-reports nothing new) must never leave `world` null, or the
+  // canvas's fit() no-ops and every pan clamp goes dead — the bug that let
+  // zoomed content slide under the top nav.
   const [world, setWorld] = useState<WorldSize | null>(null);
-  const onWorld = useCallback((size: WorldSize | null) => setWorld(size), []);
+  const worldCache = useRef<Map<TabId, WorldSize>>(new Map());
+  const tabRef = useRef<TabId>(tab);
+  tabRef.current = tab;
+  const onWorld = useCallback((size: WorldSize | null) => {
+    if (size !== null) worldCache.current.set(tabRef.current, size);
+    setWorld(size);
+  }, []);
   const apiRef = useRef<MapApi | null>(null);
   // Panel viewport: views pack to its width; the treemap fills its height.
   const [panelRef, vw, vh] = usePanelSize(MIN_STAGE_W);
@@ -1662,7 +1672,9 @@ export function OverviewPage() {
   const switchTab = (id: TabId) => {
     setTab(id);
     writeCameraStore({ tab: id }); // remembered for the next visit
-    setWorld(null); // drop the previous view's world before the canvas remounts
+    // Seed the canvas from the tab's cached world (null only if never
+    // reported); the new view's report effect refreshes it on mount.
+    setWorld(worldCache.current.get(id) ?? null);
   };
   return (
     <div ref={panelRef} className="attn-theme relative h-full min-h-0 flex-1 overflow-hidden">
@@ -1673,7 +1685,7 @@ export function OverviewPage() {
       {tab === "flow" ? (
         <ActivityFlowView apiRef={apiRef} />
       ) : (
-        <MapCanvas key={tab} world={world} apiRef={apiRef} persistKey={tab}>
+        <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
           {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
           {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
