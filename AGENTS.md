@@ -9,6 +9,10 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
   shell (drag/wheel/corner-controls map canvas with floating chrome), and the
   tab page (the Activity flow view carries its own `useShape` RPC hook).
 - `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing, and the flow fold/layout pipeline (`indexShape`, `flowDefaultOpen`, `flowChildren`, `flowAge`, `flowLayout` — the latter enforces scope-gated depth and status filtering, `NODE_W`/`NODE_H`/`COL_GAP`/`ROW_GAP`).
+- `views/theme.ts` — the plugin's light & dark theme tokens (`THEME_CSS`: light
+  block first, dark overrides under bb's `.dark` ancestor; `THEME_TOKENS`).
+  All view colors and the status/flow/grey constants in `model.ts` are `var(--attn-…)`
+  tokens declared there — no hardcoded hexes in the views.
 - `views/timeline.ts` — pure turn normalization over thread timeline rows (copied from the agent-graph plugin).
 - `server.ts` — the stateless read-only `shape` RPC: root → project → thread → turn → work node tree built from live timelines, plus a coalesced `thread:changed` realtime push (SHAPE_CHANGED; payload in shared.ts). This file is no longer an empty stub.
 - `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.

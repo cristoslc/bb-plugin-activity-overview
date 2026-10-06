@@ -13,6 +13,7 @@ _Nothing yet._
 - Fixed: board one-dot cards are at least 120px wide (wider slot grids), so short project names no longer truncate to a few characters.
 - Changed: legend now shows per-status counts; label sizes/contrast bumped (treemap labels 10px #98a8b6, board/tile labels 11px #9fb4c8).
 - Chore: thread timestamps aligned to the SDK's epoch-number types; `tsc --noEmit` is clean.
+- Added: light & dark theming — every view color is a plugin token (`views/theme.ts`), declared light first with dark overrides under bb's `.dark` ancestor; ink/surface/line tokens derive from bb's own CSS custom properties with standalone fallbacks, and the idle age ramp mixes muted ink into the stage so the fade is theme-relative.
 - Added: a fourth tab, Agent lanes — the thread-family tree as edge-less lane rows (dot per thread, indent per depth level, project regions).
 - Added: a fifth tab, Activity flow — the dive view: project → thread → turn → work, served by the new stateless `shape` RPC (backend built from live turn timelines).
 - Changed: Activity flow rebuilt from nested lists into an Agent Graph-style tidy tree — node cards in depth columns, dashed bezier connectors, chevron folds, a status legend with counts, click-for-details in the footer, and double-click to open the thread.
