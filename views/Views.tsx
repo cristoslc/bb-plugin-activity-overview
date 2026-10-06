@@ -68,6 +68,18 @@ import {
 } from "./model";
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "../shared";
 import { THEME_CSS } from "./theme";
+import {
+  APP_VERSION,
+  CURRENT_UNRELEASED_FINGERPRINT,
+  EMPTY_UNRELEASED_FINGERPRINT,
+  hasUnseenWhatsNew,
+  readLastSeenUnreleased,
+  readLastSeenVersion,
+  whatsNewEntriesFor,
+  writeLastSeenUnreleased,
+  writeLastSeenVersion,
+  type WhatsNewEntry,
+} from "../lib/whats-new";
 
 const MIN_STAGE_W = 320; // pack floor for very narrow panels
 /** Chrome-free zone the opening fit keeps visible content inside: tab bar
@@ -1465,10 +1477,156 @@ const TABS = [
   { id: "flow", label: "Activity flow" },
 ] as const;
 
+/** The gift glyph for the What's-new button (no host icon to lean on). */
+function GiftIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="8" width="18" height="4" rx="1" />
+      <path d="M12 8v13" />
+      <path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7" />
+      <path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5" />
+    </svg>
+  );
+}
+
+/**
+ * The What's-new modal behind the tab bar's gift button. Lists the condensed
+ * changelog entries — either the delta since the stored last-seen version
+ * (after an update) or every recent entry (opened unprompted from the quiet
+ * button); a dev build leads with its [Unreleased] group. Opening marks the
+ * version seen; the button stays.
+ *
+ * Styled with inline styles over the theme's CSS variables, not tailwind:
+ * the spinner lesson — classes the compiled app.css did not carry rendered
+ * invisibly, so this surface relies on nothing outside its own file.
+ */
+function WhatsNewModal({
+  open,
+  onOpenChange,
+  entries,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  entries: readonly WhatsNewEntry[];
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onOpenChange(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onOpenChange]);
+  if (!open) return null;
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={() => onOpenChange(false)}
+    >
+      <div
+        className="w-[420px] max-w-[calc(100%_-_2rem)] rounded-lg border border-border/60 bg-card p-4 shadow-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-label="What's new"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 className="mb-1 text-sm font-semibold text-foreground">What&apos;s new in Activity Overview</h2>
+        <p className="mb-3 text-xs text-muted-foreground">
+          {entries.length === 0
+            ? `You are on version ${APP_VERSION}.`
+            : "Recent changes since you last looked."}
+        </p>
+        <div className="max-h-[60vh] min-h-0 overflow-y-auto">
+          {entries.map((entry) => (
+            <section key={`${entry.version}:${entry.unreleased === true}`} className="mb-3 last:mb-0">
+              <h3 className="mb-1 text-xs font-semibold text-foreground">
+                {entry.unreleased ? `Unreleased ${entry.version}` : `Version ${entry.version}`}
+              </h3>
+              <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                {entry.items.map((item) => (
+                  <li key={item.lead}>
+                    {item.lead}
+                    {item.children && item.children.length > 0 ? (
+                      <ul className="list-disc mt-1 space-y-1 pl-4">
+                        {item.children.map((child) => (
+                          <li key={child}>{child}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="rounded-md border border-border/60 bg-background px-3 py-1 text-xs text-foreground hover:bg-accent"
+          >
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type TabId = (typeof TABS)[number]["id"];
 
 export function OverviewPage() {
   const live = useLiveModel();
+  // What's new: two "seen" models, picked by the running build. A stable
+  // build compares versions: a fresh install (nothing stored) is stamped
+  // silently — everything is new, so nothing counts as new — and an upgrade
+  // pulses until the modal is opened. A prerelease build (dev's
+  // "X.Y.Z-dev") keys "seen" to the [Unreleased] group's content instead:
+  // its fingerprint is stamped silently on first load, and the button pulses
+  // again whenever the group's bullets change (each merge to dev). Opening
+  // marks seen; the button itself never leaves.
+  const [lastSeenVersion, setLastSeenVersion] = useState<string | null>(() => readLastSeenVersion());
+  const [lastSeenUnreleased, setLastSeenUnreleased] = useState<string | null>(() => readLastSeenUnreleased());
+  useEffect(() => {
+    if (lastSeenVersion === null) {
+      writeLastSeenVersion(APP_VERSION); // fresh install: stamp silently
+      setLastSeenVersion(APP_VERSION);
+    }
+  }, [lastSeenVersion]);
+  // The unreleased fingerprint is NOT stamped at load: a fresh dev build
+  // pulses its standing group until opened (hasUnseenWhatsNew); only opening
+  // the modal records it as seen (openWhatsNew).
+  const whatsNewUnseen = hasUnseenWhatsNew({
+    runningVersion: APP_VERSION,
+    lastSeenVersion,
+    unreleasedFingerprint: CURRENT_UNRELEASED_FINGERPRINT,
+    lastSeenUnreleasedFingerprint: lastSeenUnreleased,
+  });
+  // The delta is captured at load (before opening marks it seen): a dev
+  // build leads with its unreleased group; stable builds show entries since
+  // the stored version when one is pending, all recent entries otherwise.
+  const whatsNewEntries: readonly WhatsNewEntry[] = whatsNewEntriesFor(
+    APP_VERSION,
+    whatsNewUnseen,
+    lastSeenVersion,
+  );
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const openWhatsNew = useCallback(() => {
+    writeLastSeenUnreleased(CURRENT_UNRELEASED_FINGERPRINT);
+    setLastSeenUnreleased(CURRENT_UNRELEASED_FINGERPRINT);
+    writeLastSeenVersion(APP_VERSION);
+    setLastSeenVersion(APP_VERSION);
+    setWhatsNewOpen(true);
+  }, []);
   // The last-visited tab survives bb back-navigation (same session store the
   // cameras use) — an unknown id falls back to the board.
   const [tab, setTab] = useState<TabId>(() => {
@@ -1532,8 +1690,29 @@ export function OverviewPage() {
               {t.label}
             </button>
           ))}
+          {/* Always present — the changelog never becomes unreachable. The
+              pulse (and the amber tint) is the only state, and it clears on
+              open. */}
+          <button
+            type="button"
+            onClick={openWhatsNew}
+            aria-label="What's new"
+            title="What's new"
+            className={
+              "inline-flex items-center justify-center rounded px-2 py-1 " +
+              (whatsNewUnseen
+                ? "text-amber-500 hover:text-amber-400"
+                : "text-muted-foreground hover:text-foreground")
+            }
+            style={
+              whatsNewUnseen ? { animation: "attn-pulse 2.2s ease-in-out infinite" } : undefined
+            }
+          >
+            <GiftIcon className="size-4" />
+          </button>
         </div>
       </div>
+      <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
       {tab !== "flow" ? (
         <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
           <LegendRow counts={counts} />
