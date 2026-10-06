@@ -34,6 +34,11 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 
 `npm test` (generates the what's-new feeds from `CHANGELOG.md`, then `node --test tests/*.test.ts`) — layout invariants, classification precedence, lockstep version pins, and the changelog parse contract. Run before any commit touching `views/` or `CHANGELOG.md`.
 
+## Dev-merge visual-check loop
+
+Every merge landing on `dev` in this plugin gets a headless visual verification pass before it is reported done: serve the merge head, `bb plugin reload activity-overview`, and drive all five tabs in a browser session — no content under the floating chrome at any zoom, treemap family tints actually visible, focus dimming and restore behaving.
+Full reference: `.agents/agents-md-detail/visual-check.md`.
+
 ## Release & What's-new discipline
 
 Full reference: `.agents/agents-md-detail/release.md` (ported from the Focus Board plugin). The short form:
