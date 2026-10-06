@@ -51,6 +51,7 @@ import {
   familyTints,
   FAMILY_TINTS,
   zoomToRect,
+  clampPanEdges,
   NODE_W,
   NODE_H,
   LANE_ROW_PITCH,
@@ -259,7 +260,9 @@ function MapCanvas({
       const wx = next.k * sz.W;
       const wy = next.k * sz.H;
       next.tx = clampPan(next.tx, wx, vw, GAP);
-      next.ty = clampPan(next.ty, wy, vh, GAP);
+      // Vertical pan keeps the top nav chrome clear: content can never ride
+      // under the floating tab bar (the bug where zooming hid project titles).
+      next.ty = clampPanEdges(next.ty, wy, vh, SAFE.top, GAP);
     }
     setT((prev) =>
       prev.k === next.k && prev.tx === next.tx && prev.ty === next.ty ? prev : next,
@@ -781,7 +784,7 @@ export function UnitTreemapView({
                       width: r.cw,
                       height: r.ch,
                       background: FAMILY_TINTS[tint],
-                      opacity: 0.5,
+                      opacity: 1,
                     }}
                   />
                 ))

@@ -257,6 +257,16 @@ export function familyTints(fams: readonly string[], paletteSize = FAMILY_TINTS.
 
 export type ZoomTransform = { scale: number; tx: number; ty: number };
 
+/** Clamp one pan axis to a band: the content's low edge keeps `mLow` from the
+ * viewport's start (the top, where the nav chrome floats) and `mHigh` from its
+ * end. Unlike `clampPan` the two ends differ — chrome-safe asymmetric clamped
+ * panning (the map canvas uses `SAFE.top` up and `GAP` down). */
+export function clampPanEdges(t: number, span: number, view: number, mLow: number, mHigh: number): number {
+  const lo = Math.min(mLow, view - mHigh - span);
+  const hi = Math.max(view - mHigh - span, mLow);
+  return Math.min(hi, Math.max(lo, t));
+}
+
 export type ClampOpts = { pad?: number; maxScale?: number };
 
 /** Scale + translate so `rect` fills the (vw × vh) viewport with padding. */

@@ -11,6 +11,11 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 - **Every view color now follows bb's theme — light and dark.** All colors are plugin tokens in `views/theme.ts`, declared light-first with dark overrides under bb's `.dark` ancestor; ink, surface and line tokens derive from bb's own CSS custom properties (with standalone fallbacks), so custom bb themes recolor the views for free. The idle age ramp mixes muted ink into the stage (theme-relative fade), and the family tint previews got pastel light-mode variants of the same six hues.
 - **The Activity Overview panel now has a What's-new surface.** A gift button sits in the tab bar, always present, pulsing after every update until opened; it opens a modal listing the changelog's condensed entries and marks the version seen. The feed, the dev-build pulse keying to the [Unreleased] group's content, and the empty-group silence all derive from this file at test/build time — the changelog is the single source of truth.
 
+### Fixed
+
+- **Zooming no longer slides cards under the top nav.** The vertical pan clamp keeps the floating tab bar's margin clear, so project titles stay readable at every zoom level.
+- **Family tint previews are actually visible now.** The per-family background slots render at full opacity instead of half-transparent over the same-key region fill, which read as no highlight at all.
+
 ## [0.2.0] - 2026-10-05
 
 ### Added
