@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-activity-overview",
-  "version": "0.2.0",
+  "version": "0.3.0-dev",
   "type": "module",
   "engines": {
     "bb": ">=0.45",
@@ -48,6 +48,8 @@
     "vaul": "^1.1.2"
   },
   "scripts": {
-    "test": "node --test tests/*.test.ts"
+    "build": "node scripts/generate-unreleased.mjs && node scripts/generate-whats-new.mjs && bb plugin build",
+    "test": "node scripts/generate-unreleased.mjs && node scripts/generate-whats-new.mjs && node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
   }
 }

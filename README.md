@@ -20,7 +20,7 @@ The **Activity Overview** panel appears in the sidebar (routed at `/plugins/acti
 
 ## Reading the dots
 
-Classification (most urgent wins): needs-you > error > working > unread > idle. Colors: error `#e5534b`, needs-you `#d9a53f`, working `#3d84e0` (pulses), unread `#2e9e45`, idle grey fading with age. Dominance is always emergent from the dot color pattern.
+Classification (most urgent wins): needs-you > error > working > unread > idle. Colors are theme tokens (`views/theme.ts`): the four status hues stay the same in light and dark (error red, needs-you amber, working blue — pulses, unread green), while idle is a grey ramp that fades with age toward whatever the stage color resolves to. Dominance is always emergent from the dot color pattern.
 
 ## Development
 

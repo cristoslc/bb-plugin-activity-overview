@@ -4,7 +4,7 @@ import { test } from "node:test";
 import {
   classify, buildProjects, buildAgentTree, laneRows, makeLaneCards,
   squarify, makeCards, shelfPack, attentionScore,
-  familyTints, FAMILY_TINTS, zoomToRect, clampPan,
+  familyTints, FAMILY_TINTS, zoomToRect, clampPan, clampPanEdges,
   indexShape, flowDefaultOpen, flowChildren, flowAge, flowLayout, WORK_SHOWN,
   NODE_W, NODE_H, COL_GAP, ROW_GAP,
   type AttnThread, type AttnProject, type FlowNode, type ShapeDto,
@@ -538,4 +538,13 @@ test("clampPan keeps the scaled world inside the viewport on every axis", () => 
   const fit = clampPan(0, 0, 1, 1000, 400, 1000, 400);
   approx(fit.tx, 0);
   approx(fit.ty, 0);
+});
+
+test("clampPanEdges keeps the top margin clear while honoring the bottom margin", () => {
+  assert.equal(clampPanEdges(0, 800, 900, 60, 16), 60);
+  assert.equal(clampPanEdges(500, 800, 900, 60, 16), 84); // bottom extreme
+  assert.equal(clampPanEdges(0, 360, 900, 60, 16), 60);
+  assert.equal(clampPanEdges(700, 360, 900, 60, 16), 524);
+  assert.equal(clampPanEdges(-99, 2000, 1000, 16, 16), -99); // inside the band stays put
+  assert.equal(clampPanEdges(-5000, 2000, 1000, 16, 16), -1016);
 });

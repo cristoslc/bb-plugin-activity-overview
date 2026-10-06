@@ -51,6 +51,7 @@ import {
   familyTints,
   FAMILY_TINTS,
   zoomToRect,
+  clampPanEdges,
   NODE_W,
   NODE_H,
   LANE_ROW_PITCH,
@@ -67,6 +68,19 @@ import {
   type Status,
 } from "./model";
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "../shared";
+import { THEME_CSS } from "./theme";
+import {
+  APP_VERSION,
+  CURRENT_UNRELEASED_FINGERPRINT,
+  EMPTY_UNRELEASED_FINGERPRINT,
+  hasUnseenWhatsNew,
+  readLastSeenUnreleased,
+  readLastSeenVersion,
+  whatsNewEntriesFor,
+  writeLastSeenUnreleased,
+  writeLastSeenVersion,
+  type WhatsNewEntry,
+} from "../lib/whats-new";
 
 const MIN_STAGE_W = 320; // pack floor for very narrow panels
 /** Chrome-free zone the opening fit keeps visible content inside: tab bar
@@ -246,7 +260,9 @@ function MapCanvas({
       const wx = next.k * sz.W;
       const wy = next.k * sz.H;
       next.tx = clampPan(next.tx, wx, vw, GAP);
-      next.ty = clampPan(next.ty, wy, vh, GAP);
+      // Vertical pan keeps the top nav chrome clear: content can never ride
+      // under the floating tab bar (the bug where zooming hid project titles).
+      next.ty = clampPanEdges(next.ty, wy, vh, SAFE.top, GAP);
     }
     setT((prev) =>
       prev.k === next.k && prev.tx === next.tx && prev.ty === next.ty ? prev : next,
@@ -440,7 +456,7 @@ function MapCanvas({
       <div
         ref={viewRef}
         className="absolute inset-0 touch-none select-none"
-        style={{ background: "#0f151d", cursor: panning ? "grabbing" : "grab" }}
+        style={{ background: "var(--attn-stage)", cursor: panning ? "grabbing" : "grab" }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -489,11 +505,11 @@ function MapCanvas({
 
 function LegendRow({ counts }: { counts: Record<Status, number> }) {
   const colors: Array<[string, string, number]> = [
-    ["error", "#e5534b", counts.error],
-    ["needs-you", "#d9a53f", counts["needs-you"]],
-    ["working", "#3d84e0", counts.working],
-    ["unread", "#2e9e45", counts.unread],
-    ["idle aging", "#8b949e", counts.idle],
+    ["error", "var(--attn-error)", counts.error],
+    ["needs-you", "var(--attn-needs-you)", counts["needs-you"]],
+    ["working", "var(--attn-working)", counts.working],
+    ["unread", "var(--attn-unread)", counts.unread],
+    ["idle aging", "var(--attn-grey-1)", counts.idle],
   ];
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -501,7 +517,7 @@ function LegendRow({ counts }: { counts: Record<Status, number> }) {
         <span key={label} className="inline-flex items-center gap-1.5">
           <span
             className="inline-block rounded-full"
-            style={label === "idle aging" ? { width: 5, height: 5, background: color, boxShadow: "5px 0 0 #545b63" } : { width: 5, height: 5, background: color }}
+            style={label === "idle aging" ? { width: 5, height: 5, background: color, boxShadow: "5px 0 0 var(--attn-grey-3)" } : { width: 5, height: 5, background: color }}
           />
           {label}&thinsp;{n}
         </span>
@@ -586,9 +602,9 @@ export function BoardView({
           key={card.key}
           title={`${card.name} · ${card.n} threads · ${card.hot} hot`}
           className="absolute rounded-md"
-          style={{ left: x, top: y, width: card.w, height: card.h, background: "#10161f", border: "1px solid #1c2430" }}
+          style={{ left: x, top: y, width: card.w, height: card.h, background: "var(--attn-card)", border: "1px solid var(--attn-card-border)" }}
         >
-          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "#9fb4c8" }}>
+          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "var(--attn-label)" }}>
             {card.name} · {card.n}
           </div>
           <div className="absolute" style={{ left: 8, top: labelH + 6, width: card.cols * pitch, height: card.rows * pitch }}>
@@ -722,7 +738,7 @@ export function UnitTreemapView({
               top: r.y,
               width: r.w,
               height: r.h,
-              background: "#131a22",
+              background: "var(--attn-card)",
               opacity: dim ? 0.3 : 1,
               cursor: "pointer",
               transition: "opacity 200ms ease",
@@ -768,7 +784,7 @@ export function UnitTreemapView({
                       width: r.cw,
                       height: r.ch,
                       background: FAMILY_TINTS[tint],
-                      opacity: 0.5,
+                      opacity: 1,
                     }}
                   />
                 ))
@@ -800,7 +816,7 @@ export function UnitTreemapView({
               top: r.y + 2,
               maxWidth: r.w - 10,
               fontSize: 10,
-              color: "#98a8b6",
+              color: "var(--attn-label)",
               opacity: focusPid !== null && focusPid !== r.p.pid ? 0.3 : 1,
               zIndex: 3,
             }}
@@ -862,7 +878,7 @@ export function StripTilesView({
           className="absolute"
           style={{ left: x, top: y, width: card.w }}
         >
-          <div className="truncate" style={{ fontSize: 11, color: "#9fb4c8", marginBottom: 4 * scale }}>
+          <div className="truncate" style={{ fontSize: 11, color: "var(--attn-label)", marginBottom: 4 * scale }}>
             {card.p.name} · {card.p.n}
           </div>
           <div className="flex">
@@ -912,9 +928,9 @@ export function AgentLanesView({
           key={card.pid}
           title={`${card.name} · ${card.n} threads · ${card.hot} hot`}
           className="absolute rounded-md"
-          style={{ left: x, top: y, width: card.w, height: card.h, background: "#131a22" }}
+          style={{ left: x, top: y, width: card.w, height: card.h, background: "var(--attn-card)" }}
         >
-          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "#9fb4c8" }}>
+          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "var(--attn-label)" }}>
             {card.name} · {card.n}
           </div>
           {card.rows.map((row, i) => (
@@ -924,7 +940,7 @@ export function AgentLanesView({
               style={{ left: 8 + row.depth * LANE_INDENT, top: LBL + 6 + i * LANE_ROW_PITCH, width: LANE_LABEL_W, height: LANE_DOT }}
             >
               <Dot cell={{ t: row.t, fam: row.fam }} x={0} y={0} d={LANE_DOT} nowMs={nowMs} />
-              <span className="ml-2 truncate" style={{ fontSize: 9, color: "#7d93a8" }}>
+              <span className="ml-2 truncate" style={{ fontSize: 9, color: "var(--attn-sub)" }}>
                 {row.t.title || row.t.id}
               </span>
             </div>
@@ -1104,8 +1120,8 @@ function ActivityFlowView({
             className="h-4 w-4 flex-none rounded-full"
             style={{
               animation: "attn-spin 0.9s linear infinite",
-              border: "2px solid rgba(143, 163, 181, 0.3)",
-              borderTopColor: "#8fa3b5",
+              border: "2px solid color-mix(in srgb, var(--attn-dim) 30%, transparent)",
+              borderTopColor: "var(--attn-dim)",
             }}
           />
           Loading activity — building the shape from live thread timelines…
@@ -1284,7 +1300,7 @@ function ActivityFlowView({
                     key={p.node.id}
                     d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
                     fill="none"
-                    stroke={p.node.status === "running" ? "#3d84e0" : "#31415a"}
+                    stroke={p.node.status === "running" ? "var(--attn-working)" : "var(--attn-seam)"}
                     strokeOpacity={0.55}
                     strokeDasharray="4 5"
                   />
@@ -1389,8 +1405,8 @@ function FlowCard({
         top: p.y,
         width: NODE_W,
         height: NODE_H,
-        background: selected ? "#1a2433" : "#131a22",
-        border: `1px solid ${selected ? "#2f4b74" : "#1c2430"}`,
+        background: selected ? "var(--attn-selected)" : "var(--attn-card)",
+        border: `1px solid ${selected ? "var(--attn-selected-border)" : "var(--attn-card-border)"}`,
         padding: "7px 8px",
         opacity: isWorkMore || n.kind === "more" ? 0.8 : 1,
       }}
@@ -1400,10 +1416,10 @@ function FlowCard({
           <FlowDotSafe status={n.status} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[11px]" style={{ color: n.kind === "thread" ? "#a5b8c9" : "#8fa3b5" }}>
+          <div className="truncate text-[11px]" style={{ color: n.kind === "thread" ? "var(--attn-emph)" : "var(--attn-dim)" }}>
             {n.label}
           </div>
-          <div className="truncate text-[10px]" style={{ color: "#5f6b76" }}>
+          <div className="truncate text-[10px]" style={{ color: "var(--attn-faint)" }}>
             {sub}
           </div>
         </div>
@@ -1436,8 +1452,8 @@ function FlowDetails({
   onOpenThread: () => void;
 }) {
   return (
-    <span className="w-full min-w-0 text-[10px]" style={{ color: "#8fa3b5" }}>
-      <span style={{ color: "#c3d0dc" }}>{node.label}</span>
+    <span className="w-full min-w-0 text-[10px]" style={{ color: "var(--attn-dim)" }}>
+      <span style={{ color: "var(--attn-emph)" }}>{node.label}</span>
       {" · "}
       {node.status}
       {node.kind === "thread" ? ` · ${flowAge(node, nowMs)}` : ""}
@@ -1464,10 +1480,156 @@ const TABS = [
   { id: "flow", label: "Activity flow" },
 ] as const;
 
+/** The gift glyph for the What's-new button (no host icon to lean on). */
+function GiftIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="8" width="18" height="4" rx="1" />
+      <path d="M12 8v13" />
+      <path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7" />
+      <path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5" />
+    </svg>
+  );
+}
+
+/**
+ * The What's-new modal behind the tab bar's gift button. Lists the condensed
+ * changelog entries — either the delta since the stored last-seen version
+ * (after an update) or every recent entry (opened unprompted from the quiet
+ * button); a dev build leads with its [Unreleased] group. Opening marks the
+ * version seen; the button stays.
+ *
+ * Styled with inline styles over the theme's CSS variables, not tailwind:
+ * the spinner lesson — classes the compiled app.css did not carry rendered
+ * invisibly, so this surface relies on nothing outside its own file.
+ */
+function WhatsNewModal({
+  open,
+  onOpenChange,
+  entries,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  entries: readonly WhatsNewEntry[];
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onOpenChange(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onOpenChange]);
+  if (!open) return null;
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={() => onOpenChange(false)}
+    >
+      <div
+        className="w-[420px] max-w-[calc(100%_-_2rem)] rounded-lg border border-border/60 bg-card p-4 shadow-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-label="What's new"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 className="mb-1 text-sm font-semibold text-foreground">What&apos;s new in Activity Overview</h2>
+        <p className="mb-3 text-xs text-muted-foreground">
+          {entries.length === 0
+            ? `You are on version ${APP_VERSION}.`
+            : "Recent changes since you last looked."}
+        </p>
+        <div className="max-h-[60vh] min-h-0 overflow-y-auto">
+          {entries.map((entry) => (
+            <section key={`${entry.version}:${entry.unreleased === true}`} className="mb-3 last:mb-0">
+              <h3 className="mb-1 text-xs font-semibold text-foreground">
+                {entry.unreleased ? `Unreleased ${entry.version}` : `Version ${entry.version}`}
+              </h3>
+              <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
+                {entry.items.map((item) => (
+                  <li key={item.lead}>
+                    {item.lead}
+                    {item.children && item.children.length > 0 ? (
+                      <ul className="list-disc mt-1 space-y-1 pl-4">
+                        {item.children.map((child) => (
+                          <li key={child}>{child}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="rounded-md border border-border/60 bg-background px-3 py-1 text-xs text-foreground hover:bg-accent"
+          >
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type TabId = (typeof TABS)[number]["id"];
 
 export function OverviewPage() {
   const live = useLiveModel();
+  // What's new: two "seen" models, picked by the running build. A stable
+  // build compares versions: a fresh install (nothing stored) is stamped
+  // silently — everything is new, so nothing counts as new — and an upgrade
+  // pulses until the modal is opened. A prerelease build (dev's
+  // "X.Y.Z-dev") keys "seen" to the [Unreleased] group's content instead:
+  // its fingerprint is stamped silently on first load, and the button pulses
+  // again whenever the group's bullets change (each merge to dev). Opening
+  // marks seen; the button itself never leaves.
+  const [lastSeenVersion, setLastSeenVersion] = useState<string | null>(() => readLastSeenVersion());
+  const [lastSeenUnreleased, setLastSeenUnreleased] = useState<string | null>(() => readLastSeenUnreleased());
+  useEffect(() => {
+    if (lastSeenVersion === null) {
+      writeLastSeenVersion(APP_VERSION); // fresh install: stamp silently
+      setLastSeenVersion(APP_VERSION);
+    }
+  }, [lastSeenVersion]);
+  // The unreleased fingerprint is NOT stamped at load: a fresh dev build
+  // pulses its standing group until opened (hasUnseenWhatsNew); only opening
+  // the modal records it as seen (openWhatsNew).
+  const whatsNewUnseen = hasUnseenWhatsNew({
+    runningVersion: APP_VERSION,
+    lastSeenVersion,
+    unreleasedFingerprint: CURRENT_UNRELEASED_FINGERPRINT,
+    lastSeenUnreleasedFingerprint: lastSeenUnreleased,
+  });
+  // The delta is captured at load (before opening marks it seen): a dev
+  // build leads with its unreleased group; stable builds show entries since
+  // the stored version when one is pending, all recent entries otherwise.
+  const whatsNewEntries: readonly WhatsNewEntry[] = whatsNewEntriesFor(
+    APP_VERSION,
+    whatsNewUnseen,
+    lastSeenVersion,
+  );
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const openWhatsNew = useCallback(() => {
+    writeLastSeenUnreleased(CURRENT_UNRELEASED_FINGERPRINT);
+    setLastSeenUnreleased(CURRENT_UNRELEASED_FINGERPRINT);
+    writeLastSeenVersion(APP_VERSION);
+    setLastSeenVersion(APP_VERSION);
+    setWhatsNewOpen(true);
+  }, []);
   // The last-visited tab survives bb back-navigation (same session store the
   // cameras use) — an unknown id falls back to the board.
   const [tab, setTab] = useState<TabId>(() => {
@@ -1498,8 +1660,11 @@ export function OverviewPage() {
     setWorld(null); // drop the previous view's world before the canvas remounts
   };
   return (
-    <div ref={panelRef} className="relative h-full min-h-0 flex-1 overflow-hidden">
-      <style>{`.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }`}</style>
+    <div ref={panelRef} className="attn-theme relative h-full min-h-0 flex-1 overflow-hidden">
+      <style>
+        {THEME_CSS +
+          "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
+      </style>
       {tab === "flow" ? (
         <ActivityFlowView apiRef={apiRef} />
       ) : (
@@ -1528,8 +1693,29 @@ export function OverviewPage() {
               {t.label}
             </button>
           ))}
+          {/* Always present — the changelog never becomes unreachable. The
+              pulse (and the amber tint) is the only state, and it clears on
+              open. */}
+          <button
+            type="button"
+            onClick={openWhatsNew}
+            aria-label="What's new"
+            title="What's new"
+            className={
+              "inline-flex items-center justify-center rounded px-2 py-1 " +
+              (whatsNewUnseen
+                ? "text-amber-500 hover:text-amber-400"
+                : "text-muted-foreground hover:text-foreground")
+            }
+            style={
+              whatsNewUnseen ? { animation: "attn-pulse 2.2s ease-in-out infinite" } : undefined
+            }
+          >
+            <GiftIcon className="size-4" />
+          </button>
         </div>
       </div>
+      <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
       {tab !== "flow" ? (
         <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
           <LegendRow counts={counts} />

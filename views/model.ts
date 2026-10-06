@@ -23,11 +23,13 @@ export type AttnProject = { id: string; name: string };
 
 export type Status = "error" | "needs-you" | "working" | "unread" | "idle";
 
+// Status colors are theme tokens (views/theme.ts): one value per theme block,
+// but the same four ADR-0001 hues in both light and dark.
 export const HOT_COLORS: Record<Exclude<Status, "idle">, string> = {
-  error: "#e5534b",
-  "needs-you": "#d9a53f",
-  working: "#3d84e0",
-  unread: "#2e9e45",
+  error: "var(--attn-error)",
+  "needs-you": "var(--attn-needs-you)",
+  working: "var(--attn-working)",
+  unread: "var(--attn-unread)",
 };
 
 export const STATUS_NAMES: Record<Status, string> = {
@@ -38,14 +40,19 @@ export const STATUS_NAMES: Record<Status, string> = {
   idle: "idle",
 };
 
-/** Idle dots fade with age: fresh grey to near-invisible late grey. */
-const GREYS: Array<[number, string]> = [
-  [0.75, "#a8b3bf"],
-  [6, "#8b949e"],
-  [24, "#6e7681"],
-  [72, "#545b63"],
-  [168, "#3d444c"],
-  [Number.POSITIVE_INFINITY, "#2a3038"],
+/**
+ * Idle dots fade with age into the stage: fresh muted ink through five mixes
+ * toward near-background. The tokens (views/theme.ts) resolve against
+ * whatever stage color the active theme hands over, so the fade is
+ * theme-relative in both light and dark.
+ */
+export const GREYS: Array<[number, string]> = [
+  [0.75, "var(--attn-grey-0)"],
+  [6, "var(--attn-grey-1)"],
+  [24, "var(--attn-grey-2)"],
+  [72, "var(--attn-grey-3)"],
+  [168, "var(--attn-grey-4)"],
+  [Number.POSITIVE_INFINITY, "var(--attn-grey-5)"],
 ];
 
 export function classify(t: AttnThread): Status {
@@ -213,17 +220,19 @@ export function statusCounts(projects: ProjectModel[], nowMs: number): Record<St
 // ---------- unit treemap: family tints + zoom-to-project ----------
 
 /**
- * Subtle family background tints over the neutral region fill (#131a22): each
- * family inside a project gets one slightly-hued slot so its dots' grouping
- * is visible without painting any status-derived color.
+ * Subtle family background tints over the neutral region fill (a
+ * var(--attn-card) token): each family inside a project gets one
+ * slightly-hued slot so its dots' grouping is visible without painting any
+ * status-derived color. Theme tokens (views/theme.ts) — pastels on light,
+ * low-key near-blacks on dark.
  */
 export const FAMILY_TINTS: readonly string[] = [
-  "#1a2431", // blue-grey
-  "#19261f", // green-grey
-  "#221e2a", // purple-grey
-  "#252023", // warm grey
-  "#1a2030", // indigo
-  "#20241a", // olive
+  "var(--attn-tint-0)",
+  "var(--attn-tint-1)",
+  "var(--attn-tint-2)",
+  "var(--attn-tint-3)",
+  "var(--attn-tint-4)",
+  "var(--attn-tint-5)",
 ];
 
 /**
@@ -247,6 +256,16 @@ export function familyTints(fams: readonly string[], paletteSize = FAMILY_TINTS.
 }
 
 export type ZoomTransform = { scale: number; tx: number; ty: number };
+
+/** Clamp one pan axis to a band: the content's low edge keeps `mLow` from the
+ * viewport's start (the top, where the nav chrome floats) and `mHigh` from its
+ * end. Unlike `clampPan` the two ends differ — chrome-safe asymmetric clamped
+ * panning (the map canvas uses `SAFE.top` up and `GAP` down). */
+export function clampPanEdges(t: number, span: number, view: number, mLow: number, mHigh: number): number {
+  const lo = Math.min(mLow, view - mHigh - span);
+  const hi = Math.max(view - mHigh - span, mLow);
+  return Math.min(hi, Math.max(lo, t));
+}
 
 export type ClampOpts = { pad?: number; maxScale?: number };
 
@@ -508,15 +527,19 @@ export type FlowNode = {
 
 export type ShapeDto = { nodes: FlowNode[]; generatedAt: number; truncated: boolean };
 
-/** Same five-hue contract as the dots: running/waiting/error hot, greys otherwise. */
+/**
+ * Status colors for flow dots: the same four hot hues as the dot views;
+ * done/interrupted/queued/idle borrow the idle age ramp (cooler = further
+ * down the ramp), so they fade the same way in either theme.
+ */
 export const FLOW_COLORS: Record<FlowStatus, string> = {
-  running: "#3d84e0",
-  waiting: "#d9a53f",
-  error: "#e5534b",
-  done: "#6e7681",
-  interrupted: "#8b949e",
-  queued: "#545b63",
-  idle: "#3d444c",
+  running: "var(--attn-working)",
+  waiting: "var(--attn-needs-you)",
+  error: "var(--attn-error)",
+  done: "var(--attn-grey-2)",
+  interrupted: "var(--attn-grey-1)",
+  queued: "var(--attn-grey-3)",
+  idle: "var(--attn-grey-4)",
 };
 
 /** Statuses worth showing expanded by default. */
