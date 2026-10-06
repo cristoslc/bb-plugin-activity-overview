@@ -15,6 +15,7 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 - **Zooming no longer slides cards under the top nav.** The vertical pan clamp keeps the floating tab bar's margin clear, so project titles stay readable at every zoom level.
 - **Family tint previews are actually visible now.** The per-family background slots render at full opacity instead of half-transparent over the same-key region fill, which read as no highlight at all.
+- **Fit, restore and the pan clamps survive any tab interaction.** The views' world size is cached per tab, so re-clicking the active tab or racing a remount can no longer null the world — the bug that no-opped the camera's fit/restore and let zoomed content slide under the top nav mid-session.
 
 ## [0.2.0] - 2026-10-05
 
