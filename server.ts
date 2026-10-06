@@ -11,6 +11,7 @@
 // generic work node instead of breaking the view.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { delegationChildId, spawnHint } from "./views/lineage";
 import { normalizeTurns, type Row } from "./views/timeline";
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "./shared";
 
@@ -212,6 +213,8 @@ function workLabel(row: Row): { label: string; sublabel: string | null } {
 class ShapeBuilder {
   nodes: ShapeNode[] = [];
   truncated = false;
+  /** Thread lookups the lineage decorations read: roster ids and full rows. */
+  context = { rosterIds: new Set<string>(), byId: new Map<string, ThreadDto>() };
 
   add(node: Omit<ShapeNode, "meta"> & { meta?: Record<string, string> }) {
     if (this.nodes.length >= MAX_NODES) {
@@ -255,8 +258,16 @@ class ShapeBuilder {
         const childRunning =
           childWork.some((child) => rowStatus(child, threadRunning) === "running") ||
           (row.background === true && threadRunning);
+        // A childRef naming a roster thread ("bb thread spawn" lineage) turns
+        // this card into the cross-project jump: threadId points at the
+        // spawned thread, so the footer's "open thread" and a double-click
+        // land on the child even when it lives under another project.
+        const childId = delegationChildId(row.childRef, this.context.rosterIds);
+        const child = childId !== null ? this.context.byId.get(childId) : undefined;
+        const childTitle = child ? oneLine(child.title ?? child.titleFallback, 72) : null;
         this.add({
           ...base,
+          threadId: child?.id ?? threadId,
           status: childRunning ? "running" : base.status,
           label:
             oneLine(str(row.description), 60) ?? str(row.subagentType) ?? "Subagent",
@@ -265,6 +276,7 @@ class ShapeBuilder {
             .join(" · ") || null,
           meta: {
             type: str(row.subagentType) ?? "",
+            ...(childTitle !== null ? { "child thread": childTitle } : {}),
             ...(row.background === true ? { mode: "background" } : {}),
             ...(childWork.at(-1)
               ? { "last step": workLabel(childWork.at(-1)!).label ?? "" }
@@ -486,6 +498,11 @@ export default async function plugin(bb: BbPluginApi) {
     const projectNames = new Map(
       projects.map((project) => [project.id, project.name ?? project.id]),
     );
+    const threadById = new Map(allThreads.map((thread) => [thread.id, thread]));
+    builder.context = {
+      rosterIds: new Set(threadById.keys()),
+      byId: threadById,
+    };
     const threads = [...allThreads].sort((a, b) => {
       const byHeat = HEAT[threadStatus(a)] - HEAT[threadStatus(b)];
       return byHeat !== 0 ? byHeat : b.updatedAt - a.updatedAt;
@@ -530,6 +547,14 @@ export default async function plugin(bb: BbPluginApi) {
     }
     for (let index = 0; index < threads.length; index++) {
       const thread = threads[index]!;
+      // Cross-project lineage on the card itself: which project spawned this
+      // thread. Same-project families stay unlabeled (the parent's delegation
+      // rows show the linkage); a parent outside the roster says so plainly.
+      const spawnedBy = spawnHint(
+        thread,
+        threadById,
+        (projectId) => projectNames.get(projectId) ?? null,
+      );
       const ok = builder.add({
         id: thread.id,
         parentId: `project:${thread.projectId}`,
@@ -544,6 +569,7 @@ export default async function plugin(bb: BbPluginApi) {
         output: null,
         meta: {
           ...(thread.updatedAt ? { updated: String(thread.updatedAt) } : {}),
+          ...(spawnedBy !== null ? { "spawned by": spawnedBy } : {}),
         },
       });
       if (ok) {

@@ -1373,10 +1373,13 @@ function FlowCard({
   const collapsible =
     (n.kind === "project" || n.kind === "turn") || (n.kind === "thread" && !locked);
   const isWorkMore = n.kind === "more" && n.id.endsWith("::earlier");
-  const sub =
+  let sub =
     n.kind === "thread"
       ? `${turnCount} turn${turnCount === 1 ? "" : "s"}${turnCount === 0 ? "" : ` · ${flowAge(n, nowMs)}`}`
       : (n.sublabel ?? (isWorkMore ? "click to unfold" : n.kind === "more" ? "hidden on server" : ""));
+  // Cross-project lineage: the project that spawned this thread (server meta).
+  const spawnedBy = n.meta["spawned by"];
+  if (n.kind === "thread" && spawnedBy !== undefined) sub = `${sub} · ↳ ${spawnedBy}`;
   const openable = n.threadId !== null;
   return (
     <div
@@ -1441,6 +1444,8 @@ function FlowDetails({
       {" · "}
       {node.status}
       {node.kind === "thread" ? ` · ${flowAge(node, nowMs)}` : ""}
+      {"spawned by" in node.meta ? ` · ↳ ${node.meta["spawned by"]}` : ""}
+      {"child thread" in node.meta ? ` · ${node.meta["child thread"]}` : ""}
       {node.input !== null ? ` · in: ${node.input.slice(0, 140)}` : ""}
       {node.output !== null ? ` · out: ${node.output.slice(0, 140)}` : ""}
       {node.threadId !== null ? (

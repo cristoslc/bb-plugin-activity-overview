@@ -10,6 +10,7 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
   tab page (the Activity flow view carries its own `useShape` RPC hook).
 - `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing, and the flow fold/layout pipeline (`indexShape`, `flowDefaultOpen`, `flowChildren`, `flowAge`, `flowLayout` — the latter enforces scope-gated depth and status filtering, `NODE_W`/`NODE_H`/`COL_GAP`/`ROW_GAP`).
 - `views/timeline.ts` — pure turn normalization over thread timeline rows (copied from the agent-graph plugin).
+- `views/lineage.ts` — pure lineage decoration for the shape build: cross-project spawn hints (`spawnHint`) and delegation `childRef` → child-thread links (`delegationChildId`); tests in tests/lineage.test.ts.
 - `server.ts` — the stateless read-only `shape` RPC: root → project → thread → turn → work node tree built from live timelines, plus a coalesced `thread:changed` realtime push (SHAPE_CHANGED; payload in shared.ts). This file is no longer an empty stub.
 - `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.
 - Design history and verdicts for the encodings live in the bb thread that commissioned this plugin, not in this repo.
