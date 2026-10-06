@@ -80,7 +80,11 @@ const TURNS_HOT = 8;
 const TURNS_COLD = 1;
 const WORK_HOT = 8;
 const WORK_COLD = 4;
-const THREAD_LIMIT = 300;
+// `threads.list` is paginated: one page per call, looping until a page comes
+// back short (or the hard ceiling stops the walk on hosts with huge thread
+// counts). Archived threads stay excluded by the `archived: false` filter.
+const THREAD_PAGE = 300;
+const THREAD_CEILING = 3000;
 const TIMELINE_CONCURRENCY = 4;
 const BUILD_MEMO_MS = 750;
 const RUNNING_THREAD_STATUSES = new Set(["active", "starting", "pending"]);
@@ -436,6 +440,30 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /**
+   * Every non-archived thread, paged through `threads.list` so hosts with
+   * more than one page of threads still get their full roster: loop offsets
+   * until a page returns short, or the ceiling stops the walk.
+   */
+  async function listThreads(): Promise<ThreadDto[]> {
+    const threads: ThreadDto[] = [];
+    for (
+      let offset = 0;
+      offset < THREAD_CEILING;
+      offset += THREAD_PAGE
+    ) {
+      const result = await bb.sdk.threads.list({
+        archived: false,
+        limit: THREAD_PAGE,
+        offset,
+      });
+      const page = (Array.isArray(result) ? result : []) as unknown as ThreadDto[];
+      threads.push(...page);
+      if (page.length < THREAD_PAGE) return threads;
+    }
+    return threads;
+  }
+
+  /**
    * The full flow shape: root → projects → threads → turns → work, threads
    * sorted hot-first so the node ceiling drops the coldest tail, not the
    * live edge. Threads nested under another thread still hang off their
@@ -444,11 +472,7 @@ export default async function plugin(bb: BbPluginApi) {
   async function buildShape(): Promise<Shape> {
     const builder = new ShapeBuilder();
     const [allThreads, projects] = await Promise.all([
-      bb.sdk.threads
-        .list({ archived: false, limit: THREAD_LIMIT })
-        .then((result) =>
-          Array.isArray(result) ? (result as unknown as ThreadDto[]) : [],
-        ),
+      listThreads(),
       bb.sdk.projects
         .list({ includePersonal: true })
         .then(
