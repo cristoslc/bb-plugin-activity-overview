@@ -805,3 +805,434 @@ export function flowLayout(
   const H = Math.max(tree.h, placed.reduce((m, p) => Math.max(m, p.y + NODE_H), 0));
   return { placed, W, H };
 }
+
+// ---------- token flow (provider → project → family sankey) ----------
+
+/** A thread as the token flow view consumes it (from the plugin's flow RPC). */
+export type FlowThread = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  title: string;
+  status: string;
+  parentThreadId: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  /** Context-window usage — the per-thread token measure the host persists. */
+  usedTokens: number | null;
+  modelContextWindow: number | null;
+  model: string | null;
+  provider: string | null;
+  /** Sampled context growth, tokens per second (null: no sample history yet). */
+  rate: number | null;
+  /** Σ positive context growth the sampler has seen since the plugin started. */
+  tracked: number | null;
+};
+
+export const PROVIDER_ORDER = ["anthropic", "openai", "google", "ollama", "other"] as const;
+export type ProviderId = (typeof PROVIDER_ORDER)[number];
+
+export const PROVIDER_LABELS: Record<ProviderId, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+  ollama: "Ollama",
+  other: "Other",
+};
+
+/** Ribbon color per provider — theme tokens (theme.ts), both theme blocks. */
+export const PROVIDER_TOKENS: Record<ProviderId, string> = {
+  anthropic: "var(--attn-prov-anthropic)",
+  openai: "var(--attn-prov-openai)",
+  google: "var(--attn-prov-google)",
+  ollama: "var(--attn-prov-ollama)",
+  other: "var(--attn-prov-other)",
+};
+
+/**
+ * Map a model string ("ollama-cloud/glm…", "anthropic/claude…", "pi") onto a
+ * provider row; unknown prefixes land on "other". Single source of truth: the
+ * server imports this for the flow RPC, so attribution never drifts between
+ * front and back.
+ */
+export function providerOfModel(model: string | null): ProviderId {
+  if (model === null) return "other";
+  const m = model.toLowerCase();
+  const prefix = m.split("/", 1)[0] ?? m;
+  if (prefix.includes("ollama")) return "ollama";
+  if (prefix.includes("anthropic") || m.includes("claude")) return "anthropic";
+  if (prefix.includes("openai") || m.includes("gpt-") || prefix.includes("codex")) return "openai";
+  if (prefix.includes("google") || m.includes("gemini")) return "google";
+  return "other";
+}
+
+/** Fold the seven shape statuses into the five token-flow states. */
+export type TokenFlowStatus = "running" | "waiting" | "done" | "error" | "idle";
+export function tokenFlowStatus(status: string): TokenFlowStatus {
+  switch (status) {
+    case "running":
+      return "running";
+    case "waiting":
+    case "queued":
+      return "waiting";
+    case "error":
+      return "error";
+    case "interrupted":
+    case "done":
+      return "done";
+    default:
+      return "idle";
+  }
+}
+
+/** Dot + pace per folded state: color token, bead speed factor, ribbon base
+ * opacity. Factor 0 = still and dim (running/waiting/done get beads). */
+export const TOKEN_FLOW_STATUS: Record<
+  TokenFlowStatus,
+  { color: string; factor: number; base: number }
+> = {
+  running: { color: "var(--attn-working)", factor: 1, base: 0.32 },
+  waiting: { color: "var(--attn-needs-you)", factor: 0.35, base: 0.22 },
+  done: { color: "var(--attn-unread)", factor: 0.15, base: 0.18 },
+  error: { color: "var(--attn-error)", factor: 0, base: 0.12 },
+  idle: { color: "var(--attn-grey-2)", factor: 0, base: 0.09 },
+};
+
+/** A family: a parent thread plus its spawned children (childOf). A family
+ * whose parent left the roster collapses to the child thread alone. */
+export type FlowFamily = {
+  key: string;
+  projectId: string;
+  projectName: string;
+  parentThreadId: string | null;
+  threads: FlowThread[]; // parent first, then children
+};
+
+/**
+ * Group threads into families. Deterministic: families ordered by project
+ * name, then the parent thread's title, then key; members parent-first, then
+ * children by creation time.
+ */
+export function buildFamilies(threads: FlowThread[]): FlowFamily[] {
+  const byId = new Map(threads.map((t) => [t.id, t] as const));
+  const sorted = [...threads].sort(
+    (a, b) =>
+      a.projectName.localeCompare(b.projectName) ||
+      a.title.localeCompare(b.title) ||
+      a.id.localeCompare(b.id),
+  );
+  const families = new Map<string, FlowThread[]>();
+  for (const t of sorted) {
+    const parent = t.parentThreadId !== null ? byId.get(t.parentThreadId) : undefined;
+    const key = parent !== undefined ? parent.id : t.id;
+    const members = families.get(key);
+    if (members === undefined) families.set(key, [t]);
+    else members.push(t);
+  }
+  const built: FlowFamily[] = [...families.entries()].map(([key, members]) => ({
+    key,
+    projectId: members[0]!.projectId,
+    projectName: members[0]!.projectName,
+    parentThreadId: members[0]!.parentThreadId,
+    threads: members.sort(
+      (a, b) =>
+        Number(a.id === key ? 0 : 1) - Number(b.id === key ? 0 : 1) ||
+        (a.createdAt ?? a.updatedAt ?? 0) - (b.createdAt ?? b.updatedAt ?? 0) ||
+        a.id.localeCompare(b.id),
+    ),
+  }));
+  built.sort(
+    (a, b) =>
+      a.projectName.localeCompare(b.projectName) ||
+      (a.threads[0]?.title ?? "").localeCompare(b.threads[0]?.title ?? "") ||
+      a.key.localeCompare(b.key),
+  );
+  return built;
+}
+
+/** Geometry constants of the sankey world (ported from the approved mockup:
+ * docs/user-experience/sankey-token-flow-mockup.html). */
+export const TOKEN_FLOW = {
+  W: 1740,
+  H: 880,
+  /** Column face x positions: faces span [X, X + FACE_*]. */
+  PX: 200,
+  JX: 860,
+  FX: 1400,
+  FACE_PROV: 16,
+  FACE_PROJ: 14,
+  FACE_MEM: 10,
+  MEM_GAP: 5,
+  FAM_GAP: 40,
+  PR_GAP: 30,
+  TH_GAP: 26,
+  MIN_ROW: 20,
+  TOP: 80,
+  BOTTOM: 40,
+  ZONE_W: 300,
+} as const;
+
+export type SankeySlot = { threadId: string; y: number; h: number };
+export type SankeyProvider = {
+  id: ProviderId;
+  label: string;
+  color: string;
+  y: number;
+  h: number;
+  slots: SankeySlot[]; // ordered member-y — parallel rivers in both faces
+};
+export type SankeyProject = {
+  id: string;
+  label: string;
+  y: number;
+  h: number;
+  slots: SankeySlot[]; // provider order first, then member-y: rivers parallel
+};
+export type SankeyMember = {
+  thread: FlowThread;
+  y: number;
+  h: number;
+  isParent: boolean;
+  bands: Array<{ provider: ProviderId; y: number; h: number }>;
+};
+export type SankeyFamily = {
+  key: string;
+  zoneY: number;
+  zoneH: number;
+  members: SankeyMember[];
+};
+export type SankeyRibbon = {
+  id: string;
+  segment: 1 | 2;
+  provider: ProviderId;
+  threadId: string;
+  familyKey: string;
+  projectId: string;
+  status: TokenFlowStatus;
+  rate: number | null;
+  /** Endpoints (center y) and stroke width in world px. */
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  h: number;
+};
+export type SankeyLayout = {
+  scale: number;
+  providers: SankeyProvider[];
+  projects: SankeyProject[];
+  families: SankeyFamily[];
+  ribbons: SankeyRibbon[];
+};
+
+/**
+ * The full sankey layout for a thread list (already window-filtered by the
+ * view). Deterministic; one shared token scale for all columns so a thread's
+ * river keeps its width across columns. Widths come from each thread's
+ * context-window usage — the only per-thread token measure the host persists.
+ */
+export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
+  const C = TOKEN_FLOW;
+  const fams = buildFamilies(threads);
+  const famGapCount = Math.max(0, fams.length - 1);
+  const memGapCount = fams.reduce(
+    (sum, fam) => sum + Math.max(0, fam.threads.length - 1) * C.MEM_GAP,
+    0,
+  );
+  const avail = C.H - C.TOP - C.BOTTOM - famGapCount * C.FAM_GAP - memGapCount;
+  const total = threads.reduce((sum, t) => sum + Math.max(0, t.usedTokens ?? 0), 0);
+  const scale = total > 0 ? avail / total : 0;
+  const tokens = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
+
+  // --- family column (right): member rows, min-height rows even at 0 tokens
+  type MemberGeo = { y: number; h: number; isParent: boolean };
+  const memberGeo = new Map<string, MemberGeo>();
+  const families: SankeyFamily[] = [];
+  let rowY = C.TOP;
+  for (const fam of fams) {
+    const zoneTop = rowY;
+    const members: SankeyMember[] = [];
+    fam.threads.forEach((t, index) => {
+      const h = Math.max(C.MIN_ROW, tokens(t) * scale);
+      const bands: SankeyMember["bands"] = [];
+      let bandY = rowY;
+      for (const prov of PROVIDER_ORDER) {
+        if (t.provider !== prov) continue;
+        const bh = tokens(t) * scale;
+        if (bh <= 0) continue;
+        bands.push({ provider: prov, y: bandY, h: bh });
+        bandY += bh;
+      }
+      members.push({ thread: t, y: rowY, h, isParent: index === 0, bands });
+      memberGeo.set(t.id, { y: rowY, h, isParent: index === 0 });
+      rowY += h + C.MEM_GAP;
+    });
+    rowY -= C.MEM_GAP; // the last member has no trailing gap
+    families.push({ key: fam.key, zoneY: zoneTop, zoneH: rowY - zoneTop, members });
+    rowY += C.FAM_GAP;
+  }
+  // Center the family stack in the frame.
+  const famStackH = rowY - C.FAM_GAP - C.TOP;
+  const famShift = Math.max(0, (C.H - C.TOP - C.BOTTOM - famStackH) / 2);
+  if (famShift > 0) {
+    for (const fam of families) {
+      fam.zoneY += famShift;
+      for (const member of fam.members) {
+        member.y += famShift;
+        for (const band of member.bands) band.y += famShift;
+        memberGeo.set(member.thread.id, {
+          y: member.y,
+          h: member.h,
+          isParent: member.isParent,
+        });
+      }
+    }
+  }
+
+  /** Stack blocks of per-thread slot heights, centered in the frame. */
+  const stackBlocks = function <B extends { h: number }>(
+    blocks: B[],
+    gap: number,
+  ): Array<{ block: B; start: number }> {
+    const stackH =
+      blocks.reduce((sum, b) => sum + b.h, 0) + Math.max(0, blocks.length - 1) * gap;
+    let y = C.TOP + Math.max(0, (C.H - C.TOP - C.BOTTOM - stackH) / 2);
+    return blocks.map((block) => {
+      const start = y;
+      y += block.h + gap;
+      return { block, start };
+    });
+  };
+
+  const providerOf = (t: FlowThread): ProviderId => providerOfModel(t.model);
+
+  // --- provider column (left): one block per provider, slots contiguous
+  const providers: SankeyProvider[] = [];
+  {
+    const buckets = new Map<ProviderId, FlowThread[]>();
+    for (const t of threads) {
+      const prov = providerOf(t);
+      const list = buckets.get(prov);
+      if (list === undefined) buckets.set(prov, [t]);
+      else list.push(t);
+    }
+    const ordered = [...PROVIDER_ORDER]
+      .filter((id) => buckets.has(id))
+      .map((id) => {
+        const list = buckets.get(id)!;
+        return { id, list, h: list.reduce((sum, t) => sum + tokens(t) * scale, 0) };
+      });
+    for (const { block, start } of stackBlocks(ordered, C.PR_GAP)) {
+      const slots: SankeySlot[] = [];
+      let y = start;
+      for (const t of [...block.list].sort(
+        (a, b) => (memberGeo.get(a.id)?.y ?? 0) - (memberGeo.get(b.id)?.y ?? 0) || a.id.localeCompare(b.id),
+      )) {
+        const h = tokens(t) * scale;
+        slots.push({ threadId: t.id, y, h });
+        y += h;
+      }
+      providers.push({
+        id: block.id,
+        label: PROVIDER_LABELS[block.id],
+        color: PROVIDER_TOKENS[block.id],
+        y: start,
+        h: block.h,
+        slots,
+      });
+    }
+  }
+
+  // --- project pass-through column (middle): faces subdivided per
+  // (provider, thread), provider order first, then member-y order
+  const projects: SankeyProject[] = [];
+  {
+    const buckets = new Map<string, FlowThread[]>();
+    for (const t of threads) {
+      const list = buckets.get(t.projectId);
+      if (list === undefined) buckets.set(t.projectId, [t]);
+      else list.push(t);
+    }
+    const ordered = [...buckets.entries()]
+      .map(([id, list]) => ({
+        id,
+        label: list[0]!.projectName,
+        list,
+        h: list.reduce((sum, t) => sum + tokens(t) * scale, 0),
+      }))
+      .sort(
+        (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
+      );
+    for (const { block, start } of stackBlocks(ordered, C.TH_GAP)) {
+      const slots: SankeySlot[] = [];
+      let y = start;
+      for (const t of [...block.list].sort(
+        (a, b) =>
+          PROVIDER_ORDER.indexOf(providerOf(a)) - PROVIDER_ORDER.indexOf(providerOf(b)) ||
+          (memberGeo.get(a.id)?.y ?? 0) - (memberGeo.get(b.id)?.y ?? 0) ||
+          a.id.localeCompare(b.id),
+      )) {
+        const h = tokens(t) * scale;
+        slots.push({ threadId: t.id, y, h });
+        y += h;
+      }
+      projects.push({ id: block.id, label: block.label, y: start, h: block.h, slots });
+    }
+  }
+
+  // --- ribbons: two segments per (provider, thread) with tokens
+  const ribbons: SankeyRibbon[] = [];
+  const provSlot = new Map<string, SankeySlot>();
+  for (const prov of providers)
+    for (const slot of prov.slots) provSlot.set(`${prov.id}:${slot.threadId}`, slot);
+  const projSlot = new Map<string, SankeySlot>();
+  for (const proj of projects)
+    for (const slot of proj.slots) projSlot.set(`${proj.id}:${slot.threadId}`, slot);
+  for (const fam of families) {
+    for (const member of fam.members) {
+      const t = member.thread;
+      const used = tokens(t);
+      if (used <= 0) continue;
+      const prov = providerOf(t);
+      const ps = provSlot.get(`${prov}:${t.id}`);
+      const js = projSlot.get(`${t.projectId}:${t.id}`);
+      if (ps === undefined || js === undefined) continue;
+      const h = Math.max(1, used * scale - 1);
+      const status = tokenFlowStatus(t.status);
+      ribbons.push({
+        id: `r1:${t.id}`,
+        segment: 1,
+        provider: prov,
+        threadId: t.id,
+        familyKey: fam.key,
+        projectId: t.projectId,
+        status,
+        rate: t.rate,
+        x1: C.PX + C.FACE_PROV,
+        y1: ps.y + ps.h / 2,
+        x2: C.JX,
+        y2: js.y + js.h / 2,
+        h,
+      });
+      const band = member.bands.find((b) => b.provider === prov);
+      if (band !== undefined && band.h > 0) {
+        ribbons.push({
+          id: `r2:${t.id}`,
+          segment: 2,
+          provider: prov,
+          threadId: t.id,
+          familyKey: fam.key,
+          projectId: t.projectId,
+          status,
+          rate: t.rate,
+          x1: C.JX + C.FACE_PROJ,
+          y1: js.y + js.h / 2,
+          x2: C.FX,
+          y2: band.y + band.h / 2,
+          h,
+        });
+      }
+    }
+  }
+  return { scale, providers, projects, families, ribbons };
+}

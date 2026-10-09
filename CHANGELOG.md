@@ -8,6 +8,7 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ### Added
 
+- **A sixth tab, Token flow, animates where your tokens go.** A provider → project → thread-family sankey served by the new stateless `flow` RPC: ribbon width is each thread's context-window usage, beads stream as threads burn tokens (faster at higher burn rate), each provider rides its own color, and floating chrome adds a tok/s counter, a 15 min / last hour / all window filter, pause and speed controls, with hover highlighting a provider's, project's or family's rivers.
 - **Every view color now follows bb's theme — light and dark.** All colors are plugin tokens in `views/theme.ts`, declared light-first with dark overrides under bb's `.dark` ancestor; ink, surface and line tokens derive from bb's own CSS custom properties (with standalone fallbacks), so custom bb themes recolor the views for free. The idle age ramp mixes muted ink into the stage (theme-relative fade), and the family tint previews got pastel light-mode variants of the same six hues.
 - **The Activity Overview panel now has a What's-new surface.** A gift button sits in the tab bar, always present, pulsing after every update until opened; it opens a modal listing the changelog's condensed entries and marks the version seen. The feed, the dev-build pulse keying to the [Unreleased] group's content, and the empty-group silence all derive from this file at test/build time — the changelog is the single source of truth.
 

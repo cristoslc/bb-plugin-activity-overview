@@ -5,9 +5,10 @@ description: "What the Activity Overview plugin shows and how it reads thread da
 
 # Activity Overview plugin views
 
-The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with five
+The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with six
 tabs: four aggregate tabs rendered live from the host's sidebar thread data, plus the
-**Activity flow** tab, served by the plugin's own backend over the `shape` RPC.
+**Activity flow** tab, served by the plugin's own backend over the `shape` RPC, plus the
+**Token flow** tab, served over the `flow` RPC (see below).
 
 - **Board** — one card per project, fixed dot slots (13px pitch). Volume of
   dots = thread count; color = status; empty slots stay put so daily change
@@ -108,6 +109,28 @@ so content never fully leaves the viewport and clamped extremes keep a
 report their world size through the `onWorld` callback (the world is exactly
 the content block, no baked-in padding). The flow tab shows a spinner
 throbber while the `shape` RPC builds the tree from live thread timelines.
+
+## Token flow (sixth tab)
+
+- A provider → project → family sankey (provider → project → thread family:
+  parent thread + spawned children), ported from
+  `docs/user-experience/sankey-token-flow-mockup.html`. Served by the
+  stateless read-only `flow` RPC over the same coalesced realtime push.
+- Ribbon width = the thread's **context-window usage** (`threads.context()`
+  `usedTokens`) — the only per-thread token measure BB persists; beads
+  animate with the **sampled** context-growth rate (positive `usedTokens`
+  deltas over the sampler's ≤120s ring). `thread/tokenUsage/updated` and
+  `thread/contextWindowUsage/updated` deltas feed the sampler instead of
+  triggering rebuilds.
+- Provider attribution comes from the model string in the last context
+  snapshot (`providerOfModel` in views/model.ts — single source of truth,
+  the server imports it). Unrecognized providers ride the grey "Other" row.
+- Totals in the view are context usage / tracked-since-plugin-start growth;
+  the host does not persist lifetime consumption, and the legend says so.
+- Chrome: tok/s counter, a time-window select (All / Last 15 min / Last hour,
+  filtering threads by recent live activity while keeping families whole),
+  animation pause + speed slider, provider legend chips. Wheel zooms, drag
+  pans, double-click resets (viewBox camera, not MapCanvas).
 
 ## Reading the dots
 

@@ -13,6 +13,7 @@ import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { delegationChildId, spawnHint } from "./views/lineage";
 import { normalizeTurns, type Row } from "./views/timeline";
+import { providerOfModel } from "./views/model";
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "./shared";
 
 const nodeKindSchema = z.enum(["root", "project", "thread", "turn", "work", "more"]);
@@ -49,10 +50,44 @@ const shapeSchema = z.object({
 });
 export type Shape = z.infer<typeof shapeSchema>;
 
+// One token flow row per token-spending thread: ribbon width (context-window
+// usage), provider attribution (the model string the last context snapshot
+// captured) and the sampled burn rate. Family grouping itself is pure
+// frontend math (views/model.ts).
+export const flowThreadSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  title: z.string(),
+  status: nodeStatusSchema,
+  parentThreadId: z.string().nullable(),
+  createdAt: z.number().nullable(),
+  usedTokens: z.number().nullable(),
+  modelContextWindow: z.number().nullable(),
+  provider: z.string().nullable(),
+  model: z.string().nullable(),
+  /** Sampled context growth, tokens per second (null: no sample history yet). */
+  rate: z.number().nullable(),
+  /** Σ positive context growth seen by the sampler since the plugin started. */
+  tracked: z.number().nullable(),
+  updatedAt: z.number().nullable(),
+});
+export const flowSchema = z.object({
+  threads: z.array(flowThreadSchema),
+  generatedAt: z.number(),
+  truncated: z.boolean(),
+});
+export type FlowThread = z.infer<typeof flowThreadSchema>;
+export type Flow = z.infer<typeof flowSchema>;
+
 export const rpcContract = defineRpcContract({
   shape: {
     input: z.object({}),
     output: shapeSchema,
+  },
+  flow: {
+    input: z.object({}),
+    output: flowSchema,
   },
 });
 
@@ -603,29 +638,166 @@ export default async function plugin(bb: BbPluginApi) {
     return promise;
   }
 
+  // ---------- token flow ----------
+  //
+  // Ribbon widths come from `threads.context` (persisted per-thread
+  // context-window usage); burn rates come from a per-thread sample ring of
+  // positive usedTokens growth, so only actually streaming threads animate.
+  // Tracking starts when the plugin starts — the host never persists lifetime
+  // consumption, and the view labels its totals accordingly.
+  type Sample = { at: number; used: number };
+  const sampleRings = new Map<string, Sample[]>();
+  const lastSampledAt = new Map<string, number>();
+  const SAMPLE_MIN_GAP_MS = 2500;
+  const SAMPLE_SPAN_MS = 120_000;
+
+  /** The sampled burn rate: positive growth per second over the newest window
+   * that fits the span, plus everything the ring has tracked so far. */
+  function tokenRate(threadId: string): { rate: number; tracked: number } {
+    const ring = sampleRings.get(threadId) ?? [];
+    let tracked = 0;
+    let rate = 0;
+    for (let i = 1; i < ring.length; i++) {
+      const d = ring[i]!.used - ring[i - 1]!.used;
+      const dt = ring[i]!.at - ring[i - 1]!.at;
+      if (d > 0 && dt > 0 && dt <= SAMPLE_SPAN_MS) {
+        tracked += d;
+        if (ring[i]!.at >= Date.now() - SAMPLE_SPAN_MS) rate += d / (dt / 1000);
+      }
+    }
+    return { rate, tracked };
+  }
+
+  function noteSample(threadId: string, usedTokens: number | null) {
+    if (usedTokens === null) return;
+    const ring = sampleRings.get(threadId) ?? [];
+    ring.push({ at: Date.now(), used: usedTokens });
+    sampleRings.set(threadId, ring.slice(-6));
+  }
+
+  /** Throttled context read: the sampler runs while nothing is watching the
+   * flow view, so stream-only updates still move the ribbons. */
+  async function sampleContext(threadId: string) {
+    const now = Date.now();
+    if (now - (lastSampledAt.get(threadId) ?? 0) < SAMPLE_MIN_GAP_MS) return;
+    lastSampledAt.set(threadId, now);
+    try {
+      const ctx = (await bb.sdk.threads.context({ threadId })) as {
+        usage: { usedTokens?: number | null } | null;
+      };
+      noteSample(threadId, ctx.usage?.usedTokens ?? null);
+    } catch (cause) {
+      bb.log.warn(`context sample failed for ${threadId}: ${String(cause)}`);
+    }
+  }
+
+  async function buildFlow(): Promise<Flow> {
+    const [allThreads, projects] = await Promise.all([
+      listThreads(),
+      bb.sdk.projects
+        .list({ includePersonal: true })
+        .then(
+          (result) =>
+            (Array.isArray(result) ? result : []) as Array<{
+              id: string;
+              name?: string | null;
+            }>,
+        ),
+    ]);
+    const projectNames = new Map(
+      projects.map((project) => [project.id, project.name ?? project.id]),
+    );
+    const threads = [...allThreads].sort((a, b) => {
+      const byHeat = HEAT[threadStatus(a)] - HEAT[threadStatus(b)];
+      return byHeat !== 0 ? byHeat : b.updatedAt - a.updatedAt;
+    });
+    const rows = await mapLimited(threads, TIMELINE_CONCURRENCY, async (thread) => {
+      let usedTokens: number | null = null;
+      let modelContextWindow: number | null = null;
+      let model: string | null = null;
+      try {
+        const ctx = (await bb.sdk.threads.context({ threadId: thread.id })) as {
+          usage: {
+            usedTokens?: number | null;
+            modelContextWindow?: number | null;
+            snapshot?: { model?: string | null } | null;
+          } | null;
+        };
+        usedTokens = ctx.usage?.usedTokens ?? null;
+        modelContextWindow = ctx.usage?.modelContextWindow ?? null;
+        model = ctx.usage?.snapshot?.model ?? null;
+      } catch (cause) {
+        bb.log.warn(`context failed for ${thread.id}: ${String(cause)}`);
+      }
+      noteSample(thread.id, usedTokens);
+      const { rate, tracked } = tokenRate(thread.id);
+      return {
+        id: thread.id,
+        projectId: thread.projectId,
+        projectName: projectNames.get(thread.projectId) ?? thread.projectId,
+        title: oneLine(thread.title ?? thread.titleFallback, 80) ?? "Untitled thread",
+        status: threadStatus(thread),
+        parentThreadId: thread.parentThreadId ?? null,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        usedTokens,
+        modelContextWindow,
+        model,
+        provider: providerOfModel(model) as string,
+        rate,
+        tracked,
+      };
+    });
+    return {
+      threads: rows,
+      generatedAt: Date.now(),
+      truncated: allThreads.length >= THREAD_CEILING,
+    };
+  }
+
+  const flowBuildCache = new Map<string, { at: number; promise: Promise<Flow> }>();
+  function flowFor(): Promise<Flow> {
+    const cached = flowBuildCache.get("*");
+    if (cached && Date.now() - cached.at < BUILD_MEMO_MS) return cached.promise;
+    const promise = buildFlow();
+    flowBuildCache.set("*", { at: Date.now(), promise });
+    promise.catch(() => flowBuildCache.delete("*"));
+    return promise;
+  }
+
   bb.rpc.register(rpcContract, {
     shape: () => shapeFor(),
+    flow: () => flowFor(),
   });
 
   // Live updates: coalesce thread changes and tell open flow views to
   // refetch. Streaming deltas are skipped; item start/complete events carry
-  // the structural changes the flow draws.
+  // the structural changes the flow draws. Token/usage deltas do not rebuild
+  // anything, but they do feed the burn-rate sampler, so streaming threads
+  // keep animating while no view is open to trigger builds.
   const pending = new Set<string>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const TOKEN_SAMPLING_EVENTS = new Set([
+    "thread/tokenUsage/updated",
+    "thread/contextWindowUsage/updated",
+  ]);
   const unsubscribe = bb.sdk.subscribe({
     event: "thread:changed",
     callback: (event) => {
       const eventTypes = event.metadata?.eventTypes;
-      if (
+      const sample =
+        event.id !== undefined &&
         eventTypes !== undefined &&
-        eventTypes.length > 0 &&
-        eventTypes.every((type) => DELTA_EVENTS.has(type))
-      ) {
+        eventTypes.some((type) => TOKEN_SAMPLING_EVENTS.has(type));
+      if (eventTypes !== undefined && eventTypes.length > 0 && eventTypes.every((type) => DELTA_EVENTS.has(type))) {
+        if (sample && event.id) void sampleContext(event.id);
         return;
       }
       if (event.id) {
         timelineCache.delete(event.id);
         buildCache.clear();
+        flowBuildCache.clear();
+        if (sample) void sampleContext(event.id);
         pending.add(event.id);
       }
       flushTimer ??= setTimeout(() => {
