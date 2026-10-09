@@ -1,9 +1,20 @@
 // Turn normalization tests for views/timeline.ts (copied from agent-graph)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { normalizeTurns } from "../views/timeline.ts";
+import { executionModel, normalizeTurns } from "../views/timeline.ts";
 
 const NOW = Date.parse("2026-10-04T19:00:00Z");
+
+test("executionModel reads the requested turn's model attribution", () => {
+  assert.equal(
+    executionModel({ data: { execution: { model: "ollama-cloud/glm-5.3-flash:cloud" } } }),
+    "ollama-cloud/glm-5.3-flash:cloud",
+  );
+  assert.equal(executionModel({ data: {} }), null);
+  assert.equal(executionModel({}), null);
+  assert.equal(executionModel({ data: null }), null);
+  assert.equal(executionModel({ data: { execution: { model: 42 } } }), null);
+});
 
 test("normalizeTurns: prompt-then-work-then-reply merges into one turn; flat live rows keep their turnId", () => {
   const rows = [
