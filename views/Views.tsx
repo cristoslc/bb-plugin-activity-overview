@@ -69,6 +69,7 @@ import {
 } from "./model";
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "../shared";
 import { THEME_CSS } from "./theme";
+import { TokenFlowView } from "./TokenFlowView";
 import {
   APP_VERSION,
   CURRENT_UNRELEASED_FINGERPRINT,
@@ -1483,6 +1484,7 @@ const TABS = [
   { id: "tiles", label: "Strip tiles" },
   { id: "graph", label: "Agent lanes" },
   { id: "flow", label: "Activity flow" },
+  { id: "tokenflow", label: "Token flow" },
 ] as const;
 
 /** The gift glyph for the What's-new button (no host icon to lean on). */
@@ -1684,6 +1686,8 @@ export function OverviewPage() {
       </style>
       {tab === "flow" ? (
         <ActivityFlowView apiRef={apiRef} />
+      ) : tab === "tokenflow" ? (
+        <TokenFlowView />
       ) : (
         <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
@@ -1733,7 +1737,7 @@ export function OverviewPage() {
         </div>
       </div>
       <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
-      {tab !== "flow" ? (
+      {tab !== "flow" && tab !== "tokenflow" ? (
         <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
           <LegendRow counts={counts} />
           <p className="mt-1 text-[10px] text-muted-foreground">
