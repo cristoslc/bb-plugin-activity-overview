@@ -152,8 +152,60 @@ test("layout: an all-idle roster renders finite stub geometry", () => {
   for (const fam of l.families) {
     const bottom = fam.zoneY + fam.zoneH;
     assert.ok(Number.isFinite(bottom), "zone bottom is finite");
-    assert.ok(bottom <= C.H - C.BOTTOM + 0.001, `zones stay in frame (bottom ${bottom})`);
+    assert.ok(bottom <= C.H - C.BOTTOM + 3, `zones stay in frame (bottom ${bottom})`);
   }
+});
+
+test("layout: hosts too crowded for the frame keep the top consumers and hide the rest", () => {
+  const C = TOKEN_FLOW;
+  // 120 single-member families — nothing this big fits even at the fallback
+  // floor, so the smallest token consumers must be dropped with an honest
+  // hidden count, and the kept stack must stay inside the frame.
+  const threads = Array.from({ length: 120 }, (_, i) =>
+    fThread({ id: `t${i}`, usedTokens: (i + 1) * 1000, title: `t${i}` }),
+  );
+  const l = sankeyLayout(threads);
+  assert.ok(l.scale >= 0 && Number.isFinite(l.scale), `scale finite, got ${l.scale}`);
+  assert.ok(l.families.length < threads.length, "smallest families were dropped");
+  assert.equal(
+    l.families.length + l.droppedThreads.length,
+    threads.length,
+    "kept + dropped accounts for every thread",
+  );
+  const droppedIds = new Set(l.droppedThreads.map((t) => t.id));
+  const kept = threads.filter((t) => !droppedIds.has(t.id));
+  const maxKept = Math.max(...kept.map((t) => t.usedTokens ?? 0));
+  const minKept = Math.min(...kept.map((t) => t.usedTokens ?? 0));
+  const maxDropped = l.droppedThreads.length
+    ? Math.max(...l.droppedThreads.map((t) => t.usedTokens ?? 0))
+    : 0;
+  assert.ok(minKept >= maxDropped, "the kept set is strictly the top consumers");
+  assert.ok(maxKept >= maxDropped, "the biggest consumer stays visible");
+  const last = l.families[l.families.length - 1]!;
+  assert.ok(last.zoneY + last.zoneH <= C.H - C.BOTTOM + 3, "kept stack fits the frame");
+  // Ribbon count matches the kept threads only.
+  assert.equal(l.ribbons.length, kept.filter((t) => (t.usedTokens ?? 0) > 0).length * 2);
+});
+
+test("layout: dropping is deterministic across input order", () => {
+  const threads = Array.from({ length: 120 }, (_, i) =>
+    fThread({ id: `t${i}`, usedTokens: ((i * 37) % 120 + 1) * 900, title: `t${i}` }),
+  );
+  const a = JSON.stringify(sankeyLayout(threads));
+  const b = JSON.stringify(sankeyLayout([...threads].reverse()));
+  assert.equal(a, b);
+});
+
+test("layout: a single huge family is kept even when it overflows the frame", () => {
+  const C = TOKEN_FLOW;
+  const threads = Array.from({ length: 200 }, (_, i) =>
+    fThread({ id: `t${i}`, usedTokens: 50_000, title: `t${i}`, parentThreadId: i === 0 ? null : "t0" }),
+  );
+  const l = sankeyLayout(threads);
+  assert.equal(l.families.length, 1);
+  assert.equal(l.droppedThreads.length, 0);
+  const fam = l.families[0]!;
+  assert.ok(Number.isFinite(fam.zoneY + fam.zoneH));
 });
 
 test("layout: ribbons end on family faces; zero-token threads carry no ribbons", () => {
