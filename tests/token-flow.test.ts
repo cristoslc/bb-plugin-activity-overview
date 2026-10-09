@@ -106,20 +106,53 @@ test("layout: provider slots ordered by family-member y (parallel rivers)", () =
   assert.equal(wide?.slots[0]?.threadId, "t_top");
 });
 
-test("layout: member rows keep the MIN_ROW floor; zones cover their members", () => {
+test("layout: member rows keep a positive floor; zones cover their members", () => {
   const C = TOKEN_FLOW;
-  // Tiny scale forces every member row to its MIN_ROW floor.
+  // Crowded roster: rows shrink below MIN_ROW but never below the fallback.
   const threads = Array.from({ length: 30 }, (_, i) =>
     fThread({ id: `t${i}`, usedTokens: 1, title: `t${i}` }),
   );
   const l = sankeyLayout(threads);
   for (const fam of l.families) {
-    for (const m of fam.members) assert.ok(m.h >= C.MIN_ROW - 0.001);
+    for (const m of fam.members)
+      assert.ok(m.h >= C.FLOOR_FALLBACK - 0.001, `row >= fallback floor, got ${m.h}`);
     const bottom = fam.zoneY + fam.zoneH;
     assert.ok(
       fam.members.every((m) => m.y >= fam.zoneY - 0.001 && m.y + m.h <= bottom + 0.001),
       "zone covers every member row",
     );
+  }
+});
+
+test("layout: crowded rosters adapt — scale stays positive and the stack fits the frame", () => {
+  const C = TOKEN_FLOW;
+  const threads = Array.from({ length: 40 }, (_, i) =>
+    fThread({ id: `t${i}`, usedTokens: 3000, title: `t${i}` }),
+  );
+  const l = sankeyLayout(threads);
+  assert.ok(l.scale > 0, `scale must stay positive, got ${l.scale}`);
+  const last = l.families[l.families.length - 1]!;
+  assert.ok(
+    last.zoneY + last.zoneH <= C.H - C.BOTTOM + 0.001,
+    `family stack stays inside the frame (bottom ${last.zoneY + last.zoneH})`,
+  );
+  for (const p of l.providers) {
+    assert.ok(p.h > 0, "provider blocks stay positive");
+    assert.ok(p.slots.every((s) => s.h > 0), "provider slots stay positive");
+  }
+});
+
+test("layout: an all-idle roster renders finite stub geometry", () => {
+  const C = TOKEN_FLOW;
+  const threads = Array.from({ length: 25 }, (_, i) => fThread({ id: `t${i}`, usedTokens: 0 }));
+  const l = sankeyLayout(threads);
+  assert.equal(l.scale, 0);
+  assert.ok(Number.isFinite(l.scale));
+  assert.equal(l.ribbons.length, 0);
+  for (const fam of l.families) {
+    const bottom = fam.zoneY + fam.zoneH;
+    assert.ok(Number.isFinite(bottom), "zone bottom is finite");
+    assert.ok(bottom <= C.H - C.BOTTOM + 0.001, `zones stay in frame (bottom ${bottom})`);
   }
 });
 

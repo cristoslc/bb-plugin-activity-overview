@@ -962,11 +962,13 @@ export const TOKEN_FLOW = {
   FACE_PROV: 16,
   FACE_PROJ: 14,
   FACE_MEM: 10,
+  /** Preferred member-row floor; the fit ladder may shrink rows to this. */
+  MIN_ROW: 20,
+  FLOOR_FALLBACK: 6,
   MEM_GAP: 5,
   FAM_GAP: 40,
   PR_GAP: 30,
   TH_GAP: 26,
-  MIN_ROW: 20,
   TOP: 80,
   BOTTOM: 40,
   ZONE_W: 300,
@@ -1030,19 +1032,72 @@ export type SankeyLayout = {
  * view). Deterministic; one shared token scale for all columns so a thread's
  * river keeps its width across columns. Widths come from each thread's
  * context-window usage — the only per-thread token measure the host persists.
+ * Rows and gaps shrink through a fixed fit ladder when many families crowd
+ * the frame; the scale never goes negative.
  */
 export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
   const C = TOKEN_FLOW;
   const fams = buildFamilies(threads);
   const famGapCount = Math.max(0, fams.length - 1);
   const memGapCount = fams.reduce(
-    (sum, fam) => sum + Math.max(0, fam.threads.length - 1) * C.MEM_GAP,
+    (sum, fam) => sum + Math.max(0, fam.threads.length - 1),
     0,
   );
-  const avail = C.H - C.TOP - C.BOTTOM - famGapCount * C.FAM_GAP - memGapCount;
-  const total = threads.reduce((sum, t) => sum + Math.max(0, t.usedTokens ?? 0), 0);
-  const scale = total > 0 ? avail / total : 0;
   const tokens = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
+  const total = threads.reduce((sum, t) => sum + tokens(t), 0);
+  const frame = C.H - C.TOP - C.BOTTOM;
+
+  // Adaptive fit: try roomy rows first, then thinner rows and tighter gaps
+  // until the whole family stack fits the frame. Each step solves the shared
+  // token scale by fixed-point iteration (floored members stop scaling). The
+  // last step accepts whatever it gets, so extreme hosts degrade to slight
+  // overflow — never to a negative scale.
+  type FitStep = { floor: number; famGap: number; memGap: number };
+  const FIT_STEPS: FitStep[] = [
+    { floor: C.MIN_ROW, famGap: C.FAM_GAP, memGap: C.MEM_GAP },
+    { floor: 14, famGap: 26, memGap: 4 },
+    { floor: 10, famGap: 16, memGap: 4 },
+    { floor: 8, famGap: 10, memGap: 3 },
+    { floor: C.FLOOR_FALLBACK, famGap: 6, memGap: 2 },
+  ];
+  const stackHeight = (step: FitStep, s: number) =>
+    threads.reduce((sum, t) => sum + Math.max(step.floor, tokens(t) * s), 0) +
+    famGapCount * step.famGap +
+    memGapCount * step.memGap;
+  let floor: number = C.MIN_ROW;
+  let famGap: number = C.FAM_GAP;
+  let memGap: number = C.MEM_GAP;
+  let scale = 0;
+  for (const step of FIT_STEPS) {
+    const budget = frame - famGapCount * step.famGap - memGapCount * step.memGap;
+    let s = total > 0 && budget > 0 ? budget / total : 0;
+    for (let pass = 0; pass < 10; pass++) {
+      const floored = threads.reduce(
+        (sum, t) => (tokens(t) * s < step.floor ? sum + step.floor : sum),
+        0,
+      );
+      const free = threads.reduce(
+        (sum, t) => (tokens(t) * s >= step.floor ? sum + tokens(t) : sum),
+        0,
+      );
+      const next = free > 0 ? (budget - floored) / free : 0;
+      if (Math.abs(next - s) < 1e-9) {
+        s = Math.max(0, next);
+        break;
+      }
+      s = Math.max(0, next);
+    }
+    scale = Math.max(0, s);
+    floor = step.floor;
+    famGap = step.famGap;
+    memGap = step.memGap;
+    if (
+      (scale > 0 && stackHeight(step, scale) <= frame + 0.5) ||
+      step.floor === C.FLOOR_FALLBACK
+    ) {
+      break;
+    }
+  }
 
   // --- family column (right): member rows, min-height rows even at 0 tokens
   type MemberGeo = { y: number; h: number; isParent: boolean };
@@ -1053,7 +1108,7 @@ export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
     const zoneTop = rowY;
     const members: SankeyMember[] = [];
     fam.threads.forEach((t, index) => {
-      const h = Math.max(C.MIN_ROW, tokens(t) * scale);
+      const h = Math.max(floor, tokens(t) * scale);
       const bands: SankeyMember["bands"] = [];
       let bandY = rowY;
       for (const prov of PROVIDER_ORDER) {
@@ -1065,14 +1120,14 @@ export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
       }
       members.push({ thread: t, y: rowY, h, isParent: index === 0, bands });
       memberGeo.set(t.id, { y: rowY, h, isParent: index === 0 });
-      rowY += h + C.MEM_GAP;
+      rowY += h + memGap;
     });
-    rowY -= C.MEM_GAP; // the last member has no trailing gap
+    rowY -= memGap; // the last member has no trailing gap
     families.push({ key: fam.key, zoneY: zoneTop, zoneH: rowY - zoneTop, members });
-    rowY += C.FAM_GAP;
+    rowY += famGap;
   }
   // Center the family stack in the frame.
-  const famStackH = rowY - C.FAM_GAP - C.TOP;
+  const famStackH = rowY - famGap - C.TOP;
   const famShift = Math.max(0, (C.H - C.TOP - C.BOTTOM - famStackH) / 2);
   if (famShift > 0) {
     for (const fam of families) {

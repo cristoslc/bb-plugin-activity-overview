@@ -12,7 +12,7 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { delegationChildId, spawnHint } from "./views/lineage";
-import { normalizeTurns, type Row } from "./views/timeline";
+import { normalizeTurns, executionModel, type Row } from "./views/timeline";
 import { providerOfModel } from "./views/model";
 import { SHAPE_CHANGED, type ShapeChangedPayload } from "./shared";
 
@@ -51,9 +51,9 @@ const shapeSchema = z.object({
 export type Shape = z.infer<typeof shapeSchema>;
 
 // One token flow row per token-spending thread: ribbon width (context-window
-// usage), provider attribution (the model string the last context snapshot
-// captured) and the sampled burn rate. Family grouping itself is pure
-// frontend math (views/model.ts).
+// usage), provider attribution (the context snapshot's model string, else the
+// newest persisted `client/turn/requested` event) and the sampled burn rate.
+// Family grouping itself is pure frontend math (views/model.ts).
 export const flowThreadSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -692,6 +692,20 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function buildFlow(): Promise<Flow> {
+    /** The model string of a thread's newest persisted turn request. */
+    async function newestRequestedModel(threadId: string): Promise<string | null> {
+      try {
+        const events = (await bb.sdk.threads.events.list({
+          threadId,
+          types: ["client/turn/requested"],
+          order: "desc",
+          limit: "1",
+        })) as unknown as Row[];
+        return executionModel(Array.isArray(events) ? (events[0] ?? null) : null);
+      } catch {
+        return null;
+      }
+    }
     const [allThreads, projects] = await Promise.all([
       listThreads(),
       bb.sdk.projects
@@ -726,6 +740,9 @@ export default async function plugin(bb: BbPluginApi) {
         usedTokens = ctx.usage?.usedTokens ?? null;
         modelContextWindow = ctx.usage?.modelContextWindow ?? null;
         model = ctx.usage?.snapshot?.model ?? null;
+        // Idle threads carry no persisted context snapshot, so attribution
+        // falls back to the newest persisted `client/turn/requested` event.
+        if (model === null) model = await newestRequestedModel(thread.id);
       } catch (cause) {
         bb.log.warn(`context failed for ${thread.id}: ${String(cause)}`);
       }
