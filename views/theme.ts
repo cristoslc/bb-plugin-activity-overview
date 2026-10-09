@@ -25,15 +25,16 @@ export const THEME_CSS = `
   --attn-dim: var(--subtle-foreground, #717e8b);
   --attn-sub: var(--subtle-foreground, #8a94a0);
   --attn-faint: var(--subtle-foreground, #a3abb5);
-  /* family tint previews: one subtly-hued slot per family over the neutral
-     region fill (ADR-clean — no status data in the tints). Dark values are
-     the originals; light values are pastels of the same six hues. */
-  --attn-tint-0: #e6edf5; // blue-grey
-  --attn-tint-1: #e7f1e9; // green-grey
-  --attn-tint-2: #f1edf6; // purple-grey
-  --attn-tint-3: #f5efeb; // warm grey
-  --attn-tint-4: #ecf0fb; // indigo
-  --attn-tint-5: #f2f4e9; // olive
+  /* family tint previews: one visibly-hued slot per family over the neutral
+     region fill (ADR-clean — no status data in the tints). The six hues are
+     shared by both themes; each keeps the ramp far enough from --attn-card
+     that a family reads at a glance, while status ink stays legible on it. */
+  --attn-tint-0: #d3e0ef; // blue
+  --attn-tint-1: #d4e8da; // green
+  --attn-tint-2: #e3d8ee; // purple
+  --attn-tint-3: #eee2d6; // warm
+  --attn-tint-4: #d9def6; // indigo
+  --attn-tint-5: #e4e8c8; // olive
   /* status hues: ADR-0001's four, held steady per theme, slightly deepened on
      light so they hold against a bright stage. */
   --attn-error: #d34b43;
@@ -66,12 +67,12 @@ export const THEME_CSS = `
   --attn-needs-you: #d9a53f;
   --attn-working: #3d84e0;
   --attn-unread: #2e9e45;
-  --attn-tint-0: #1a2431; // blue-grey
-  --attn-tint-1: #19261f; // green-grey
-  --attn-tint-2: #221e2a; // purple-grey
-  --attn-tint-3: #252023; // warm grey
-  --attn-tint-4: #1a2030; // indigo
-  --attn-tint-5: #20241a; // olive
+  --attn-tint-0: #16304d; // blue
+  --attn-tint-1: #123524; // green
+  --attn-tint-2: #2d2145; // purple
+  --attn-tint-3: #3d2b1c; // warm
+  --attn-tint-4: #1b2b5e; // indigo
+  --attn-tint-5: #3a3d14; // olive
   --attn-idle-ink: var(--muted-foreground, #a8b3bf);
 }
 `;
