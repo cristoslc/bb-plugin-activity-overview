@@ -1025,6 +1025,8 @@ export type SankeyLayout = {
   projects: SankeyProject[];
   families: SankeyFamily[];
   ribbons: SankeyRibbon[];
+  /** Threads dropped to make the layout fit; shown honestly as hidden. */
+  droppedThreads: FlowThread[];
 };
 
 /**
@@ -1033,25 +1035,18 @@ export type SankeyLayout = {
  * river keeps its width across columns. Widths come from each thread's
  * context-window usage — the only per-thread token measure the host persists.
  * Rows and gaps shrink through a fixed fit ladder when many families crowd
- * the frame; the scale never goes negative.
+ * the frame; when even the thinnest rows overflow, the smallest families are
+ * dropped (top consumers stay) and reported in `droppedThreads` so the view
+ * can say how many threads it hid. The scale never goes negative.
  */
 export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
   const C = TOKEN_FLOW;
-  const fams = buildFamilies(threads);
-  const famGapCount = Math.max(0, fams.length - 1);
-  const memGapCount = fams.reduce(
-    (sum, fam) => sum + Math.max(0, fam.threads.length - 1),
-    0,
-  );
   const tokens = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
-  const total = threads.reduce((sum, t) => sum + tokens(t), 0);
   const frame = C.H - C.TOP - C.BOTTOM;
 
   // Adaptive fit: try roomy rows first, then thinner rows and tighter gaps
   // until the whole family stack fits the frame. Each step solves the shared
-  // token scale by fixed-point iteration (floored members stop scaling). The
-  // last step accepts whatever it gets, so extreme hosts degrade to slight
-  // overflow — never to a negative scale.
+  // token scale by fixed-point iteration (floored members stop scaling).
   type FitStep = { floor: number; famGap: number; memGap: number };
   const FIT_STEPS: FitStep[] = [
     { floor: C.MIN_ROW, famGap: C.FAM_GAP, memGap: C.MEM_GAP },
@@ -1060,26 +1055,32 @@ export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
     { floor: 8, famGap: 10, memGap: 3 },
     { floor: C.FLOOR_FALLBACK, famGap: 6, memGap: 2 },
   ];
-  const stackHeight = (step: FitStep, s: number) =>
-    threads.reduce((sum, t) => sum + Math.max(step.floor, tokens(t) * s), 0) +
-    famGapCount * step.famGap +
-    memGapCount * step.memGap;
-  let floor: number = C.MIN_ROW;
-  let famGap: number = C.FAM_GAP;
-  let memGap: number = C.MEM_GAP;
-  let scale = 0;
-  for (const step of FIT_STEPS) {
+
+  /** Solve the shared scale for a family list on one fit step. */
+  const solve = (
+    families: FlowFamily[],
+    step: FitStep,
+  ): { scale: number; fits: boolean } => {
+    const famGapCount = Math.max(0, families.length - 1);
+    const memGapCount = families.reduce(
+      (sum, fam) => sum + Math.max(0, fam.threads.length - 1),
+      0,
+    );
     const budget = frame - famGapCount * step.famGap - memGapCount * step.memGap;
+    const total = families.reduce(
+      (sum, fam) => sum + fam.threads.reduce((x, t) => x + tokens(t), 0),
+      0,
+    );
     let s = total > 0 && budget > 0 ? budget / total : 0;
     for (let pass = 0; pass < 10; pass++) {
-      const floored = threads.reduce(
-        (sum, t) => (tokens(t) * s < step.floor ? sum + step.floor : sum),
-        0,
-      );
-      const free = threads.reduce(
-        (sum, t) => (tokens(t) * s >= step.floor ? sum + tokens(t) : sum),
-        0,
-      );
+      let floored = 0;
+      let free = 0;
+      for (const fam of families) {
+        for (const t of fam.threads) {
+          if (tokens(t) * s < step.floor) floored += step.floor;
+          else free += tokens(t);
+        }
+      }
       const next = free > 0 ? (budget - floored) / free : 0;
       if (Math.abs(next - s) < 1e-9) {
         s = Math.max(0, next);
@@ -1087,17 +1088,67 @@ export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
       }
       s = Math.max(0, next);
     }
-    scale = Math.max(0, s);
-    floor = step.floor;
-    famGap = step.famGap;
-    memGap = step.memGap;
-    if (
-      (scale > 0 && stackHeight(step, scale) <= frame + 0.5) ||
-      step.floor === C.FLOOR_FALLBACK
-    ) {
+    const stack =
+      families.reduce(
+        (sum, fam) =>
+          sum + fam.threads.reduce((x, t) => x + Math.max(step.floor, tokens(t) * s), 0),
+        0,
+      ) +
+      famGapCount * step.famGap +
+      memGapCount * step.memGap;
+    // A fit must leave the rivers visible: with tokens in the roster the
+    // scale has to be positive, or every row is a floor stub and the family
+    // faces lose their bands.
+    return {
+      scale: Math.max(0, s),
+      fits: stack <= frame + 3 && (total === 0 || s > 0),
+    };
+  };
+
+  // Crowded hosts: even the thinnest rows can overflow (a hundred families on
+  // one screen), so after the ladder fails the smallest families drop — top
+  // consumers stay — until the stack fits. A lone family that still overflows
+  // is tolerated rather than dropped.
+  const dropped: FlowThread[] = [];
+  let candidates = buildFamilies(threads);
+  const famTokens = (fam: FlowFamily) =>
+    fam.threads.reduce((sum, t) => sum + tokens(t), 0);
+  let chosen: { step: FitStep; scale: number } = {
+    step: FIT_STEPS[FIT_STEPS.length - 1]!,
+    scale: 0,
+  };
+  for (;;) {
+    let fit: { step: FitStep; scale: number } | null = null;
+    for (const step of FIT_STEPS) {
+      const solved = solve(candidates, step);
+      if (solved.fits) {
+        fit = { step, scale: solved.scale };
+        break;
+      }
+    }
+    if (fit !== null || candidates.length <= 1) {
+      if (fit !== null) chosen = fit;
+      else {
+        const last = FIT_STEPS[FIT_STEPS.length - 1]!;
+        chosen = { step: last, scale: solve(candidates, last).scale };
+      }
       break;
     }
+    const smallest = [...candidates].sort(
+      (a, b) =>
+        famTokens(a) - famTokens(b) ||
+        (a.threads[0]?.updatedAt ?? 0) - (b.threads[0]?.updatedAt ?? 0) ||
+        a.key.localeCompare(b.key),
+    )[0]!;
+    dropped.push(...smallest.threads);
+    const gone = new Set(dropped.map((t) => t.id));
+    candidates = candidates.filter((fam) => !fam.threads.some((t) => gone.has(t.id)));
   }
+  const fams = candidates;
+  const floor = chosen.step.floor;
+  const famGap = chosen.step.famGap;
+  const memGap = chosen.step.memGap;
+  const scale = chosen.scale;
 
   // --- family column (right): member rows, min-height rows even at 0 tokens
   type MemberGeo = { y: number; h: number; isParent: boolean };
@@ -1160,12 +1211,14 @@ export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
   };
 
   const providerOf = (t: FlowThread): ProviderId => providerOfModel(t.model);
+  // Only kept threads have rivers: dropped families vanish from every column.
+  const keptThreads = fams.flatMap((fam) => fam.threads);
 
   // --- provider column (left): one block per provider, slots contiguous
   const providers: SankeyProvider[] = [];
   {
     const buckets = new Map<ProviderId, FlowThread[]>();
-    for (const t of threads) {
+    for (const t of keptThreads) {
       const prov = providerOf(t);
       const list = buckets.get(prov);
       if (list === undefined) buckets.set(prov, [t]);
@@ -1203,7 +1256,7 @@ export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
   const projects: SankeyProject[] = [];
   {
     const buckets = new Map<string, FlowThread[]>();
-    for (const t of threads) {
+    for (const t of keptThreads) {
       const list = buckets.get(t.projectId);
       if (list === undefined) buckets.set(t.projectId, [t]);
       else list.push(t);
@@ -1289,5 +1342,5 @@ export function sankeyLayout(threads: FlowThread[]): SankeyLayout {
       }
     }
   }
-  return { scale, providers, projects, families, ribbons };
+  return { scale, providers, projects, families, ribbons, droppedThreads: dropped };
 }

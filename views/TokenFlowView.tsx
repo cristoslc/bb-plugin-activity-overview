@@ -331,7 +331,11 @@ export function TokenFlowView() {
           ))}
         </div>
         <p className="mt-1 text-[10px]" style={{ color: "var(--attn-faint)" }}>
-          ribbon = context-window usage · beads = sampled growth · {Math.round(totalTracked).toLocaleString()} tokens tracked since plugin start · drag to pan, scroll to zoom, double-click to reset
+          ribbon = context-window usage · beads = sampled growth · {Math.round(totalTracked).toLocaleString()} tokens tracked since plugin start
+          {layout.droppedThreads.length > 0
+            ? ` · ${layout.droppedThreads.length} smaller thread${layout.droppedThreads.length === 1 ? "" : "s"} hidden`
+            : ""}
+          {" · drag to pan, scroll to zoom, double-click to reset"}
         </p>
       </div>
 
