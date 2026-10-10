@@ -8,13 +8,11 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import {
   HOT_COLORS,
-  FLOW_COLORS,
   GREYS,
   cellColor,
   classify,
   STATUS_NAMES,
   type AttnThread,
-  type FlowStatus,
   type Status,
 } from "../views/model.ts";
 import { THEME_CSS, THEME_TOKENS } from "../views/theme.ts";
@@ -82,7 +80,7 @@ test("theme: idle ramp thresholds ascend with the fade", () => {
   });
 });
 
-test("theme: cellColor and FLOW_COLORS emit only hex or themed tokens", () => {
+test("theme: cellColor emits only hex or themed tokens", () => {
   const acceptable = /^(#[0-9a-fA-F]{6}|var\(--attn-[a-z0-9-]+\))$/;
   const NOW = thread().createdAt;
   const statuses: Status[] = Object.keys(STATUS_NAMES) as Status[];
@@ -97,9 +95,6 @@ test("theme: cellColor and FLOW_COLORS emit only hex or themed tokens", () => {
       assert.match(cellColor(t, NOW), acceptable, `${st} at ${ageDays}d`);
       assert.equal(classify(t), st);
     }
-  }
-  for (const status of Object.keys(FLOW_COLORS) as FlowStatus[]) {
-    assert.match(FLOW_COLORS[status], acceptable, `flow ${status}`);
   }
   for (const color of Object.values(HOT_COLORS)) {
     assert.match(color, acceptable);
