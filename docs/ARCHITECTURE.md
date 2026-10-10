@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-The plugin is a standard BB plugin: a TypeScript package whose frontend bundle (`app.tsx` → `dist/app.js`) is loaded by the BB client. There is no backend entry: every view renders from the host's live sidebar thread data, and the plugin owns no RPC, storage, or state. Detail lives in `technical-architecture/`.
+The plugin is a standard BB plugin: a TypeScript package whose frontend bundle (`app.tsx` → `dist/app.js`) is loaded by the BB client. Every view renders from the host's live sidebar thread data; the backend entry is a load-only stub (the plugin build requires a server entry) with no RPC, storage, or state. Detail lives in `technical-architecture/`.
 
 ## Containers (C4 level 2)
 
