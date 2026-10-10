@@ -6,6 +6,10 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ## [Unreleased]
 
+### Removed
+
+- **The Agent lanes, Activity flow and Token flow tabs are gone.** The panel keeps the three aggregate dot views (Board, Unit treemap, Strip tiles); the backend whose sole job was serving the flow and token-flow RPCs was removed with them, so the plugin is now frontend-only.
+
 ### Added
 
 - **A sixth tab, Token flow, animates where your tokens go.** A provider → project → thread-family sankey served by the new stateless `flow` RPC: ribbon width is each thread's context-window usage, beads stream as threads burn tokens (faster at higher burn rate), each provider rides its own color, and floating chrome adds a tok/s counter, a 15 min / last hour / all window filter, pause and speed controls, with hover highlighting a provider's, project's or family's rivers.

@@ -11,7 +11,7 @@ import {
   parseCameraStore,
 } from "../views/camera.ts";
 
-const TABS = ["board", "treemap", "tiles", "graph", "flow"] as const;
+const TABS = ["board", "treemap", "tiles"] as const;
 
 const CAM = { k: 1.5, tx: -120, ty: -40 };
 
@@ -30,19 +30,20 @@ test("non-object JSON decodes to the default store", () => {
 
 test("a valid document keeps the tab and the known tabs' cameras", () => {
   const raw = JSON.stringify({
-    tab: "flow",
-    cams: { flow: CAM, board: { k: 2, tx: 0, ty: 0 } },
+    tab: "treemap",
+    cams: { treemap: CAM, board: { k: 2, tx: 0, ty: 0 } },
   });
   const store = parseCameraStore(raw, TABS);
-  assert.equal(store.tab, "flow");
-  assert.deepEqual(store.cams.flow, CAM);
+  assert.equal(store.tab, "treemap");
+  assert.deepEqual(store.cams.treemap, CAM);
   assert.deepEqual(store.cams.board, { k: 2, tx: 0, ty: 0 });
 });
 
 test("unknown tab ids are dropped, recognized keys survive others' junk", () => {
   const raw = JSON.stringify({
     tab: "board",
-    cams: { board: CAM, nope: { k: 9, tx: 9, ty: 9 } },
+    // Removed view ids behave like any unknown id.
+    cams: { board: CAM, flow: { k: 9, tx: 9, ty: 9 } },
   });
   const store = parseCameraStore(raw, TABS);
   assert.deepEqual(Object.keys(store.cams), ["board"]);
@@ -54,12 +55,12 @@ test("a camera with missing or non-finite fields is dropped", () => {
     cams: {
       board: { k: 1, tx: NaN, ty: 0 },
       tiles: { k: 1, tx: 0 },
-      graph: null,
+      treemap: CAM,
       flow: CAM,
     },
   });
   const store = parseCameraStore(raw, TABS);
-  assert.deepEqual(store.cams, { flow: CAM });
+  assert.deepEqual(store.cams, { treemap: CAM });
 });
 
 test("a non-string tab falls back to the default tab", () => {
@@ -69,10 +70,10 @@ test("a non-string tab falls back to the default tab", () => {
 
 test("merge patches the tab without clobbering other tabs' cameras", () => {
   const store = { tab: "board", cams: { board: CAM } };
-  const merged = mergeCameraStore(store, { tab: "flow", cams: { flow: { k: 0.8, tx: 10, ty: 20 } } });
-  assert.equal(merged.tab, "flow");
+  const merged = mergeCameraStore(store, { tab: "tiles", cams: { tiles: { k: 0.8, tx: 10, ty: 20 } } });
+  assert.equal(merged.tab, "tiles");
   assert.deepEqual(merged.cams.board, CAM);
-  assert.deepEqual(merged.cams.flow, { k: 0.8, tx: 10, ty: 20 });
+  assert.deepEqual(merged.cams.tiles, { k: 0.8, tx: 10, ty: 20 });
   // The input store is untouched (writers keep read-merge-write clean).
   assert.deepEqual(store.cams, { board: CAM });
 });

@@ -5,17 +5,14 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 ## What lives where
 
 - `app.tsx` — frontend entry: the navPanel registration. Point at `views/Views.tsx`.
-- `views/Views.tsx` — the five view components, the `MapCanvas` pan/zoom
+- `views/Views.tsx` — the three view components, the `MapCanvas` pan/zoom
   shell (drag/wheel/corner-controls map canvas with floating chrome), and the
-  tab page (the Activity flow view carries its own `useShape` RPC hook).
-- `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing, and the flow fold/layout pipeline (`indexShape`, `flowDefaultOpen`, `flowChildren`, `flowAge`, `flowLayout` — the latter enforces scope-gated depth and status filtering, `NODE_W`/`NODE_H`/`COL_GAP`/`ROW_GAP`).
+  tab page.
+- `views/model.ts` — shared pure pipeline: classification, colors, tree grouping, squarify, shelf packing.
 - `views/theme.ts` — the plugin's light & dark theme tokens (`THEME_CSS`: light
   block first, dark overrides under bb's `.dark` ancestor; `THEME_TOKENS`).
-  All view colors and the status/flow/grey constants in `model.ts` are `var(--attn-…)`
+  All view colors and the status/grey constants in `model.ts` are `var(--attn-…)`
   tokens declared there — no hardcoded hexes in the views.
-- `views/timeline.ts` — pure turn normalization over thread timeline rows (copied from the agent-graph plugin).
-- `views/lineage.ts` — pure lineage decoration for the shape build: cross-project spawn hints (`spawnHint`) and delegation `childRef` → child-thread links (`delegationChildId`); tests in tests/lineage.test.ts.
-- `server.ts` — the stateless read-only `shape` RPC: root → project → thread → turn → work node tree built from live timelines, plus a coalesced `thread:changed` realtime push (SHAPE_CHANGED; payload in shared.ts). This file is no longer an empty stub.
 - `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.
 - `lib/whats-new.ts`, `lib/changelog-markdown.ts`, `lib/unreleased-changelog.ts` — the What's-new surface ported from the Focus Board plugin: version/prerelease pulse logic, the changelog parsers, and the derivations (see `## Release & What's-new discipline`).
 - `scripts/generate-unreleased.mjs`, `scripts/generate-whats-new.mjs` — build-time embeddings of `CHANGELOG.md` into `lib/*.generated.ts` (generated files are committed; no bullet is written twice).
@@ -26,10 +23,8 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 - Dominance is read from the dot color pattern ONLY; never paint a region or card with a status-derived fill.
 - One thread = one dot/unit; per-thread weight is 1 everywhere.
 - Idle dots carry age through brightness (the grey ramp), never through extra hues.
-- Line-work is banned in the four aggregate views: grouping comes from
-  proximity, voids, and region fills. No seams or outline systems. The
-  Activity flow tree is the exception — dashed bezier connectors there are
-  parent-child structure, not grouping paint.
+- Line-work is banned in the aggregate views: grouping comes from
+  proximity, voids, and region fills. No seams or outline systems.
 
 ## Test command
 
@@ -37,7 +32,7 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
 
 ## Dev-merge visual-check loop
 
-Every merge landing on `dev` in this plugin gets a headless visual verification pass before it is reported done: serve the merge head, `bb plugin reload activity-overview`, and drive all five tabs in a browser session — no content under the floating chrome at any zoom, treemap family tints actually visible, focus dimming and restore behaving.
+Every merge landing on `dev` in this plugin gets a headless visual verification pass before it is reported done: serve the merge head, `bb plugin reload activity-overview`, and drive all three tabs in a browser session — no content under the floating chrome at any zoom, treemap family tints actually visible, focus dimming and restore behaving.
 Full reference: `.agents/agents-md-detail/visual-check.md`.
 
 ## Release & What's-new discipline

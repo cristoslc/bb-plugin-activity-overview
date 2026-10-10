@@ -1,13 +1,12 @@
-// bb-plugin-activity-overview — the views (tab pages). The four aggregate
-// views render from live sidebar thread data; the Activity flow tab reads the
-// turn/work shape from the plugin's own `shape` RPC. Pure functions of the
-// model; no other server state.
+// bb-plugin-activity-overview — the views (tab pages). The three aggregate
+// views render from live sidebar thread data; pure functions of the model; no
+// other server state.
 //
 // The page is a map canvas in the Google Maps / OpenStreetMap sense: each
 // view lays out into a fixed-size world layer that fills the panel viewport;
 // the operator pans by dragging, zooms with the wheel or the floating corner
-// controls, and all chrome (tabs, legend, flow toolbar and footer) floats
-// above the canvas instead of scrolling above the content.
+// controls, and all chrome (tabs, legend and footer) floats above the canvas
+// instead of scrolling above the content.
 import {
   useCallback,
   useEffect,
@@ -20,11 +19,7 @@ import {
 } from "react";
 import {
   experimental_useSidebarThreads,
-  useBbNavigate,
-  useRealtime,
-  useRpc,
 } from "@get-bb/plugin-sdk/app";
-import type { Shape, rpcContract } from "../server";
 import {
   CAMERA_STORE_KEY,
   DEFAULT_CAMERA_STORE,
@@ -39,37 +34,19 @@ import {
   cellColor,
   classify,
   makeCards,
-  laneRows,
-  makeLaneCards,
   shelfPack,
   squarify,
   tip,
-  flowLayout,
-  flowDefaultOpen,
-  flowAge,
-  FLOW_COLORS,
   familyTints,
   FAMILY_TINTS,
   zoomToRect,
   clampPanEdges,
-  NODE_W,
-  NODE_H,
-  LANE_ROW_PITCH,
-  LANE_INDENT,
-  LANE_LABEL_W,
-  LANE_DOT,
   type AttnProject,
   type AttnThread,
   type Cell,
-  type FlowNode,
-  type FlowStatus,
-  type PlacedNode,
-  type ShapeDto,
   type Status,
 } from "./model";
-import { SHAPE_CHANGED, type ShapeChangedPayload } from "../shared";
 import { THEME_CSS } from "./theme";
-import { TokenFlowView } from "./TokenFlowView";
 import {
   APP_VERSION,
   CURRENT_UNRELEASED_FINGERPRINT,
@@ -98,8 +75,6 @@ const fitBox = (vw: number, vh: number) => ({
 });
 const ZOOM_MIN = 0.2; // zoom-out floor
 const ZOOM_MAX = 5; // zoom-in ceiling
-/** Contain-mode zoom floor: card labels stay readable when opening flow. */
-const MIN_LEGIBLE = 0.8;
 /** Padding around a treemap project the focus zoom keeps visible. */
 const FOCUS_PAD = 28;
 const P = 13; // card slot pitch
@@ -119,12 +94,9 @@ type LiveModel = {
 
 /** World-space bounds of a view: what the map canvas pans and zooms over. */
 type WorldSize = { W: number; H: number };
-/** Imperative map controls handed back to views (e.g. flow's "To running"). */
+/** Imperative map controls handed back to views (the treemap's zoom focus). */
 type MapApi = {
   fit: () => void;
-  panTo: (x: number, y: number) => void;
-  /** Legible contain-width opening centered on a world point (a scope change). */
-  openAt: (x: number, y: number) => void;
   /** Zoom (past 1×) so the treemap's focused project fills the fit box. */
   openRect: (rect: { x: number; y: number; w: number; h: number }) => void;
   /** The live camera scale (the treemap's hover gates read it at event time). */
@@ -212,27 +184,19 @@ const clampPan = (tx: number, span: number, view: number, m: number) => {
 /**
  * A maps-style full-bleed canvas: `children` live in a world-space layer the
  * operator pans by dragging and zooms with the wheel or the corner controls.
- * `world` gives the world bounds views report for fit/clamping; `overlay` is
- * untransformed chrome rendered above the canvas (flow toolbar and footer).
- * The opening zoom is "fit" (whole world in the fit box) or "contain" (a
- * legible contain-width scale centered on `focus` — the flow tree).
+ * `world` gives the world bounds views report for fit/clamping. The opening
+ * zoom is "fit" (whole world in the fit box).
  */
 function MapCanvas({
   world,
   apiRef,
-  zoomMode = "fit",
-  focus = null,
   persistKey,
-  overlay,
   children,
 }: {
   world: WorldSize | null;
   apiRef: RefObject<MapApi | null>;
-  zoomMode?: "fit" | "contain";
-  focus?: { x: number; y: number } | null;
   /** Session key this canvas's camera persists under (the tab id). */
   persistKey?: string;
-  overlay?: ReactNode;
   children: ReactNode;
 }) {
   const viewRef = useRef<HTMLDivElement>(null);
@@ -242,10 +206,6 @@ function MapCanvas({
   const sizeRef = useRef({ vw: 0, vh: 0 });
   const worldRef = useRef<WorldSize | null>(world);
   worldRef.current = world;
-  const zoomModeRef = useRef(zoomMode);
-  zoomModeRef.current = zoomMode;
-  const focusRef = useRef(focus);
-  focusRef.current = focus;
   const initialDoneRef = useRef(false);
   /** Camera saved by a previous visit, consumed by the opening effect once. */
   const restoreRef = useRef<Camera | null>(persistKey === undefined ? null : storedCamera(persistKey));
@@ -299,28 +259,6 @@ function MapCanvas({
     [applyT],
   );
 
-  const panTo = useCallback(
-    (x: number, y: number) => {
-      const k = tRef.current.k;
-      // Land the point in the middle of the fit box, clear of the chrome.
-      const box = fitBox(sizeRef.current.vw, sizeRef.current.vh);
-      applyT({ k, tx: box.x + box.w / 2 - x * k, ty: box.y + box.h / 2 - y * k });
-    },
-    [applyT],
-  );
-
-  /** Legible contain-width opening centered on a world point. */
-  const openAt = useCallback(
-    (x: number, y: number) => {
-      const sz = worldRef.current;
-      if (sz === null || sz.W <= 0 || sz.H <= 0) return;
-      const box = fitBox(sizeRef.current.vw, sizeRef.current.vh);
-      const k = clampT(Math.min(1, box.w / sz.W), MIN_LEGIBLE, 1);
-      applyT({ k, tx: box.x + box.w / 2 - x * k, ty: box.y + box.h / 2 - y * k });
-    },
-    [applyT],
-  );
-
   /** Zoom so a world rect fills the chrome-free fit box (treemap focus). */
   const openRect = useCallback(
     (rect: { x: number; y: number; w: number; h: number }) => {
@@ -332,21 +270,18 @@ function MapCanvas({
     [applyT],
   );
 
-  // Publish the imperative API for views ("To running", scope re-centers).
+  // Publish the imperative API for views (the treemap's zoom focus).
   // A layout effect: views' passive effects must see the API on first mount.
   useLayoutEffect(() => {
-    const api = { fit, panTo, openAt, openRect, scale: () => tRef.current.k };
+    const api = { fit, openRect, scale: () => tRef.current.k };
     apiRef.current = api;
     return () => {
       if (apiRef.current === api) apiRef.current = null;
     };
-  }, [apiRef, fit, panTo, openAt, openRect]);
+  }, [apiRef, fit, openRect]);
 
-  // The opening view: fill the fit box the way the view asks — "fit" covers
-  // the whole world, "contain" keeps a legible scale and centers on `focus`
-  // (the flow tree opens on its root instead of shrunken to specks).
-  // Whichever of world/viewport arrives later fires it, so a remount after a
-  // tab change always ends fitted.
+  // The opening view: fill the fit box. Whichever of world/viewport arrives
+  // later fires it, so a remount after a tab change always ends fitted.
   const openOnce = useCallback(() => {
     if (initialDoneRef.current) return;
     const sz = worldRef.current;
@@ -362,16 +297,6 @@ function MapCanvas({
       return;
     }
     const box = fitBox(vw, vh);
-    if (zoomModeRef.current === "contain") {
-      const k = clampT(Math.min(1, box.w / sz.W), MIN_LEGIBLE, 1);
-      const f = focusRef.current;
-      applyT({
-        k,
-        tx: box.x + (box.w - sz.W * k) / 2,
-        ty: f !== null ? box.y + box.h / 2 - f.y * k : box.y + (box.h - sz.H * k) / 2,
-      });
-      return;
-    }
     const k = clampT(Math.min(box.w / sz.W, box.h / sz.H, 1), ZOOM_MIN, 1);
     applyT({ k, tx: box.x + (box.w - sz.W * k) / 2, ty: box.y + (box.h - sz.H * k) / 2 });
   }, [applyT]);
@@ -476,9 +401,6 @@ function MapCanvas({
         >
           {children}
         </div>
-        {overlay != null ? (
-          <div className="pointer-events-none absolute inset-0 z-10">{overlay}</div>
-        ) : null}
         <div className="absolute bottom-3 right-3 z-20 flex gap-1">
           {(
             [
@@ -898,593 +820,11 @@ export function StripTilesView({
   );
 }
 
-// ---------- view 4: agent graph (edge-less lane tree) ----------
-export function AgentLanesView({
-  data,
-  nowMs,
-  w,
-  onWorld,
-}: {
-  data: SidebarData;
-  nowMs: number;
-  w: number;
-  onWorld: (s: WorldSize | null) => void;
-}) {
-  const model = useMemo(() => {
-    const { lanes, total } = laneRows(data.threads, data.projects, nowMs);
-    const cards = makeLaneCards(lanes, LBL);
-    const packed = shelfPack(cards, w, 14, 14);
-    return { packed, total, world: worldOf(w, packed.H) };
-  }, [data, nowMs, w]);
-  useEffect(() => {
-    onWorld(model.world);
-  }, [model.world, onWorld]);
-  if (model.total === 0) {
-    return <p className="text-sm text-muted-foreground">No visible threads.</p>;
-  }
-  return (
-    <Stage w={w} contentH={model.packed.H}>
-      {model.packed.placed.map(({ card, x, y }) => (
-        <div
-          key={card.pid}
-          title={`${card.name} · ${card.n} threads · ${card.hot} hot`}
-          className="absolute rounded-md"
-          style={{ left: x, top: y, width: card.w, height: card.h, background: "var(--attn-card)" }}
-        >
-          <div className="absolute truncate" style={{ left: 8, top: 4, right: 8, fontSize: 11, color: "var(--attn-label)" }}>
-            {card.name} · {card.n}
-          </div>
-          {card.rows.map((row, i) => (
-            <div
-              key={row.t.id}
-              className="absolute flex items-center"
-              style={{ left: 8 + row.depth * LANE_INDENT, top: LBL + 6 + i * LANE_ROW_PITCH, width: LANE_LABEL_W, height: LANE_DOT }}
-            >
-              <Dot cell={{ t: row.t, fam: row.fam }} x={0} y={0} d={LANE_DOT} nowMs={nowMs} />
-              <span className="ml-2 truncate" style={{ fontSize: 9, color: "var(--attn-sub)" }}>
-                {row.t.title || row.t.id}
-              </span>
-            </div>
-          ))}
-        </div>
-      ))}
-    </Stage>
-  );
-}
-
-// ---------- view 5: activity flow (project → thread → turn → work) ----------
-/** The shape from the plugin's `shape` RPC, refetched on live changes. */
-function useShape(): { shape: ShapeDto | null; error: string | null; retry: () => void } {
-  const rpc = useRpc<typeof rpcContract>();
-  const [shape, setShape] = useState<Shape | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const shapeRef = useRef<Shape | null>(null);
-  const refetchRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    let cancelled = false;
-    let inFlight = false;
-    let again = false;
-    shapeRef.current = null;
-    setShape(null);
-    setError(null);
-    const refetch = () => {
-      // One request at a time; a change during a fetch schedules one more.
-      if (inFlight) {
-        again = true;
-        return;
-      }
-      inFlight = true;
-      rpc
-        .call("shape", {})
-        .then(
-          (result) => {
-            if (cancelled) return;
-            shapeRef.current = result;
-            setShape(result);
-            setError(null);
-          },
-          (cause: unknown) => {
-            if (cancelled) return;
-            setError(cause instanceof Error ? cause.message : String(cause));
-          },
-        )
-        .finally(() => {
-          inFlight = false;
-          if (again && !cancelled) {
-            again = false;
-            refetch();
-          }
-        });
-    };
-    refetchRef.current = refetch;
-    refetch();
-    // A slow heartbeat keeps ages honest, but only while someone can see it.
-    const timer = setInterval(() => {
-      if (!document.hidden) refetch();
-    }, 15_000);
-    const onVisible = () => {
-      if (!document.hidden) refetch();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [rpc]);
-
-  useRealtime(SHAPE_CHANGED, (payload: unknown) => {
-    if (document.hidden) return;
-    const current = shapeRef.current;
-    const changed = (payload as Partial<ShapeChangedPayload> | null)?.threadIds;
-    // Skip pushes that only touch threads the shape cut off.
-    if (current !== null && changed && changed.length > 0) {
-      const known = new Set(current.nodes.map((node) => node.threadId));
-      if (!changed.some((id) => known.has(id))) return;
-    }
-    refetchRef.current();
-  });
-
-  return { shape, error, retry: () => refetchRef.current() };
-}
-
-/**
- * Fold state: the pure default policy, overlaid with explicit user toggles.
- * `overrides` wins over the default for any id it carries.
- */
-function useFold(shape: ShapeDto | null) {
-  const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
-  const open = useMemo(() => {
-    const base = shape === null ? new Set<string>() : flowDefaultOpen(shape);
-    for (const [id, value] of overrides) {
-      if (value) base.add(id);
-      else base.delete(id);
-    }
-    return base;
-  }, [shape, overrides]);
-  const toggle = (id: string) => {
-    setOverrides((prev) => new Map(prev).set(id, !open.has(id)));
-  };
-  const expandAll = (ids: Iterable<string>) => {
-    setOverrides(() => new Map(Array.from(ids, (id) => [id, true] as const)));
-  };
-  const collapseAll = (ids: Iterable<string>) => {
-    setOverrides(() => new Map(Array.from(ids, (id) => [id, false] as const)));
-  };
-  return { open, toggle, expandAll, collapseAll };
-}
-
-function ActivityFlowView({
-  apiRef,
-}: {
-  apiRef: RefObject<MapApi | null>;
-}) {
-  const { shape, error, retry } = useShape();
-  const navigate = useBbNavigate();
-  const fold = useFold(shape);
-  // Scope narrows the tree: click a project or thread card to focus its
-  // subtree; turn/step chevrons only unlock inside a scope.
-  const [scopeId, setScopeId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<Set<FlowStatus>>(
-    // Idle excluded by default (the "Active only" preset); chips adjust it.
-    new Set(["running", "waiting", "error", "queued"] as FlowStatus[]),
-  );
-  const [selected, setSelected] = useState<string | null>(null);
-  const nowMs = Date.now();
-  const layout = useMemo(
-    () => (shape === null ? null : flowLayout(shape, fold.open, { scope: scopeId, statusFilter })),
-    [shape, fold.open, scopeId, statusFilter],
-  );
-  // Opening/re-centering focus: the root card's center, the tree's entry.
-  const flowFocus = useMemo(() => {
-    if (layout === null) return null;
-    const root = layout.placed.find((p) => p.node.kind === "root");
-    return root === undefined ? null : { x: root.x + NODE_W / 2, y: root.y + NODE_H / 2 };
-  }, [layout]);
-  // Recenters on the root when the scope or the status filter changes; data
-  // refetches keep the operator's camera where they left it. The first layout
-  // must not re-center over a camera restored from the session store, so the
-  // scope key starts "already applied" in that case.
-  const restored = useRef<Camera | null>(storedCamera("flow"));
-  const scopeKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (flowFocus === null) return;
-    const key = `${scopeId ?? ""}|${[...statusFilter].sort().join(",")}`;
-    if (scopeKeyRef.current === null && restored.current !== null) {
-      restored.current = null;
-      scopeKeyRef.current = key;
-      return;
-    }
-    if (scopeKeyRef.current === key) return;
-    scopeKeyRef.current = key;
-    apiRef.current?.openAt(flowFocus.x, flowFocus.y);
-  }, [flowFocus, scopeId, statusFilter, apiRef]);
-
-  if (error !== null && shape === null) {
-    return (
-      <div className="p-4">
-        <p className="text-sm text-muted-foreground">Could not load activity shape: {error}</p>
-        <button type="button" onClick={retry} className="mt-2 text-xs text-muted-foreground underline">
-          Retry
-        </button>
-      </div>
-    );
-  }
-  if (layout === null || shape === null) {
-    // The host's CSS does not compile plugin tailwind, so the spinner is
-    // inline styles over a plugin-local keyframes rule (see OverviewPage).
-    return (
-      <div className="p-4">
-        <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-          <span
-            className="h-4 w-4 flex-none rounded-full"
-            style={{
-              animation: "attn-spin 0.9s linear infinite",
-              border: "2px solid color-mix(in srgb, var(--attn-dim) 30%, transparent)",
-              borderTopColor: "var(--attn-dim)",
-            }}
-          />
-          Loading activity — building the shape from live thread timelines…
-        </span>
-      </div>
-    );
-  }
-
-  const byId = new Map(layout.placed.map((p) => [p.node.id, p]));
-  const selectedPlaced = selected !== null ? byId.get(selected) : undefined;
-  const selectedNode = selectedPlaced?.node ?? null;
-  // Expand/collapse-all fold projects, threads and turns; work-fold keys
-  // ("turn::all") ride along so Expand all also reveals trimmed step rows.
-  const foldableIds: string[] = [];
-  const turnCount = new Map<string, number>();
-  for (const node of shape.nodes) {
-    if (node.kind === "project" || node.kind === "thread" || node.kind === "turn") {
-      foldableIds.push(node.id, `${node.id}::all`);
-    }
-    if (node.kind === "turn" && node.parentId !== null) {
-      turnCount.set(node.parentId, (turnCount.get(node.parentId) ?? 0) + 1);
-    }
-  }
-  const running = layout.placed.find((p) => p.node.status === "running" && p.node.kind === "thread");
-  // Scope path for the breadcrumb (focused node + its ancestors).
-  const shapeById = new Map(shape.nodes.map((n) => [n.id, n]));
-  const scopePath = new Set<string>();
-  if (scopeId !== null) {
-    let cur = shapeById.get(scopeId);
-    while (cur !== undefined && cur.kind !== "root") {
-      scopePath.add(cur.id);
-      cur = cur.parentId === null ? undefined : shapeById.get(cur.parentId);
-    }
-  }
-  const scopeProject =
-    scopeId === null
-      ? null
-      : (() => {
-          const n = shapeById.get(scopeId);
-          if (n === undefined) return null;
-          return n.kind === "thread" ? shapeById.get(n.parentId ?? "") ?? null : n;
-        })();
-  // Legend counts cover threads inside the current scope; chips filter on top.
-  const legendCounts = new Map<FlowStatus, number>();
-  for (const node of shape.nodes) {
-    if (node.kind !== "thread") continue;
-    if (scopeId !== null && !scopePath.has(node.id) && node.parentId !== scopeId) continue;
-    legendCounts.set(node.status, (legendCounts.get(node.status) ?? 0) + 1);
-  }
-  // Chips are solo: click a status to see only it, click again to reset to
-  // all. Active only stays the quick idle-excluding preset.
-  const chipToggle = (status: FlowStatus) => {
-    setStatusFilter((prev) =>
-      prev.size === 1 && prev.has(status) ? new Set() : new Set([status]),
-    );
-  };
-  const activeOnlyPressed = statusFilter.size === 4 && !statusFilter.has("idle");
-  const selectNode = (p: PlacedNode) => {
-    const id = p.node.id;
-    setSelected((prev) => (prev === id ? null : id));
-    if (p.node.kind === "project" || p.node.kind === "thread") {
-      setScopeId((prev) => {
-        if (prev === id) {
-          // Clicking the focused card again climbs one level out.
-          return p.node.kind === "thread" ? p.node.parentId : null;
-        }
-        return id;
-      });
-    }
-  };
-
-  return (
-    <>
-      <MapCanvas
-        world={layout === null ? null : { W: layout.W, H: layout.H }}
-        apiRef={apiRef}
-        zoomMode="contain"
-        focus={flowFocus}
-        persistKey="flow"
-        overlay={
-          <>
-            <div className="pointer-events-auto absolute right-3 top-3 z-10 flex max-w-[min(560px,calc(100%_-_18rem))] flex-wrap items-center gap-2 rounded-md border border-border/60 bg-card p-2 text-[11px] text-muted-foreground shadow-sm">
-              <span className="inline-flex items-center gap-1">
-                <button
-                  type="button"
-                  className={scopeId === null ? "text-foreground underline" : "underline hover:text-foreground"}
-                  onClick={() => setScopeId(null)}
-                >
-                  All
-                </button>
-                {scopeProject !== null ? (
-                  <>
-                    <span>/</span>
-                    <button
-                      type="button"
-                      onClick={() => setScopeId(scopeProject.id)}
-                      className={scopeId === scopeProject.id ? "text-foreground underline" : "underline hover:text-foreground"}
-                    >
-                      {scopeProject.label}
-                    </button>
-                  </>
-                ) : null}
-                {scopeId !== null && shapeById.get(scopeId)?.kind === "thread" ? (
-                  <>
-                    <span>/</span>
-                    <span className="truncate text-foreground" style={{ maxWidth: 180 }}>
-                      {shapeById.get(scopeId)!.label}
-                    </span>
-                  </>
-                ) : null}
-              </span>
-              <ToolbarButton
-                pressed={activeOnlyPressed}
-                onClick={() => setStatusFilter(activeOnlyPressed ? new Set() : new Set(["running", "waiting", "error", "queued"] as FlowStatus[]))}
-              >
-                Active only
-              </ToolbarButton>
-              <ToolbarButton onClick={() => fold.expandAll(foldableIds)}>Expand</ToolbarButton>
-              <ToolbarButton onClick={() => fold.collapseAll(foldableIds)}>Collapse</ToolbarButton>
-              <ToolbarButton
-                onClick={() => {
-                  if (running === undefined) return;
-                  selected === running.node.id ? setSelected(null) : setSelected(running.node.id);
-                  apiRef.current?.panTo(running.x + NODE_W / 2, running.y + NODE_H / 2);
-                }}
-              >
-                To running
-              </ToolbarButton>
-              <span className="ml-auto">
-                {shape.nodes.filter((n) => n.kind === "thread").length} threads
-                {shape.truncated ? " · truncated (coldest dropped)" : ""}
-              </span>
-            </div>
-            <div className="pointer-events-auto absolute bottom-3 left-3 right-14 z-10 flex max-h-28 flex-wrap items-center gap-x-4 gap-y-1 overflow-y-auto rounded-md border border-border/60 bg-card p-2 text-[11px] text-muted-foreground shadow-sm">
-              {[...legendCounts].filter(([, n]) => n > 0).map(([status, n]) => (
-                <button
-                  key={status}
-                  type="button"
-                  onClick={() => chipToggle(status)}
-                  title={statusFilter.has(status) ? `Showing only: ${[...statusFilter].join(", ")}` : `Show only ${status} threads`}
-                  className={
-                    "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 " +
-                    (statusFilter.has(status)
-                      ? "border border-border bg-background text-foreground"
-                      : "border border-transparent hover:bg-background/60")
-                  }
-                >
-                  <FlowDotSafe status={status} />
-                  {status}&thinsp;{n}
-                </button>
-              ))}
-              {statusFilter.size > 0 ? (
-                <button type="button" className="underline" onClick={() => setStatusFilter(new Set())}>
-                  clear filter
-                </button>
-              ) : null}
-              {selectedNode !== null ? (
-                <FlowDetails node={selectedNode} nowMs={nowMs} onOpenThread={() => selectedNode.threadId !== null && navigate.toThread(selectedNode.threadId)} />
-              ) : (
-                <span>Click a project or thread to focus it · turns and steps unlock inside a scope · drag to pan, scroll to zoom</span>
-              )}
-            </div>
-          </>
-        }
-      >
-        <div className="absolute left-0 top-0" style={{ width: layout.W, height: layout.H }}>
-          <svg className="pointer-events-none absolute inset-0" width={layout.W} height={layout.H}>
-            {layout.placed
-              .filter((p) => p.parentId !== null && byId.has(p.parentId))
-              .map((p) => {
-                const parent = byId.get(p.parentId!)!;
-                const x1 = parent.x + NODE_W, y1 = parent.y + NODE_H / 2, x2 = p.x, y2 = p.y + NODE_H / 2;
-                const mx = (x1 + x2) / 2;
-                return (
-                  <path
-                    key={p.node.id}
-                    d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
-                    fill="none"
-                    stroke={p.node.status === "running" ? "var(--attn-working)" : "var(--attn-seam)"}
-                    strokeOpacity={0.55}
-                    strokeDasharray="4 5"
-                  />
-                );
-              })}
-          </svg>
-          {layout.placed.map((p) => (
-            <FlowCard
-              key={p.node.id}
-              p={p}
-              selected={selected === p.node.id}
-              nowMs={nowMs}
-              locked={p.node.kind === "thread" && scopeId === null}
-              turnCount={turnCount.get(p.node.id) ?? 0}
-              onSelect={() => selectNode(p)}
-              onToggle={() =>
-                p.node.kind === "more"
-                  ? fold.toggle(`${p.node.parentId}::all`)
-                  : fold.toggle(p.node.id)
-              }
-              onOpenThread={() => p.node.threadId !== null && navigate.toThread(p.node.threadId)}
-            />
-          ))}
-        </div>
-      </MapCanvas>
-    </>
-  );
-}
-
-function ToolbarButton({
-  children,
-  onClick,
-  pressed,
-}: {
-  children: ReactNode;
-  onClick: () => void;
-  pressed?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={
-        "rounded border px-2 py-0.5 text-[11px] " +
-        (pressed
-          ? "border-border bg-background text-foreground"
-          : "border-transparent text-muted-foreground hover:text-foreground")
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
-function FlowDotSafe({ status }: { status: FlowStatus }) {
-  return (
-    <span
-      className={status === "running" ? "attn-pulse rounded-full" : "rounded-full"}
-      style={{ display: "inline-block", width: 7, height: 7, background: FLOW_COLORS[status], flex: "none" }}
-    />
-  );
-}
-
-/** One node card in the tree; chevron folds turn/project/thread subtrees. */
-function FlowCard({
-  p,
-  selected,
-  nowMs,
-  locked,
-  turnCount,
-  onSelect,
-  onToggle,
-  onOpenThread,
-}: {
-  p: PlacedNode;
-  selected: boolean;
-  nowMs: number;
-  /** Thread at top scope: turns are gated off, so no chevron. */
-  locked: boolean;
-  turnCount: number;
-  onSelect: () => void;
-  onToggle: () => void;
-  onOpenThread: () => void;
-}) {
-  const n = p.node;
-  const collapsible =
-    (n.kind === "project" || n.kind === "turn") || (n.kind === "thread" && !locked);
-  const isWorkMore = n.kind === "more" && n.id.endsWith("::earlier");
-  let sub =
-    n.kind === "thread"
-      ? `${turnCount} turn${turnCount === 1 ? "" : "s"}${turnCount === 0 ? "" : ` · ${flowAge(n, nowMs)}`}`
-      : (n.sublabel ?? (isWorkMore ? "click to unfold" : n.kind === "more" ? "hidden on server" : ""));
-  // Cross-project lineage: the project that spawned this thread (server meta).
-  const spawnedBy = n.meta["spawned by"];
-  if (n.kind === "thread" && spawnedBy !== undefined) sub = `${sub} · ↳ ${spawnedBy}`;
-  const openable = n.threadId !== null;
-  return (
-    <div
-      onClick={onSelect}
-      onDoubleClick={() => openable && onOpenThread()}
-      title={`${n.label} · ${n.status}${n.sublabel ? ` · ${n.sublabel}` : ""}`}
-      className={openable ? "absolute cursor-pointer rounded-md" : "absolute rounded-md"}
-      style={{
-        left: p.x,
-        top: p.y,
-        width: NODE_W,
-        height: NODE_H,
-        background: selected ? "var(--attn-selected)" : "var(--attn-card)",
-        border: `1px solid ${selected ? "var(--attn-selected-border)" : "var(--attn-card-border)"}`,
-        padding: "7px 8px",
-        opacity: isWorkMore || n.kind === "more" ? 0.8 : 1,
-      }}
-    >
-      <div className="flex h-full items-start gap-2 overflow-hidden">
-        <span className="mt-1 flex-none">
-          <FlowDotSafe status={n.status} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[11px]" style={{ color: n.kind === "thread" ? "var(--attn-emph)" : "var(--attn-dim)" }}>
-            {n.label}
-          </div>
-          <div className="truncate text-[10px]" style={{ color: "var(--attn-faint)" }}>
-            {sub}
-          </div>
-        </div>
-        {collapsible ? (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle();
-            }}
-            aria-label={p.expanded ? "Collapse" : "Expand"}
-            className="mt-0.5 flex-none text-[9px] text-muted-foreground hover:text-foreground"
-          >
-            {p.expanded ? "▾" : "▸"}
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/** Selected-node details, shown inline in the footer. */
-function FlowDetails({
-  node,
-  nowMs,
-  onOpenThread,
-}: {
-  node: FlowNode;
-  nowMs: number;
-  onOpenThread: () => void;
-}) {
-  return (
-    <span className="w-full min-w-0 text-[10px]" style={{ color: "var(--attn-dim)" }}>
-      <span style={{ color: "var(--attn-emph)" }}>{node.label}</span>
-      {" · "}
-      {node.status}
-      {node.kind === "thread" ? ` · ${flowAge(node, nowMs)}` : ""}
-      {"spawned by" in node.meta ? ` · ↳ ${node.meta["spawned by"]}` : ""}
-      {"child thread" in node.meta ? ` · ${node.meta["child thread"]}` : ""}
-      {node.input !== null ? ` · in: ${node.input.slice(0, 140)}` : ""}
-      {node.output !== null ? ` · out: ${node.output.slice(0, 140)}` : ""}
-      {node.threadId !== null ? (
-        <>
-          {" · "}
-          <button type="button" className="underline" onClick={onOpenThread}>
-            open thread
-          </button>
-        </>
-      ) : null}
-    </span>
-  );
-}
-
 // ---------- the tabbed page ----------
 const TABS = [
   { id: "board", label: "Board" },
   { id: "treemap", label: "Unit treemap" },
   { id: "tiles", label: "Strip tiles" },
-  { id: "graph", label: "Agent lanes" },
-  { id: "flow", label: "Activity flow" },
-  { id: "tokenflow", label: "Token flow" },
 ] as const;
 
 /** The gift glyph for the What's-new button (no host icon to lean on). */
@@ -1684,18 +1024,11 @@ export function OverviewPage() {
         {THEME_CSS +
           "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
       </style>
-      {tab === "flow" ? (
-        <ActivityFlowView apiRef={apiRef} />
-      ) : tab === "tokenflow" ? (
-        <TokenFlowView />
-      ) : (
-        <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
-          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
-          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
-          {tab === "graph" ? <AgentLanesView data={live.data} nowMs={nowMs} w={w} onWorld={onWorld} /> : null}
-        </MapCanvas>
-      )}
+      <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
+        {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+        {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
+        {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+      </MapCanvas>
       <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%_-_1.5rem)] flex-col items-start gap-2">
         <div className="pointer-events-auto flex gap-1 rounded-md border border-border/60 bg-card p-1 shadow-sm">
           {TABS.map((t) => (
@@ -1737,14 +1070,12 @@ export function OverviewPage() {
         </div>
       </div>
       <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
-      {tab !== "flow" && tab !== "tokenflow" ? (
-        <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
-          <LegendRow counts={counts} />
-          <p className="mt-1 text-[10px] text-muted-foreground">
-            one dot = one thread · {total} visible · color = status, volume = count · drag to pan, scroll to zoom
-          </p>
-        </div>
-      ) : null}
+      <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
+        <LegendRow counts={counts} />
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          one dot = one thread · {total} visible · color = status, volume = count · drag to pan, scroll to zoom
+        </p>
+      </div>
     </div>
   );
 }
