@@ -12,4 +12,4 @@ A BB plugin that adds an "Activity Overview" nav panel with three live tabs over
   - **What's new**: a gift button in the tab bar lists recent changes after an update — it pulses until opened and never disappears, so the changelog stays reachable.
 
 ## No
-- CLI commands, settings, secrets, background services, storage, backend. The plugin is frontend-only.
+- CLI commands, settings, secrets, background services, storage, RPCs. The views are frontend-only; the backend entry is a load-only stub.

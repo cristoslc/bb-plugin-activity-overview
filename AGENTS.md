@@ -13,6 +13,8 @@ See [PURPOSE.md](PURPOSE.md) for the one-paragraph outcome. Global agent standar
   block first, dark overrides under bb's `.dark` ancestor; `THEME_TOKENS`).
   All view colors and the status/grey constants in `model.ts` are `var(--attn-…)`
   tokens declared there — no hardcoded hexes in the views.
+- `server.ts` — load-only backend stub (`bb plugin build` requires a
+  server entry); no RPCs, no state.
 - `skills/activity-views/` — the plugin's own skill: what the views show and their constraints.
 - `lib/whats-new.ts`, `lib/changelog-markdown.ts`, `lib/unreleased-changelog.ts` — the What's-new surface ported from the Focus Board plugin: version/prerelease pulse logic, the changelog parsers, and the derivations (see `## Release & What's-new discipline`).
 - `scripts/generate-unreleased.mjs`, `scripts/generate-whats-new.mjs` — build-time embeddings of `CHANGELOG.md` into `lib/*.generated.ts` (generated files are committed; no bullet is written twice).

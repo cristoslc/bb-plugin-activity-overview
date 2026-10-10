@@ -6,7 +6,8 @@ description: "What the Activity Overview plugin shows and how it reads thread da
 # Activity Overview plugin views
 
 The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with three
-aggregate tabs, all rendered live from the host's sidebar thread data with no backend at all.
+aggregate tabs, all rendered live from the host's sidebar thread data. The backend is a load-only
+stub: no RPCs, no state.
 
 - **Board** — one card per project, fixed dot slots (13px pitch). Volume of
   dots = thread count; color = status; empty slots stay put so daily change
@@ -74,7 +75,8 @@ the content block, no baked-in padding).
 ## Operating constraints
 
 - The three aggregate tabs are pure frontend views over sidebar thread data;
-  they have no CLI commands, no settings, no server, and no server state.
-  Data refreshes when BB's sidebar data refreshes.
+  they have no CLI commands, no settings, and no server state (the backend
+  entry is a load-only stub — the plugin build requires one). Data
+  refreshes when BB's sidebar data refreshes.
 - Rendering constants live in views/model.ts and views/Views.tsx; the layout
   and classification tests are in tests/model.test.ts.
