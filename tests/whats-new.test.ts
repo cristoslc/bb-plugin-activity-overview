@@ -258,15 +258,23 @@ test("entriesSince returns entries strictly newer than lastSeen, newest first", 
   assert.deepEqual(entriesSince(null), []); // fresh install: nothing to show
 });
 
-test("a prerelease build leads the modal with its unreleased group", () => {
+test("a prerelease build leads the modal with its unreleased group when it has bullets", () => {
+  // The committed [Unreleased] group's shape is whatever the changelog holds
+  // right now — assert against it, never assume emptiness. A non-empty group
+  // leads the modal; an empty one (right after a finalize, or on a re-armed
+  // dev cycle) falls through to the published feed with no unreleased head.
   const entries = whatsNewEntriesFor("0.3.0-dev", true, "0.2.0");
-  assert.equal(entries[0].unreleased, true);
-  assert.equal(entries[0].version, "0.3.0-dev");
-  assert.ok(entries[0].items.length > 0);
-  // Behind it, the published feed — nothing runs newer than the last stable
-  // release yet, so the unreleased group stands alone here. The ordering
-  // rule of the merged feed is pinned by the WHATS_NEW sort test.
-  assert.deepEqual(entries.slice(1), []);
+  if (UNRELEASED_ITEMS.length > 0) {
+    assert.equal(entries[0].unreleased, true);
+    assert.equal(entries[0].version, "0.3.0-dev");
+    assert.ok(entries[0].items.length > 0);
+    // Behind it, the published feed — nothing runs newer than the last stable
+    // release yet, so the unreleased group stands alone here. The ordering
+    // rule of the merged feed is pinned by the WHATS_NEW sort test.
+    assert.deepEqual(entries.slice(1), []);
+  } else {
+    assert.deepEqual(entries, entriesSince("0.2.0"));
+  }
 });
 
 test("a stable build with a pending update shows only the delta", () => {
