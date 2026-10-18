@@ -5,10 +5,6 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
-    "text": "**A sixth tab, Token flow, animates where your tokens go.** A provider → project → thread-family sankey served by the new stateless `flow` RPC: ribbon width is each thread's context-window usage, beads stream as threads burn tokens (faster at higher burn rate), each provider rides its own color, and floating chrome adds a tok/s counter, a 15 min / last hour / all window filter, pause and speed controls, with hover highlighting a provider's, project's or family's rivers.",
-    "children": []
-  },
-  {
     "text": "**Every view color now follows bb's theme — light and dark.** All colors are plugin tokens in `views/theme.ts`, declared light-first with dark overrides under bb's `.dark` ancestor; ink, surface and line tokens derive from bb's own CSS custom properties (with standalone fallbacks), so custom bb themes recolor the views for free. The idle age ramp mixes muted ink into the stage (theme-relative fade), and the family tint previews got pastel light-mode variants of the same six hues.",
     "children": []
   },
