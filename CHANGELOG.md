@@ -6,6 +6,14 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.3.0] - 2026-10-18
+
 ### Removed
 
 - **The Agent lanes, Activity flow and Token flow tabs are gone.** The panel keeps the three aggregate dot views (Board, Unit treemap, Strip tiles); the backend whose sole job was serving the flow and token-flow RPCs was removed with them, so the plugin is now frontend-only.

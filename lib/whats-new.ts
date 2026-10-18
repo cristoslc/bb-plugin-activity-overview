@@ -26,7 +26,7 @@ import { UNRELEASED_ITEMS } from "./unreleased-changelog.generated.ts";
 import { DERIVED_WHATS_NEW } from "./whats-new.generated.ts";
 import { leadFromBullet } from "./changelog-markdown.ts";
 
-export const APP_VERSION = "0.3.0-dev";
+export const APP_VERSION = "0.3.0";
 
 export const LAST_SEEN_VERSION_KEY = "activity-overview:lastSeenVersion";
 export const LAST_SEEN_UNRELEASED_KEY = "activity-overview:lastSeenUnreleased";
