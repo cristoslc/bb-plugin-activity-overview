@@ -1,0 +1,1145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token flow — amplitude-wave mockup (v15)</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0f14; overflow: hidden; }
+  #stage { position: fixed; inset: 0; font-family: -apple-system, "SF Pro Text", system-ui, "Segoe UI", sans-serif; }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  path, rect, text, circle, line { transition: opacity .25s ease; }
+  .ribbon { fill: none; stroke-linecap: butt; }
+  .beads  { fill: none; stroke-linecap: round; }
+  .wave   { stroke: none; }             /* encoding A band (fill from attribute) */
+  .crest  { fill: none; }               /* burn crest / bright upper edge */
+  .stub   { fill: none; }               /* zero-burn stub */
+  .rfill  { stroke: none; }             /* encoding landing fill (funnel/profile) */
+  .corridor { stroke: none; pointer-events: fill; }
+
+  .chrome {
+    position: absolute; z-index: 10;
+    background: rgba(19, 26, 34, .92); border: 1px solid #24303c; border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.45); color: #dfe7ee;
+    padding: 10px 12px; font-size: 12px; backdrop-filter: blur(6px);
+  }
+  .chrome.tl { top: 12px; left: 12px; }
+  .chrome.tr { top: 12px; right: 12px; text-align: right; }
+  .chrome.bl { bottom: 12px; left: 12px; pointer-events: auto; max-width: 545px; }
+
+  .kicker { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #7d8b99; margin-bottom: 6px; }
+  .tabsw { display: flex; gap: 2px; flex-wrap: wrap; }
+  .tab { padding: 3px 8px; border-radius: 6px; color: #9fadbb; white-space: nowrap; }
+  .tab.active { background: #2c3a49; color: #fff; font-weight: 600; }
+  .mockbadge {
+    display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+    font-size: 9px; letter-spacing: .1em; background: #4a3a17; color: #e8c15c; vertical-align: 1px;
+  }
+
+  .big { font-size: 20px; font-weight: 700; color: #eef4f9; }
+  .big small { font-size: 11px; font-weight: 500; color: #7d8b99; }
+  .pulse { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3d84e0; margin-right: 6px;
+           box-shadow: 0 0 0 0 rgba(61,132,224,.6); animation: pul 1.8s infinite; }
+  @keyframes pul { 0% { box-shadow: 0 0 0 0 rgba(61,132,224,.55);} 70% { box-shadow: 0 0 0 7px rgba(61,132,224,0);} 100% { box-shadow: 0 0 0 0 rgba(61,132,224,0);} }
+
+  .ctlrow { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }
+  button, select {
+    background: #232e3a; color: #cfd9e2; border: 1px solid #2e3c4b; border-radius: 7px;
+    font-size: 11px; padding: 4px 9px; cursor: pointer; font-family: inherit;
+  }
+  button:hover, select:hover { background: #2b3948; }
+  .encbtn.active { background: #2c3a49; color: #fff; font-weight: 600; }
+  input[type=range] { width: 110px; accent-color: #3d84e0; }
+  .sliderlab { font-size: 10px; color: #7d8b99; min-width: 58px; }
+
+  .chiprow { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .pchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #c4cfd9; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; }
+  .read { color: #7d8b99; font-size: 10.5px; line-height: 1.55; }
+  .read b { color: #a9b6c2; font-weight: 600; }
+  #readLine1 { margin-bottom: 3px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="svg" viewBox="0 0 1740 1300" preserveAspectRatio="xMidYMid meet"><defs><filter id="zoneGlow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur in="SourceGraphic" stdDeviation="7"/></filter><linearGradient id="mg-anthropic" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#d97757" stop-opacity="0"/><stop offset="1" stop-color="#d97757" stop-opacity="0.55"/></linearGradient><linearGradient id="mg-openai" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#10a37f" stop-opacity="0"/><stop offset="1" stop-color="#10a37f" stop-opacity="0.55"/></linearGradient><linearGradient id="mg-google" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4d8ef7" stop-opacity="0"/><stop offset="1" stop-color="#4d8ef7" stop-opacity="0.55"/></linearGradient></defs><g id="world"></g></svg>
+
+  <div class="chrome tl">
+    <div class="kicker">Activity Overview</div>
+    <div class="tabsw">
+      <span class="tab">Board</span><span class="tab">Treemap</span><span class="tab">Tiles</span>
+      <span class="tab">Lanes</span><span class="tab">Flow</span><span class="tab">Token flow</span>
+      <span class="tab active">Amplitude wave<span class="mockbadge">MOCK</span></span>
+    </div>
+  </div>
+
+  <div class="chrome tr">
+    <div class="kicker">Consumption · <span id="winlab">last hour</span></div>
+    <div class="big"><span class="pulse" id="pulse"></span><span id="rate">—</span> <small>tok/min</small></div>
+    <div class="ctlrow" id="encRow">
+      <span class="sliderlab" style="min-width:auto">encoding</span>
+      <button id="encA" class="encbtn active">A · ribbon wave</button>
+      <button id="encB" class="encbtn">B · trace lane</button>
+      <button id="encC" class="encbtn">C · burn envelope</button>
+    </div>
+    <div class="ctlrow">
+      <select id="window">
+        <option value="15m">Last 15 minutes</option>
+        <option value="1h" selected>Last hour</option>
+      </select>
+      <button id="pause">Pause flow</button>
+    </div>
+    <div class="ctlrow">
+      <input type="range" id="speed" min="0.4" max="3" step="0.1" value="1">
+      <span class="sliderlab" id="speedlab">flow ×1.0</span>
+    </div>
+  </div>
+
+  <div class="chrome bl">
+    <div class="chiprow" id="legendChips"></div>
+    <div class="read" id="readLine1"><b>candles</b> = total spend, stacked per project — mirror of the middle bars · quiet threads = flat streams + their <b>tok/min</b> label · columns are topology, not time</div>
+    <div class="read" id="readLine2"></div>
+    <div class="read"><b>click</b> = pin family · <b>click</b> space = release · <b>wheel</b> = zoom · <b>drag</b> = pan · <b>double-click</b> = reset</div>
+  </div>
+
+<div id="pageErrs" style="display:none" data-errs=""></div>
+<div id="audit" style="display:none"></div>
+<script>
+  window.addEventListener('error', e => {
+    const n = document.getElementById('pageErrs');
+    n.dataset.errs = (n.dataset.errs || '') + (e.message || String(e)) + ' @' + (e.filename || '') + ':' + (e.lineno || 0) + '\n';
+  });
+  window.addEventListener('unhandledrejection', e2 => {
+    const n = document.getElementById('pageErrs');
+    n.dataset.errs = (n.dataset.errs || '') + 'promise: ' + (e2.reason && e2.reason.message || String(e2.reason)) + '\n';
+  });
+</script>
+<script>
+'use strict';
+
+/* ---------- palette & status ---------- */
+const PROVIDERS = [
+  { id: 'anthropic', label: 'Anthropic', color: '#d97757' },
+  { id: 'openai',    label: 'OpenAI',    color: '#10a37f' },
+  { id: 'google',    label: 'Google AI', color: '#4d8ef7' },
+];
+const PIDX = Object.fromEntries(PROVIDERS.map((p, i) => [p.id, i]));
+
+const STATUS = {
+  running: { label: 'running',   color: '#3d84e0', factor: 1.00, base: 0.32 },
+  waiting: { label: 'needs you', color: '#d9a53f', factor: 0.35, base: 0.22 },
+  unread:  { label: 'unread',    color: '#2e9e45', factor: 0.15, base: 0.18 },
+  error:   { label: 'error',     color: '#e5534b', factor: 0,    base: 0.12 },
+  idle:    { label: 'idle',      color: '#8b97a3', factor: 0,    base: 0.09 },
+};
+
+const WINDOWS = {
+  '15m': { label: 'last 15 minutes', mult: 0.22, bucketSec: 45 },
+  '1h':  { label: 'last hour',       mult: 1,    bucketSec: 180 },
+};
+const BUCKETS = 20;
+
+/* ---------- synthetic threads ---------- */
+const mulberry32 = seed => () => {
+  seed = (seed + 0x6D2B79F5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+const jit = (w, rnd) => Math.max(0.01, w * (0.88 + 0.24 * rnd()));
+
+const SHAPES = {
+  rampUpQ: m => (u, rnd) => jit(1 + (m - 1) * u * u, rnd),
+  rampUpL: m => (u, rnd) => jit(1 + m * u, rnd),
+  rampDown: m => (u, rnd) => jit(1 + m * (1 - u), rnd),
+  bursty: () => { const map = { 5: 2.2, 9: 1.6, 13: 2.1, 17: 3.1, 19: 3.6 };
+    return (u, rnd) => { const i = Math.round(u * 19); return jit((map[i] || 0) + 0.32, rnd); } },
+  silentBurst: () => (u, rnd) => u < 0.55 ? jit(0.03, rnd) : jit(0.05 + 4.6 * Math.pow((u - 0.55) / 0.45, 1.4), rnd),
+  steady: () => (u, rnd) => jit(1, rnd),
+};
+
+const THREADS = [
+  { key: 'poll',  name: 'board chip status polling', project: 'activity-overview', status: 'running',
+    usage: { openai: 37000 }, shape: SHAPES.steady() },
+  { key: 'stale', name: 'stale flag sweep', project: 'activity-overview', status: 'idle',
+    childOf: 'poll', usage: { google: 8000 }, shape: null },
+  { key: 'backup', name: 'backup script review', project: 'dotfiles', status: 'idle',
+    usage: { anthropic: 12000 }, shape: null },
+  { key: 'prompt', name: 'shell prompt cleanup', project: 'dotfiles', status: 'running',
+    childOf: 'backup', usage: { google: 11000 }, shape: SHAPES.rampUpL(1.19) },
+  { key: 'sync',  name: 'nightly sync sweep', project: 'focus-board', status: 'waiting',
+    usage: { anthropic: 14000 }, shape: SHAPES.rampDown(1.57) },
+  { key: 'retry', name: 'retry sweep', project: 'focus-board', status: 'unread',
+    childOf: 'sync', usage: { openai: 9000 }, shape: SHAPES.steady() },
+  { key: 'wave',  name: 'amplitude wave revision', project: 'activity-overview', status: 'running',
+    usage: { anthropic: 96000 }, shape: SHAPES.rampUpQ(3.5) },
+  { key: 'vizdrive', name: 'visual-check browser driver', project: 'activity-overview', status: 'running',
+    childOf: 'wave', usage: { openai: 30000 }, shape: SHAPES.bursty() },
+  { key: 'forge', name: 'forge CI runner notes', project: 'cove', status: 'running',
+    usage: { openai: 31000 }, shape: SHAPES.silentBurst() },
+  { key: 'vault', name: 'vault rotation cron', project: 'cove', status: 'waiting',
+    childOf: 'forge', usage: { google: 5000 }, shape: null },
+];
+THREADS.forEach((t, i) => { t.seed = 11 + i * 37; });
+
+/* ---------- geometry ---------- */
+const W = 1740, H = 1300, TOP = 80, BOTTOM = 40;
+const PX = 200, PW = 16;
+const JX = 860, JW = 14;
+const FX = 1400;
+const ZONE_W = 300;
+const FAM_TOP = 240;
+const PROJ_BOX_GAP = 48;      // min gap between middle-column project boxes
+const CLUSTER_GAP = 64;       // large gutter between project card clusters
+const FAMILY_GAP = 28;        // smaller gap between cards inside a cluster
+const CAPTION_H = 18;         // faint project caption line above each cluster
+const PR_GAP = 64;            // provider blocks breathe too
+const RIVERX0 = PX + PW;
+const FUNNEL_PX = 100;        // segment-1 → interval-profile funnel width (A)
+const MOUTH_PX = 60;          // gradient mouth overlay width (all encodings): feeds the candle
+const smoothstep = u => { const c = clamp(u, 0, 1); return c * c * (3 - 2 * c); };
+
+/* card metrics: compact (0) ↔ enlarged selected card (1), tweened (v13) —
+   v17: roomier rows + gutters; the enlarged card grows generously but the
+   whole set must still fit the column (the card can push others, and the
+   gaps scale down before anything shrinks) */
+const CARD = {
+  rowH: [26, 32], pitch: [32, 42], zonePad: [12, 12],
+  rateFont: [10, 11],
+  panelTop: [0, 6], panelHdr: [0, 14], panelLine: [0, 13], panelPad: [0, 4],
+};
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* ---------- helpers ---------- */
+const svg = document.getElementById('svg');
+const world = document.getElementById('world');
+const NS = 'http://www.w3.org/2000/svg';
+const el = (name, attrs, parent) => {
+  const n = document.createElementNS(NS, name);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  (parent || world).appendChild(n);
+  return n;
+};
+const r2 = n => Math.round(n * 10) / 10;
+const fmtK = n => n >= 1000 ? (n / 1000 >= 100 ? Math.round(n / 1000) : (n / 1000).toFixed(1)) + 'k' : String(Math.round(n));
+const fmtTokMin = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(Math.round(n));
+const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+const lighten = (hex, amt) => {
+  const n2 = parseInt(hex.slice(1), 16);
+  const f = c => Math.round(c + (255 - c) * amt);
+  return `rgb(${f(n2 >> 16 & 255)},${f(n2 >> 8 & 255)},${f(n2 & 255)})`;
+};
+const cubicPt = (P0, P1, P2, P3, t) => {
+  const s = 1 - t;
+  return { x: s*s*s*P0.x + 3*s*s*t*P1.x + 3*s*t*t*P2.x + t*t*t*P3.x,
+           y: s*s*s*P0.y + 3*s*s*t*P1.y + 3*s*t*t*P2.y + t*t*t*P3.y };
+};
+const setO = (e, v) => { e.dataset.baseO = String(v); e.style.opacity = v; };
+const cubicYAt = (P0, P1, P2, P3, x) => {
+  if (P3.x - P0.x < 0.5) return P0.y;
+  let lo = 0, hi = 1;
+  for (let k = 0; k < 26; k++) {
+    const mid = (lo + hi) / 2;
+    if (cubicPt(P0, P1, P2, P3, mid).x < x) lo = mid; else hi = mid;
+  }
+  return cubicPt(P0, P1, P2, P3, (lo + hi) / 2).y;
+};
+const crPath = (pts, firstCmd) => {
+  let d = firstCmd + ` ${r2(pts[0].x)} ${r2(pts[0].y)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+    d += ` C ${r2(p1.x + (p2.x - p0.x) / 6)} ${r2(p1.y + (p2.y - p0.y) / 6)}, ` +
+              `${r2(p2.x - (p3.x - p1.x) / 6)} ${r2(p2.y - (p3.y - p1.y) / 6)}, ` +
+              `${r2(p2.x)} ${r2(p2.y)}`;
+  }
+  return d;
+};
+
+/* ---------- series ---------- */
+function threadSeries(t, winMult) {
+  const total = Object.values(t.usage).reduce((a, b) => a + b, 0) * winMult;
+  const v = new Array(BUCKETS).fill(0);
+  if (t.shape) {
+    const rnd = mulberry32(t.seed);
+    const w = [];
+    let sum = 0;
+    for (let i = 0; i < BUCKETS; i++) { const x = t.shape((i + 0.5) / BUCKETS, rnd); w.push(x); sum += x; }
+    for (let i = 0; i < BUCKETS; i++) v[i] = total * w[i] / sum;
+  }
+  return v;
+}
+const meanSlice = (v, a, b) => v.slice(a, b).reduce((x, y) => x + y, 0) / (b - a);
+
+const beadEligible = t => t.status === 'running';
+const familyKeyOf = t => t.childOf ? t.childOf : t.key;
+const beadSpeed = t => {
+  const tpm = t.rateNow * 60;
+  return tpm < 100 ? 6 : tpm < 500 ? 16 : tpm < 2000 ? 36 : 64;
+};
+
+/* ---------- focus levels ---------- */
+const LV = {
+  plain:  { river: 0.32, label: 0.35, zone: 0.5 },
+  select: { river: 0.10, label: 0.12, zone: 0.25 },
+  lift:   { river: 0.20, label: 0.24, zone: 0.4 },
+};
+
+/* ---------- state ---------- */
+let encKey = 'A';
+let curWin = '1h';
+let selected = null;
+let mix = 0;                      // 0 = compact, 1 = the selected family's card enlarged
+let tween = null;
+let latestLines = [];
+let famKeyByThread = new Map();
+let streamTicks = 0;              // interval streaming: candles + river tails grow to completion
+let liveRiverUpdates = [];        // per-river updaters for the streaming tail
+let candleEls = new Map();        // thread key → { el, yMid, width, lastB, mixRef }
+let beads = [];
+let rateSumTpm = 0;
+let paused = false, speedMul = 1;
+
+/* global ticker clock (0..16): 0–11 = the interval streams, 12–16 = frozen */
+const liveJOf = () => streamTicks <= 11 ? 0.88 + 0.01 * streamTicks : 1;
+
+function paintFocus(selFam, hovFam, extraPreds) {
+  if (!selFam && !hovFam && !extraPreds) {
+    svg.querySelectorAll('[data-base-o]').forEach(e => { e.style.opacity = e.dataset.baseO; });
+    return;
+  }
+  const selOf = r => { const fam = r.thread !== undefined ? famKeyByThread.get(r.thread) : undefined; return !!selFam && fam === selFam; };
+  const hovOf = r => { const fam = r.thread !== undefined ? famKeyByThread.get(r.thread) : undefined; return !!hovFam && fam === hovFam; };
+  const extraOf = r => !!extraPreds && extraPreds.some(pd => pd(r));
+  const opFor = (r, field, baseVal) => {
+    const base = String(baseVal);
+    if (selOf(r) || extraOf(r)) return base;
+    if (hovOf(r)) return selFam ? String(Math.min(+(base || 1), LV.lift[field])) : base;
+    return LV[selFam ? 'select' : 'plain'][field];
+  };
+  svg.querySelectorAll('.wave, .crest, .envelope, .ribbon, .stub, .beads, .mouth, .rfill').forEach(rl => {
+    const rr = { provider: rl.dataset.provider, thread: rl.dataset.thread };
+    rl.style.opacity = (selOf(rr) || hovOf(rr) || extraOf(rr)) ? opFor(rr, 'river', rl.dataset.baseO) : (rl.classList.contains('beads') ? 0 : LV[selFam ? 'select' : 'plain'].river);
+  });
+  svg.querySelectorAll('.seg').forEach(s => {
+    const rr = { provider: s.dataset.provider, thread: s.dataset.thread };
+    s.style.opacity = (selOf(rr) || hovOf(rr) || extraOf(rr)) ? opFor(rr, 'label', s.dataset.baseO) : LV[selFam ? 'select' : 'plain'].label;
+  });
+  svg.querySelectorAll('.famzone').forEach(z => {
+    const rr = { provider: '', thread: z.dataset.threads.split(',')[0] };
+    z.style.opacity = (selOf(rr) || hovOf(rr)) ? opFor(rr, 'zone', z.dataset.baseO) : LV[selFam ? 'select' : 'plain'].zone;
+  });
+  // project boxes + captions: lit when ANY covered family is the selection
+  // or the hover target; otherwise zone/label-level dim
+  svg.querySelectorAll('.pjbox, .pjcaption').forEach(b2 => {
+    const lit = b2.dataset.threads.split(',').some(kk => {
+      const fk = famKeyByThread.get(kk);
+      return fk !== undefined && fk !== null && (!!selFam && fk === selFam || !!hovFam && fk === hovFam);
+    });
+    b2.style.opacity = lit
+      ? (selFam ? String(Math.min(+(b2.dataset.baseO || 1), LV.lift.zone)) : b2.dataset.baseO)
+      : LV[selFam ? 'select' : 'plain'][b2.classList.contains('pjcaption') ? 'label' : 'zone'];
+  });
+}
+function applySel() { paintFocus(selected || null, null); }
+function bind(target, selFn, hlFn) {
+  if (hlFn) {
+    target.style.cursor = 'pointer';
+    target.addEventListener('mouseenter', hlFn);
+    target.addEventListener('mouseleave', () => applySel());
+  }
+  if (selFn) {
+    target.style.cursor = 'pointer';
+    target.addEventListener('click', selFn);
+  }
+}
+svg.addEventListener('click', e => {
+  const tgt = e.target;
+  if (tgt === svg || !tgt.dataset || !tgt.dataset.thread) {
+    if (selected) { selected = null; animateMix(0); }   // empty canvas → release
+  }
+});
+function selectKey(t) {
+  if (!t) return;
+  const fam = t.childOf ? t.childOf : t.key;
+  if (selected === fam) { selected = null; animateMix(0); return; }   // family-wide re-click → release
+  selected = fam;
+  animateMix(1);
+}
+
+/* tweened card enlargement: every position change is eased, nothing teleports */
+function animateMix(to) {
+  tween = { from: mix, to, t0: performance.now() };
+  requestAnimationFrame(stepMix);
+}
+function stepMix() {
+  if (!tween) return;
+  const t = Math.min(1, (performance.now() - tween.t0) / 250);
+  const u = 1 - Math.pow(1 - t, 3);
+  mix = tween.from + (tween.to - tween.from) * u;
+  render(true);
+  if (t < 1) { requestAnimationFrame(stepMix); return; }
+  mix = tween.to; tween = null;
+  render(true);
+}
+
+/* ---------- time helpers ---------- */
+function fmtTime(ms, withSec) {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0'), ss = String(d.getSeconds()).padStart(2, '0');
+  return withSec ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
+}
+function bucketSpan(i, winObj) {
+  const bucketMs = winObj.bucketSec * 1000;
+  const now = Date.now();
+  const t1 = now - (BUCKETS - i) * bucketMs, t2 = t1 + bucketMs;
+  const withSec = winObj.bucketSec < 90;
+  return `${fmtTime(t1, withSec)} – ${fmtTime(t2, withSec)}`;
+}
+
+/* ---------- render ---------- */
+function render(isTweenFrame = false) {
+  const win = WINDOWS[curWin];
+  const m = mix;
+  world.innerHTML = '';
+  latestLines = [];
+  liveRiverUpdates = [];
+  candleEls.clear();
+  beads = [];
+  window.__envAt = {};             // audit hook: thread key → envelope height at x
+  window.__debugThreads = null;
+  document.getElementById('winlab').textContent = win.label;
+
+  /* per-thread series + flows (one provider river per thread) */
+  const threads = THREADS.map(t => {
+    const series = threadSeries(t, win.mult);
+    const total = series.reduce((a, b) => a + b, 0);
+    const usum = Object.values(t.usage).reduce((a, b) => a + b, 0);
+    const flows = Object.keys(t.usage).map(provider => ({ provider }))
+      .sort((a, b) => PIDX[a.provider] - PIDX[b.provider]);
+    flows.forEach(fl => { fl.tokens = Math.round(total * t.usage[fl.provider] / usum); });
+    flows[flows.length - 1].tokens += Math.round(total) - flows.reduce((a, fl) => a + fl.tokens, 0);
+    return { ...t, series, total: Math.round(total), flows };
+  });
+  window.__debugThreads = threads;
+  threads.forEach(t => {
+    t.burnNow = meanSlice(t.series, BUCKETS - 3, BUCKETS);
+    t.rateNow = t.burnNow / win.bucketSec || 0;
+  });
+
+  /* family grouping */
+  const fams = [];
+  threads.forEach(t => {
+    if (t.childOf) return;
+    fams.push({ key: t.key, parent: t, members: [t, ...threads.filter(c => c.childOf === t.key)] });
+  });
+  famKeyByThread = new Map();
+  fams.forEach(f => f.members.forEach(mm => famKeyByThread.set(mm.key, f.key)));
+  const famOf = key => fams.find(f => f.key === key);
+
+  /* ribbon scale: totals surface (ribbons NEVER change on selection) */
+  const total = threads.reduce((s, t) => s + t.total, 0);
+  const projNames = [...new Set(threads.map(t => t.project))];
+  const projGapT = PROJ_BOX_GAP * (projNames.length - 1);
+  const provGapT = PR_GAP * (PROVIDERS.length - 1);
+  /* v19.1: the totals scale is a design constant, decoupled from the canvas
+     height — the biggest spender's candle is 200px and every card row grows
+     tall enough to hold its candle whole, so the flow column's height
+     derives from the data (the artboard is sized for it), never vice versa */
+  const scale = 200 / Math.max(...threads.map(t => t.total), 1);
+
+  /* global interval scale (v13): the busiest bucket in the view = 56px */
+  const maxBucket = Math.max(...threads.map(t => Math.max(...t.series)), 1);
+  const k = 56 / maxBucket;
+
+  /* live streaming multiplier: the current interval grows to completion */
+  const liveJ = liveJOf();
+
+  /* card metrics for this tween frame (only the selected family enlarges) */
+  const fullPanelH = f => CARD.panelTop[1] + CARD.panelHdr[1] + f.members.length * CARD.panelLine[1] + CARD.panelPad[1];
+
+  /* v17: fam cards GROUPED BY PROJECT (the middle column's box order, so
+     rivers stay uncrossed); clusters separated by CLUSTER_GAP gutters,
+     cards inside a cluster by FAMILY_GAP; a faint caption line above each
+     cluster. Gaps scale down proportionally (never the cards) when the
+     roomy layout would overflow the canvas. */
+  const clusters = projNames.map(nm => ({ name: nm, fams: fams.filter(f2 => f2.parent.project === nm) }));
+  const layoutFams = mmArg => {
+    /* v19.1: row heights are PER-MEMBER and candle-driven — a burning
+       thread's card row is exactly as tall as its total bar (min 26), so
+       the row accommodates the thread's entire candle; zero-spend rows
+       keep the readable 26px base. The selected family only adds panel
+       and font growth; rows do not change height with the tween. */
+    const rowHOf = (f2, mmm) => {
+      const base = f2.key === selected ? lerp(CARD.rowH[0], CARD.rowH[1], mmArg) : CARD.rowH[0];
+      const candle = mmm.total > 0 ? Math.max(3, mmm.total * scale) : 3;
+      return Math.max(base, candle);
+    };
+    const gapOf = f2 => f2.key === selected ? lerp(CARD.pitch[0] - CARD.rowH[0], CARD.pitch[1] - CARD.rowH[1], mmArg) : CARD.pitch[0] - CARD.rowH[0];
+    const pd = f2 => f2.key === selected ? lerp(CARD.zonePad[0], CARD.zonePad[1], mmArg) : CARD.zonePad[0];
+    const pn = f2 => f2.key === selected ? lerp(0, fullPanelH(f2), mmArg) : 0;
+    const famH = f2 => f2.members.reduce((a, mmm, i2) => a + (i2 ? gapOf(f2) : 0) + rowHOf(f2, mmm), 0);
+    const fixed = clusters.reduce((s2, cl) => s2 + CAPTION_H + cl.fams.reduce((a, f2) =>
+      a + famH(f2) + 2 * pd(f2) + pn(f2), 0), 0);
+    const famGaps = clusters.reduce((s2, cl) => s2 + (cl.fams.length - 1), 0);
+    const gapTarget = (clusters.length - 1) * CLUSTER_GAP + famGaps * FAMILY_GAP;
+    const budget = H - BOTTOM + 4 - FAM_TOP - fixed;
+    const gs = budget >= gapTarget ? 1 : Math.max(0.25, budget / gapTarget);
+    let y2 = FAM_TOP;
+    clusters.forEach(cl => {
+      cl.captionY = y2 + 12;
+      y2 += CAPTION_H;
+      cl.fams.forEach((f2, fi2) => {
+        if (fi2) y2 += FAMILY_GAP * gs;
+        f2.y = y2;
+        f2.pad = pd(f2);
+        f2.panelH = pn(f2);
+        f2.threads = f2.members.map(mmm => mmm.key);
+        let cy = y2;
+        f2.members.forEach((mmm, mi2) => {
+          if (mi2) cy += gapOf(f2);
+          mmm.slotY = cy;
+          mmm.slotH = rowHOf(f2, mmm);
+          cy += mmm.slotH;
+        });
+        f2.rowsH = cy - y2;
+        y2 += f2.rowsH + 2 * f2.pad + f2.panelH;
+      });
+      y2 += CLUSTER_GAP * gs;
+    });
+    return y2;
+  };
+  /* v17: the gap scaling inside layoutFams guarantees the column ends at
+     the guard line (844) for any mix — the old mix-clamp overflow guard
+     degenerated at that exact boundary and froze the card at compact, so
+     it is retired; gaps absorb everything, cards never shrink */
+  const mUse = m;
+  const endY = layoutFams(mUse);
+  window.__layoutBottom = endY;
+
+  /* candles (v18): stacked per project, mirroring the middle bar; the real
+     heights are computed in the stacked pass below (t.candleH / t.candleMid);
+     zero-spend = 3px grey stub at its row */
+  const candleOf = t => Math.max(3, t.candleH || 3);
+
+  /* project column: faces subdivided per (provider, thread); in A the slice
+     = the river's PROFILE width at the face (per-thread, mid-face x); in
+     B/C it stays the shipped totals subdivision */
+  const keyMap = new Map(threads.map(t => [t.key, t]));
+  const projInfo = projNames.map(name => {
+    const members = threads.filter(t => t.project === name);
+    return { name, members, total: members.reduce((s, t2) => s + t2.flows.reduce((a, f2) => a + f2.tokens, 0), 0) };
+  });
+  projInfo.forEach(p => {
+    const pairs = [];
+    PROVIDERS.forEach(pr => {
+      p.members.forEach(mm => {
+        const fl = mm.flows.find(x => x.provider === pr.id);
+        if (fl) pairs.push({ provider: pr.id, thread: mm.key, tokens: fl.tokens });
+      });
+    });
+    p.face = pairs.map(pr => {
+      /* v18: the middle bars are stacked bars of TOTAL tokens in every
+         encoding (the A-profile slice form is retired) */
+      let hFace = Math.max(2, pr.tokens * scale);
+      return { ...pr, h: hFace };
+    });
+  });
+  /* project column (v16): each project gets a BOX whose height is driven by
+     its thread cards — the span its members occupy in the family column —
+     with the token-sliced core as the minimum; boxes spread across the
+     column so the middle never gets cramped */
+  const spanOf = p => {
+    /* v19.1: the bar spans its members' rows EXACTLY — the candle run's
+       extent == the bar's height (no breathing slack: the +2 outskirts of
+       the deleted pill were vestigial) */
+    const ys = p.members.map(mm => [mm.slotY, mm.slotY + mm.slotH]);
+    return Math.max(...ys.map(y => y[1])) - Math.min(...ys.map(y => y[0]));
+  };
+  projInfo.forEach(p => {
+    p.core = p.face.reduce((a, x) => a + x.h, 0);
+    p.h = Math.max(p.core + 8, spanOf(p));
+  });
+  {
+    const boxTotal = projInfo.reduce((s, p) => s + p.h, 0);
+    const slack = (H - TOP - BOTTOM - boxTotal) / (projInfo.length - 1);
+    const gapP = Math.max(PROJ_BOX_GAP, slack);
+    let c = TOP + Math.max(0, (H - TOP - BOTTOM - boxTotal - gapP * (projInfo.length - 1)) / 2);
+    projInfo.forEach(p => {
+      p.y = c;
+      /* v18: the colored slices FILL the whole bar height (a single stacked
+         bar graph of total tokens) — no core-centered slack inside */
+      p.core0 = p.core;
+      p.face.forEach(fc => {
+        fc.hCore = fc.h;
+        fc.h = fc.tokens / p.total * p.h;
+      });
+      p.core = p.h;
+      let cc = c;
+      p.face.forEach(fc => { fc.y = cc; cc += fc.h; });
+      c += p.h + gapP;
+    });
+  }
+  const faceSlot = new Map();
+  projInfo.forEach(p => p.face.forEach(fc => faceSlot.set(p.name + '|' + fc.provider + '|' + fc.thread, fc)));
+
+  /* provider column: slot per (project, member) pair, member y order */
+  PROVIDERS.forEach(p => {
+    p.total = 0;
+    p.pairs = [];
+    threads.forEach(mm => {
+      const fl = mm.flows.find(x => x.provider === p.id);
+      if (fl) { p.pairs.push({ thread: mm.key, project: mm.project, tokens: fl.tokens }); p.total += fl.tokens; }
+    });
+    p.pairs.sort((a, b) => keyMap.get(a.thread).slotY - keyMap.get(b.thread).slotY);
+  });
+  {
+    const blockH = PROVIDERS.reduce((s, p) => s + p.pairs.reduce((a, pr) => a + Math.max(2, pr.tokens * scale), 0), 0) + provGapT;
+    let c = TOP + (H - TOP - BOTTOM - blockH) / 2;
+    PROVIDERS.forEach(p => {
+      p.y = c; p.slotY = p.slotY || {};
+      p.pairs.forEach(pr => { p.slotY[pr.thread] = c; c += Math.max(2, pr.tokens * scale); });
+      p.h = c - p.y - PR_GAP;
+      c += PR_GAP;
+    });
+  }
+
+  /* v19.1: candles LIVE IN their card rows as the rows' left-edge bars —
+     the row is sized to hold its candle whole (see layoutFams), so a
+     project's candle run = its cards' span = its middle bar's height, and
+     runs can never overlap. Burning rows carry their honest data height,
+     top-flush; zero rows carry a full-slot grey no-data bar. River
+     landings = their own row's mid (= their candle's mid). */
+  threads.forEach(t => {
+    t.candleH = t.total > 0 ? Math.max(3, t.total * scale) : t.slotH;
+    t.candleY = t.total > 0 ? t.slotY + t.slotH - t.candleH : t.slotY;
+    t.candleMid = t.slotY + t.slotH / 2;
+    t.candleBurn = t.total > 0;
+  });
+
+  /* ---------- draw ---------- */
+  const gZone = el('g', {}), gRiv = el('g', {}), gNodes = el('g', {}), gLab = el('g', {});
+
+  fams.forEach(f => {
+    const isSel = f.key === selected;
+    const boxH = f.rowsH + 2 * f.pad + f.panelH;
+    if (isSel) {
+      const gl = el('rect', { x: FX - 14, y: f.y - f.pad - 6, width: ZONE_W + 18, height: boxH + 10, rx: 14, fill: 'none', stroke: '#4a6b8c', 'stroke-width': 5, 'stroke-opacity': 0.5, filter: 'url(#zoneGlow)', class: 'glowring' }, gZone);
+      setO(gl, 1);
+      gl.dataset.threads = f.threads.join(',');
+    }
+    const z = el('rect', { x: FX - 10, y: f.y - f.pad, width: ZONE_W, height: boxH, rx: isSel ? 8 : 10, fill: '#17222d', stroke: isSel ? '#3f5a75' : '#2f3f50', 'stroke-opacity': isSel ? 0.95 : 0.7, class: 'famzone' }, gZone);
+    setO(z, isSel ? 1 : (f.members.length > 1 ? 0.85 : 0.7));
+    z.dataset.threads = f.threads.join(',');
+    const famHit = el('rect', { x: FX - 10, y: f.y - f.pad, width: ZONE_W, height: boxH, fill: '#000', 'fill-opacity': 0 }, gZone);
+    bind(famHit, null, () => paintFocus(null, f.key));
+  });
+
+  /* rivers */
+  threads.forEach(t => {
+    const st = STATUS[t.status];
+    const rowMidY = t.candleMid;  // v18: rivers terminate ON their candle
+    t.flows.forEach(fl => {
+      const p = PROVIDERS[PIDX[fl.provider]];
+      const h = Math.max(1.5, fl.tokens * scale - 1);
+      const pjFace = faceSlot.get(t.project + '|' + fl.provider + '|' + t.key);
+      const sy = p.slotY[t.key] + Math.min(h, fl.tokens * scale) / 2;
+      const py = pjFace.y + pjFace.h / 2;
+      const P0 = { x: RIVERX0, y: sy }, P1 = { x: (RIVERX0 + JX) / 2, y: sy },
+            P2 = { x: (RIVERX0 + JX) / 2, y: py }, P3 = { x: JX, y: py };
+      /* piece 2 (v19): start at the project's middle-tier slice position,
+         run FLAT until ~55% of the span, then a late curve down/up into
+         the member's card row and its candle (the row's left-edge bar);
+         the band ends 4px inside the candle so it terminates ON the bar */
+      const seg2Span = FX - 6 - (JX + JW);
+      const Q0 = { x: JX + JW, y: py },
+            Q1 = { x: JX + JW + seg2Span * 0.55, y: py },
+            Q2 = { x: JX + JW + seg2Span * 0.85, y: rowMidY },
+            Q3 = { x: FX - 6, y: rowMidY };
+      const usum = Object.values(t.usage).reduce((a, b) => a + b, 0);
+      const share = t.usage[fl.provider] / usum;
+      const riverV = t.series.map(v => v * share);
+      const zero = riverV.every(v => v === 0);
+      const maxV = Math.max(...riverV) || 1;
+      const riverPt = x => ({ x, y: cubicYAt(Q0, Q1, Q2, Q3, x) });
+
+      /* candle: the member's share of the project's stacked bar (v18) —
+         static, drawn in the member section; the river tail streams live */
+      const tipFull = riverV[BUCKETS - 1] * k;   // the tail's completed width
+
+      if (zero) {
+        const stub = el('path', { d: `M ${r2(P0.x)} ${r2(P0.y)} C ${r2(P1.x)} ${r2(P1.y)}, ${r2(P2.x)} ${r2(P2.y)}, ${r2(P3.x)} ${r2(P3.y)} L ${r2(Q0.x)} ${r2(Q0.y)} C ${r2(Q1.x)} ${r2(Q1.y)}, ${r2(Q2.x)} ${r2(Q2.y)}, ${r2(Q3.x)} ${r2(Q3.y)}`, class: 'stub', stroke: '#5b6873', 'stroke-width': 1.3 }, gRiv);
+        setO(stub, 0.45);
+        stub.dataset.provider = fl.provider; stub.dataset.thread = t.key;
+        return;
+      }
+
+      /* per-band amps (C's crest reference) + interpolation */
+      const amps = riverV.map(v => Math.min(v / maxV * (h / 2), h / 2));
+      const seg2X0 = JX + JW;
+      const interp = arr => x => {
+        const f01 = (x - RIVERX0) / (FX - RIVERX0) * BUCKETS - 0.5;
+        if (f01 <= 0) return arr[0];
+        if (f01 >= BUCKETS - 1) return arr[BUCKETS - 1];
+        const i = Math.floor(f01), fr = f01 - i;
+        return arr[i] + (arr[i + 1] - arr[i]) * fr;
+      };
+
+      var setTail = null;   // A only: mutates the streaming tail bucket
+      let envAt;
+      var quietDim = false;
+      if (encKey === 'A') {
+        /* A — rivers = burn per interval, ALL the way back to the source:
+           width at any x = that bucket's burn × the one global scale k,
+           buckets spread evenly from the provider face (oldest) to the
+           family face (now); no funnel, no morph, no shoulder. */
+        const prof = riverV.map(v => v * k);
+        prof[BUCKETS - 1] = tipFull * liveJ;       // streaming tail grows live
+        const profAt = interp(prof);
+        const quiet = Math.max(...riverV) * k < 6;
+        setTail = jNow2 => { prof[BUCKETS - 1] = jNow2; };
+        envAt = x => Math.max(2, profAt(x));       // 2px floor for quiet threads
+        quietDim = quiet;
+      } else {
+        /* B & C — totals shape: the band holds its ribbon width all the way
+           to the face and lands ON the candle (same totals read, seamless) */
+        envAt = () => h;
+      }
+      window.__envAt[t.key] = x => envAt(x);
+
+      /* piece 1: A = the interval band (one continuous stream; drawn with
+         piece 2 below); B/C = the shipped totals stroke ribbon */
+      if (encKey !== 'A') {
+        const rib1 = el('path', { d: `M ${r2(P0.x)} ${r2(P0.y)} C ${r2(P1.x)} ${r2(P1.y)}, ${r2(P2.x)} ${r2(P2.y)}, ${r2(P3.x)} ${r2(P3.y)}`, class: 'ribbon', stroke: p.color, 'stroke-width': Math.max(1.5, h) }, gRiv);
+        setO(rib1, Math.max(0.5, st.base + 0.18));
+        rib1.dataset.provider = fl.provider; rib1.dataset.thread = t.key;
+      }
+
+      /* filled band: A = the whole river at profile width; B/C = segment 2.
+         STREAMING: the tail bucket grows until the interval completes. */
+      const samplesSeg1 = Array.from({ length: 7 }, (_, i) => RIVERX0 + (JX - RIVERX0) * i / 6);
+      const samples = Array.from({ length: 15 }, (_, i) => seg2X0 + seg2Span * i / 14);
+      /* v19.1: piece 1 is the totals stroke only in B/C; in A the river is
+         ONE continuous run-rate band from provider slot to candle */
+      const samplesAll = encKey === 'A' ? samplesSeg1.concat(samples) : samples;
+      const rivY = x => ({ x, y: x <= JX ? cubicYAt(P0, P1, P2, P3, x) : riverPt(x).y });
+      const slopeNL = (x, yHere) => {
+        const xPrev = Math.max(RIVERX0, x - 2), xNext = Math.min(FX, x + 2);
+        const yPrev2 = xPrev <= JX ? cubicYAt(P0, P1, P2, P3, xPrev) : riverPt(xPrev).y;
+        const yNext2 = xNext <= JX ? cubicYAt(P0, P1, P2, P3, xNext) : riverPt(xNext).y;
+        void yHere;
+        return Math.hypot(1, (yNext2 - yPrev2) / ((xNext - xPrev) || 2));
+      };
+      const buildPaths = () => {
+        const topP2 = [], botP2 = [];
+        samplesAll.forEach(x => {
+          const xy = rivY(x);
+          const nl = slopeNL(x, xy.y);
+          const w2 = envAt(x) / 2;               // edge offset = HALF the band width
+          topP2.push({ x: xy.x, y: xy.y - w2 / nl });
+          botP2.push({ x: xy.x, y: xy.y + w2 / nl });
+        });
+        const mx0 = FX - MOUTH_PX;
+        const mTop2 = [], mBot2 = [];
+        Array.from({ length: 7 }, (_, i) => mx0 + (FX - mx0) * i / 6).forEach(x => {
+          const xy = riverPt(x);
+          const nl = slopeNL(x, xy.y);
+          const w2 = envAt(x) / 2;
+          mTop2.push({ x, y: xy.y - w2 / nl });
+          mBot2.push({ x, y: xy.y + w2 / nl });
+        });
+        return { bandD: crPath(topP2, 'M') + crPath(botP2.slice().reverse(), ' L') + ' Z',
+                 mouthD: crPath(mTop2, 'M') + crPath(mBot2.slice().reverse(), ' L') + ' Z',
+                 topP2 };
+      };
+      const g0 = buildPaths();
+      const rfill = el('path', { d: g0.bandD, fill: p.color, class: 'rfill' }, gRiv);
+      setO(rfill, Math.max(0.5, st.base + (quietDim ? 0.04 : 0.18)));
+      rfill.dataset.provider = fl.provider; rfill.dataset.thread = t.key;
+
+      /* gradient mouth: the last stretch drawn solid-ish so the candle is fed */
+      const mouth = el('path', { d: g0.mouthD, fill: 'url(#mg-' + fl.provider + ')', class: 'mouth' }, gRiv);
+      setO(mouth, 1);
+      mouth.dataset.provider = fl.provider; mouth.dataset.thread = t.key;
+
+      /* bright upper edge: A's profile edge; C's burn crest rides inside the band */
+      if (encKey === 'A' || encKey === 'C') {
+        let topC = null, botC = null;
+        if (encKey === 'C') {
+          const crestAt = interp(amps);
+          const xsC = [RIVERX0, ...Array.from({ length: 6 }, (_, i) => RIVERX0 + (JX - RIVERX0) * (i + 1) / 6)]
+            .concat(samples.slice(3));
+          topC = []; botC = [];
+          xsC.forEach(x => {
+            const yy = x <= JX ? cubicYAt(P0, P1, P2, P3, x) : riverPt(x).y;
+            const yPrev = x <= JX ? cubicYAt(P0, P1, P2, P3, Math.max(RIVERX0, x - 2)) : riverPt(Math.max(seg2X0, x - 2)).y;
+            const yNext = x <= JX ? cubicYAt(P0, P1, P2, P3, Math.min(JX, x + 2)) : riverPt(Math.min(FX, x + 2)).y;
+            const nl2 = Math.hypot(1, (yNext - yPrev) / ((Math.min(JX + 526, x + 2) - Math.max(RIVERX0, x - 2)) || 2));
+            const a = Math.min(crestAt(x), (envAt(x) / 2) / nl2 * 0.98);
+            topC.push({ x, y: yy - a / nl2 });
+            botC.push({ x, y: yy + a / nl2 });
+          });
+        }
+        if (encKey === 'C') {
+          const env = el('path', { d: crPath(topC, 'M') + crPath(botC.slice().reverse(), ' L') + ' Z', fill: p.color, class: 'envelope' }, gRiv);
+          setO(env, 0.45);
+          env.dataset.provider = fl.provider; env.dataset.thread = t.key;
+        }
+        const crest = el('path', { d: encKey === 'A' ? crPath(g0.topP2, 'M') : crPath(topC, 'M'), stroke: lighten(p.color, encKey === 'A' ? 0.3 : 0.55), class: 'crest' }, gRiv);
+        setO(crest, encKey === 'A' ? 0.5 : 0.95);
+        crest.dataset.provider = fl.provider; crest.dataset.thread = t.key;
+      }
+
+      if (beadEligible(t)) {
+        const centerD = `M ${r2(P0.x)} ${r2(P0.y)} C ${r2(P1.x)} ${r2(P1.y)}, ${r2(P2.x)} ${r2(P2.y)}, ${r2(P3.x)} ${r2(P3.y)} L ${r2(Q0.x)} ${r2(Q0.y)} C ${r2(Q1.x)} ${r2(Q1.y)}, ${r2(Q2.x)} ${r2(Q2.y)}, ${r2(Q3.x)} ${r2(Q3.y)}`;
+        const b = el('path', { d: centerD, class: 'beads', stroke: lighten(p.color, 0.35), 'stroke-width': Math.max(1.5, Math.min(4, h * 0.3)), 'stroke-dasharray': '0.5 12' }, gRiv);
+        setO(b, 0.85);
+        b.dataset.provider = fl.provider; b.dataset.thread = t.key;
+        beads.push({ el: b, speed: beadSpeed(t) });
+      }
+
+      /* hover/click corridor (invisible): A = the profile band, B/C = the
+         ribbon area; both floored at 14px so thin streams stay hittable */
+      const xs = [RIVERX0, JX, ...samples];
+      const top = [], bot = [];
+      xs.forEach(x => {
+        const xy = x <= JX ? { x, y: cubicYAt(P0, P1, P2, P3, x) } : riverPt(x);
+        const yPrev = x <= JX ? cubicYAt(P0, P1, P2, P3, Math.max(RIVERX0, x - 2)) : riverPt(Math.max(seg2X0, x - 2)).y;
+        const yNext = x <= JX ? cubicYAt(P0, P1, P2, P3, Math.min(JX, x + 2)) : riverPt(Math.min(FX, x + 2)).y;
+        const nl = Math.hypot(1, (yNext - yPrev) / ((Math.min(x + 2, FX) - Math.max(x - 2, RIVERX0)) || 2));
+        const w2 = Math.max(encKey === 'A' ? envAt(x) : h, 14) / 2;
+        top.push({ x, y: xy.y - w2 / nl });
+        bot.push({ x, y: xy.y + w2 / nl });
+      });
+      const corridor = el('path', { d: crPath(top, 'M') + crPath(bot.slice().reverse(), ' L') + ' Z', fill: '#000', 'fill-opacity': 0, class: 'corridor' }, gRiv);
+      corridor.dataset.provider = fl.provider; corridor.dataset.thread = t.key;
+      bind(corridor, () => selectKey(t), () => paintFocus(selected || null, familyKeyOf(t)));
+
+      /* live streaming updater: the profile's tail (the current interval's
+         bucket) grows until the interval completes, then freezes. The
+         candle = the static totals read (v15). */
+      const crestEl = encKey === 'A' || encKey === 'C' ? [...gRiv.querySelectorAll('path.crest')].pop() : null;
+      liveRiverUpdates.push(jNow => {
+        const curCandle = Math.max(3, tipFull * jNow);
+        if (setTail) setTail(curCandle);
+        const b = buildPaths();
+        rfill.setAttribute('d', b.bandD);
+        mouth.setAttribute('d', b.mouthD);
+        if (crestEl && encKey === 'A') crestEl.setAttribute('d', crPath(b.topP2, 'M'));
+        window.__envAt[t.key] = x => envAt(x);
+      });
+    });
+  });
+
+  /* project bars (v18): the colored stacked slices ARE the bar — the dark
+     outlined pill is gone; slices span the full bar height */
+  projInfo.forEach(p => {
+    p.face.forEach(fc => {
+      const pp = PROVIDERS[PIDX[fc.provider]];
+      const seg = el('rect', { x: JX + 1, y: fc.y, width: JW - 2, height: fc.h, fill: pp.color, class: 'seg' }, gNodes);
+      setO(seg, 0.55);
+      seg.dataset.provider = fc.provider; seg.dataset.thread = fc.thread;
+    });
+    const top = el('text', { x: JX + JW + 12, y: p.y + 10, 'font-size': 12, 'font-weight': 700, fill: '#dfe7ee' }, gLab);
+    top.textContent = p.name;
+    const sub = el('text', { x: JX + JW + 12, y: p.y + 25, 'font-size': 10.5, fill: '#8b98a6' }, gLab);
+    sub.textContent = fmtK(p.total) + ' tokens';
+  });
+
+  /* provider nodes + labels */
+  PROVIDERS.forEach(p => {
+    const bh = Math.max(2, p.h);
+    const node = el('rect', { x: PX, y: p.y, width: PW, height: bh, rx: 3, fill: p.color, style: `filter: drop-shadow(0 0 7px ${p.color}66)` }, gNodes);
+    setO(node, 0.92);
+    const lbl = el('text', { x: PX - 10, y: p.y + bh / 2 - 1, 'text-anchor': 'end', 'font-size': 13, 'font-weight': 700, fill: '#eef4f9' }, gLab);
+    lbl.textContent = p.label;
+    setO(lbl, 0.95);
+    lbl.dataset.thread = 'provider';
+    const sub = el('text', { x: PX - 10, y: p.y + bh / 2 + 13, 'text-anchor': 'end', 'font-size': 11, fill: '#8b98a6' }, gLab);
+    sub.textContent = fmtK(p.total) + ' tokens · ' + Math.round(p.total / total * 100) + '%';
+    setO(sub, 0.8);
+    sub.dataset.thread = 'provider';
+    const hit = el('rect', { x: PX - 140, y: p.y - 4, width: 140 + PW + 8, height: bh + 8, fill: '#000', 'fill-opacity': 0 }, gLab);
+    bind(hit, null, () => paintFocus(null, null, [r => r.provider === p.id]));
+  });
+
+  /* faint project captions above each card cluster (readLine-style: small,
+     dim; matches the middle box's label so grouping reads without rivers) */
+  clusters.forEach(cl => {
+    if (!cl.fams.length) return;
+    const cap = el('text', { x: FX - 8, y: cl.captionY, 'font-size': 10, fill: '#6b7a89', class: 'seg pjcaption' }, gLab);
+    cap.textContent = cl.name;
+    setO(cap, 0.8);
+    cap.dataset.threads = cl.fams.map(f2 => f2.key).join(',');
+  });
+
+  /* member rows */
+  threads.forEach(t => {
+    const st = STATUS[t.status];
+    const pOwn = PROVIDERS[PIDX[t.flows[0].provider]];
+    const isSelFam = selected !== null && famKeyByThread.get(t.key) === selected;
+    const inZone = t.childOf ? 14 : 0;
+    const labelX = FX + 12 + inZone;
+    const baseFont = t.childOf ? 10.5 : 11;
+    const nameFont = isSelFam ? lerp(baseFont, 13, m) : baseFont;
+    const labelY0 = t.slotY + t.slotH / 2 + nameFont * 0.36;
+
+    const dot = el('circle', { cx: labelX + 3, cy: t.slotY + t.slotH / 2 - nameFont * 0.35, r: 3.5, fill: st.color, class: 'seg' }, gLab);
+    setO(dot, 0.95);
+    dot.dataset.provider = '*'; dot.dataset.thread = t.key;
+
+    /* the candle (v19.1): the row's LEFT-EDGE BAR, like the shipped board
+       cards' status bar — the row-sized holder carries the thread's entire
+       bar (bottom-aligned, so runs descend like the middle tier's slices);
+       zero-spend rows = full-slot grey no-data bar */
+    const hot = t.total > 0;
+    const mk = el('rect', { x: FX - 10, y: hot ? t.slotY + t.slotH - t.candleH : t.slotY, width: 7, height: hot ? t.candleH : t.slotH, rx: 2, fill: hot ? lighten(pOwn.color, 0.25) : '#5b6873', class: 'seg nowtip' }, gNodes);
+    setO(mk, hot ? 0.95 : 0.35);
+    mk.dataset.provider = '*'; mk.dataset.thread = t.key;
+    candleEls.set(t.key, { el: mk, yMid: t.candleMid, width: 7, thread: t });
+    bind(mk, () => selectKey(t), () => paintFocus(selected || null, familyKeyOf(t)));
+
+    const name = el('text', { x: labelX + 10, y: labelY0, 'font-size': nameFont, 'font-weight': t.childOf && !isSelFam ? 500 : 600, fill: t.childOf && !isSelFam ? '#a9b6c2' : '#eef4f9', class: 'seg' }, gLab);
+    name.textContent = t.name;
+    setO(name, 0.95);
+    name.dataset.provider = '*'; name.dataset.thread = t.key;
+
+    if (beadEligible(t) && t.rateNow > 0) {
+      const rr = el('text', { x: FX + 282, y: labelY0, 'font-size': lerp(10, CARD.rateFont[1], isSelFam ? m : 0), fill: lighten(pOwn.color, 0.25), 'font-weight': 500, 'text-anchor': 'end', class: 'seg' }, gLab);
+      rr.textContent = fmtTokMin(t.rateNow * 60) + ' tok/min';
+      setO(rr, 0.9);
+      rr.dataset.provider = '*'; rr.dataset.thread = t.key;
+    }
+
+    if (encKey === 'B') {
+      const famF = famOf(familyKeyOf(t));
+      const ft = famF.members.reduce((s, m2) => s + m2.total, 0);
+      if (t.total > 0 && ft > 0) {
+        const barW = (t.total / ft) * 262;
+        const bar = el('rect', { x: labelX + 10, y: t.slotY + t.slotH - 4, width: barW, height: 4, rx: 2, fill: pOwn.color, class: 'seg bbar' }, gLab);
+        setO(bar, 0.75);
+        bar.dataset.provider = t.flows[0].provider; bar.dataset.thread = t.key;
+      }
+    }
+
+    /* enlarged card treatment (Focus Board parent-card borrow), fades in with m */
+    const famF = famOf(familyKeyOf(t));
+    if (isSelFam && t === famF.parent && m > 0.02) {
+      const ft = famF.members.reduce((s, m2) => s + m2.total, 0);
+      const py0 = famF.y + famF.rowsH + famF.pad + lerp(2, CARD.panelTop[1], m);
+      const sub = el('text', { x: FX + 2, y: py0 + 9, 'font-size': 11, fill: '#8b98a6', class: 'seg' }, gLab);
+      sub.textContent = t.project + ' · parent';
+      setO(sub, 0.9 * m); sub.dataset.provider = '*'; sub.dataset.thread = t.key;
+      const chipT = fmtK(ft) + ' tokens · ' + win.label + ' · family of ' + famF.members.length;
+      const chipW = Math.min(ZONE_W - 24, 5.2 * chipT.length + 16);
+      const chipX = FX + ZONE_W - 12 - chipW;
+      const chip = el('rect', { x: chipX, y: py0 - 9, width: chipW, height: 18, rx: 9, fill: '#24303c', class: 'seg' }, gLab);
+      setO(chip, 0.95 * m); chip.dataset.provider = '*'; chip.dataset.thread = t.key;
+      const chipT2 = el('text', { x: chipX + chipW / 2, y: py0 + 4, 'font-size': 10, fill: '#c4cfd9', 'text-anchor': 'middle', class: 'seg' }, gLab);
+      chipT2.textContent = chipT;
+      setO(chipT2, 0.95 * m); chipT2.dataset.provider = '*'; chipT2.dataset.thread = t.key;
+      const ruleY0 = py0 + 14;
+      famF.members.forEach((mm, mi4) => {
+        const yy = py0 + 14 + mi4 * lerp(0, CARD.panelLine[1], m);
+        const mp = PROVIDERS[PIDX[mm.flows[0].provider]];
+        const pname = mm.name.length > 16 ? mm.name.slice(0, 15) + '…' : mm.name;
+        const nameT = el('text', { x: FX + 16, y: yy + 10, 'font-size': 12, fill: mm.rateNow > 0 ? lighten(mp.color, 0.25) : '#8b98a6', 'font-weight': 500, class: 'seg' }, gLab);
+        nameT.textContent = pname;
+        setO(nameT, 0.9 * m); nameT.dataset.provider = '*'; nameT.dataset.thread = mm.key;
+        if (mm.series.some(v => v > 0)) {
+          const valT = el('text', { x: FX + 272, y: yy + 10, 'font-size': 11, fill: '#c4cfd9', 'font-weight': 500, 'text-anchor': 'end', class: 'seg' }, gLab);
+          valT.textContent = `${fmtK(mm.total)} tok · latest ${fmtK(mm.series[BUCKETS - 1] * liveJ)} tok`;
+          setO(valT, 0.95 * m); valT.dataset.provider = '*'; valT.dataset.thread = mm.key;
+          latestLines.push({ el: valT, value: mm.series[BUCKETS - 1], win, member: mm });
+        } else {
+          const valT = el('text', { x: FX + 272, y: yy + 10, 'font-size': 11, fill: '#5b6873', 'font-weight': 500, 'text-anchor': 'end', class: 'seg' }, gLab);
+          valT.textContent = 'no burn in window';
+          setO(valT, 0.8 * m); valT.dataset.provider = '*'; valT.dataset.thread = mm.key;
+        }
+      });
+      const lastLineY = py0 + 14 + (famF.members.length - 1) * lerp(0, CARD.panelLine[1], m) + 12;
+      const rule = el('line', { x1: FX + 9, y1: ruleY0 - 4, x2: FX + 9, y2: lastLineY, stroke: '#31404f', 'stroke-width': 1, class: 'seg' }, gLab);
+      setO(rule, 0.9 * m);
+      rule.dataset.provider = '*'; rule.dataset.thread = t.key;
+    }
+
+    const hit = el('rect', { x: FX - 16, y: t.slotY - 2, width: 216, height: t.slotH + 4, fill: '#000', 'fill-opacity': 0 }, gLab);
+    hit.dataset.provider = '*'; hit.dataset.thread = t.key;
+    bind(hit, () => selectKey(t), () => paintFocus(selected || null, familyKeyOf(t)));
+  });
+
+  /* header rate */
+  const sumRate = threads.reduce((s, t) => s + t.rateNow, 0);
+  rateSumTpm = sumRate * 60;
+  document.getElementById('rate').textContent = fmtTokMin(rateSumTpm);
+
+  /* legend line 2 (encoding-specific): the mode's grammar in one clause */
+  document.getElementById('readLine2').innerHTML = encKey === 'A'
+    ? '<b>river</b> = burn per interval, all the way back · <b>candle</b> = total spent'
+    : encKey === 'B'
+      ? 'everything = totals · <b>bar</b> = member\u2019s share of the family\u2019s window'
+      : '<b>band</b> = total · <b>crest</b> = tokens per interval (its own mini-scale)';
+
+  /* audit surface: the harness's evaluate is world-isolated, so every fact
+     the checks need goes through DOM datasets, never window globals */
+  {
+    const mono = {};
+    threads.forEach(t2 => {
+      if (!(window.__envAt && window.__envAt[t2.key])) return;
+      /* no-shoulder proof: the measured band width must equal the expected
+         construction (bucket·k at that x, or the totals width in B/C);
+         ±2px tolerance, so only construction artifacts (funnels, double
+         widths, discontinuities) fail it — bursty DATA passes honestly */
+      const usum2 = Object.values(t2.usage).reduce((a, b) => a + b, 0);
+      const f = t2.flows[0];
+      const share2 = f ? t2.usage[f.provider] / usum2 : 1;
+      const expected = x => {
+        if (encKey === 'A') {
+          const f01 = (x - RIVERX0) / (FX - RIVERX0) * BUCKETS - 0.5;
+          const ii = Math.min(BUCKETS - 2, Math.max(0, Math.floor(f01)));
+          const expectV = t2.series[ii] + (t2.series[ii + 1] - t2.series[ii]) * clamp(f01 - ii, 0, 1);
+          return Math.max(2, expectV * share2 * k);
+        }
+        return Math.max(1.5, t2.total * scale - 1);
+      };
+      let okM = true, dev = 0;
+      for (let i2 = 0; i2 <= 40; i2++) {
+        const x = RIVERX0 + 1 + (FX - RIVERX0 - 82) * i2 / 40;   // excludes the live tail
+        const v2 = window.__envAt[t2.key](x);
+        const e2 = expected(x);
+        dev = Math.max(dev, Math.abs(v2 - e2));
+        if (dev > 2) okM = false;
+      }
+      mono[t2.key] = okM;
+    });
+    const au = document.getElementById('audit');
+    au.dataset.encKey = encKey;
+    au.dataset.liveJ = String(liveJ);
+    au.dataset.threads = JSON.stringify(threads);
+    au.dataset.scale = String(scale);
+    au.dataset.k = String(k);
+    au.dataset.faceSlices = JSON.stringify(projInfo.flatMap(p => p.face.map(fc => ({ k: fc.thread, pr: fc.provider, h: Math.round(fc.h * 100) / 100 }))));
+    au.dataset.envEnd = JSON.stringify(threads.map(t2 => ({
+      k: t2.key,
+      env: window.__envAt[t2.key] ? Math.round(window.__envAt[t2.key](FX - 0.5) * 100) / 100 : null,
+      candle: Math.round(candleOf(t2) * 100) / 100,
+      candleMid: Math.round(t2.candleMid * 100) / 100,
+      burn: !!t2.candleBurn,
+    })));
+    au.dataset.stack = JSON.stringify(projInfo.map(p => {
+      const tops = p.members.map(mm => mm.candleY), bots = p.members.map(mm => mm.candleY + mm.candleH);
+      return {
+        name: p.name, bar: Math.round(p.h * 100) / 100,
+        run: Math.round((Math.max(...bots) - Math.min(...tops)) * 100) / 100,
+      };
+    }));
+    au.dataset.mono = JSON.stringify(mono);
+    au.dataset.bottom = String(Math.round(window.__layoutBottom));
+    au.dataset.mix = String(Math.round(mix * 1000) / 1000);
+    au.dataset.selected = selected || '';
+  }
+
+  if (!isTweenFrame) applySel(); else paintFocus(selected || null, null);
+}
+
+/* ---------- animation loop ---------- */
+let last = performance.now();
+const offs = new Map();
+function tick(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!paused) {
+    beads.forEach(b => {
+      let o = (offs.get(b.el) || 0) - b.speed * speedMul * dt;
+      offs.set(b.el, o);
+      b.el.setAttribute('stroke-dashoffset', o);
+    });
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+/* ---------- chrome wiring ---------- */
+function setEnc(k) {
+  encKey = k;
+  document.getElementById('encA').classList.toggle('active', k === 'A');
+  document.getElementById('encB').classList.toggle('active', k === 'B');
+  document.getElementById('encC').classList.toggle('active', k === 'C');
+  render();
+}
+document.getElementById('encA').addEventListener('click', () => setEnc('A'));
+document.getElementById('encB').addEventListener('click', () => setEnc('B'));
+document.getElementById('encC').addEventListener('click', () => setEnc('C'));
+document.getElementById('pause').addEventListener('click', e => {
+  paused = !paused;
+  e.target.textContent = paused ? 'Resume flow' : 'Pause flow';
+});
+document.getElementById('speed').addEventListener('input', e => {
+  speedMul = +e.target.value;
+  document.getElementById('speedlab').textContent = 'flow ×' + speedMul.toFixed(1);
+});
+document.getElementById('window').addEventListener('change', e => { curWin = e.target.value; render(); });
+
+/* ticker: streaming intervals + headline jitter + live card lines */
+setInterval(() => {
+  if (paused || tween) return;
+  streamTicks += 1;
+  if (streamTicks > 16) streamTicks = 0;   // the interval completed; the next one starts growing
+  const jNow = liveJOf();
+  // headline jitter ±2.5%
+  if (rateSumTpm > 0) document.getElementById('rate').textContent = fmtTokMin(rateSumTpm * (1 + (Math.random() - 0.5) * 0.05));
+  // river tails grow with the streaming interval; candles = static totals (v15)
+  liveRiverUpdates.forEach(fn => fn(jNow));
+  // live latest lines on the enlarged card
+  if (latestLines.length) {
+    latestLines.forEach(L => {
+      const jv = L.value * jNow;
+      L.el.textContent = `${fmtK(L.member.total)} tok · latest ${fmtK(jv)} tok`;
+    });
+  }
+}, 1400);
+
+/* ---------- legend chips ---------- */
+document.getElementById('legendChips').innerHTML = PROVIDERS.map(p =>
+  `<span class="pchip"><span class="swatch" style="background:${p.color}"></span>${p.label}</span>`).join('');
+
+/* ---------- zoom / pan ---------- */
+let view = { x: 0, y: 0, k: 1 };
+const applyView = () => world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
+function svgPoint(e) {
+  const r = svg.getBoundingClientRect();
+  const sf = Math.min(r.width / W, r.height / H);
+  const ox = (r.width - W * sf) / 2, oy = (r.height - H * sf) / 2;
+  return { x: (e.clientX - r.left - ox) / sf, y: (e.clientY - r.top - oy) / sf };
+}
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = svgPoint(e);
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const k2 = Math.min(6, Math.max(0.5, view.k * f));
+  view.x = p.x - ((p.x - view.x) / view.k) * k2;
+  view.y = p.y - ((p.y - view.y) / view.k) * k2;
+  view.k = k2;
+  applyView();
+}, { passive: false });
+let pan = null;
+svg.addEventListener('pointerdown', e => {
+  if (e.target && e.target.dataset && e.target.dataset.thread) return;
+  pan = svgPoint(e);
+  svg.setPointerCapture(e.pointerId);
+  svg.style.cursor = 'grabbing';
+});
+svg.addEventListener('pointermove', e => {
+  if (!pan) return;
+  const p2 = svgPoint(e);
+  view.x += p2.x - pan.x; view.y += p2.y - pan.y;
+  pan = p2;
+  applyView();
+});
+svg.addEventListener('pointerup', () => { pan = null; svg.style.cursor = ''; });
+svg.addEventListener('dblclick', () => { view = { x: 0, y: 0, k: 1 }; applyView(); });
+
+/* ---------- boot ---------- */
+setEnc('A');
+</script>
+</body>
+</html>
