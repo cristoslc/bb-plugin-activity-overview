@@ -13,6 +13,10 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
+    "text": "**Clicking a project in the Unit treemap now zooms it to fill the view.** Tapping away or hitting fit restores the full board. While zoomed in, hovering a project previews one soft background tint per thread family, with press-and-hold standing in on touch devices.",
+    "children": []
+  },
+  {
     "text": "**Zooming no longer slides cards under the top nav.** The vertical pan clamp keeps the floating tab bar's margin clear, so project titles stay readable at every zoom level.",
     "children": []
   },
