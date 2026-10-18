@@ -52,6 +52,7 @@ import {
   type Status,
 } from "./model";
 import { THEME_CSS } from "./theme";
+import { TokenFlowView } from "./TokenFlowView";
 import {
   APP_VERSION,
   CURRENT_UNRELEASED_FINGERPRINT,
@@ -887,6 +888,7 @@ const TABS = [
   { id: "board", label: "Board" },
   { id: "treemap", label: "Unit treemap" },
   { id: "tiles", label: "Strip tiles" },
+  { id: "tokenflow", label: "Token flow" },
 ] as const;
 
 /** The gift glyph for the What's-new button (no host icon to lean on). */
@@ -1091,7 +1093,9 @@ export function OverviewPage() {
         {THEME_CSS +
           "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
       </style>
-      {measured ? (
+      {tab === "tokenflow" ? (
+        <TokenFlowView />
+      ) : measured ? (
         <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
           {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
@@ -1139,12 +1143,14 @@ export function OverviewPage() {
         </div>
       </div>
       <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
-      <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
-        <LegendRow counts={counts} />
-        <p className="mt-1 text-[10px] text-muted-foreground">
-          one dot = one thread · {total} visible · color = status, volume = count · drag to pan, scroll to zoom
-        </p>
-      </div>
+      {tab !== "tokenflow" ? (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
+          <LegendRow counts={counts} />
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            one dot = one thread · {total} visible · color = status, volume = count · drag to pan, scroll to zoom
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -57,11 +57,13 @@ test("theme: ramp tokens are declared (resolve via the theme-relative mix)", () 
 });
 
 test("theme: every --attn-* token referenced by the model and views is declared", () => {
-  const model = readFileSync(new URL("../views/model.ts", import.meta.url), "utf8");
-  const views = readFileSync(new URL("../views/Views.tsx", import.meta.url), "utf8");
+  const sources = [
+    "../views/model.ts",
+    "../views/Views.tsx",
+    "../views/TokenFlowView.tsx",
+  ].map((rel) => readFileSync(new URL(rel, import.meta.url), "utf8"));
   const refs = new Set<string>();
-  for (const src of [model, views, // THEME_CSS itself resolves bb tokens, not --attn ones
-  ]) {
+  for (const src of sources) {
     for (const m of src.matchAll(/var\((--attn-[a-z0-9-]+)[),]/g)) refs.add(m[1]!);
   }
   const all = declared(THEME_CSS);

@@ -1,6 +1,6 @@
 # Activity Overview
 
-A BB plugin that adds an "Activity Overview" nav panel with three live tabs over all visible threads. One dot = one thread: color reads status, dot volume reads count, dominance emerges from the color pattern.
+A BB plugin that adds an "Activity Overview" nav panel with four live tabs over all visible threads. One dot = one thread: color reads status, dot volume reads count, dominance emerges from the color pattern; the token flow tab reads where tokens go.
 
 ## Surfaces
 - Nav panel `Activity Overview` (icon: pulse line, registered as
@@ -9,7 +9,8 @@ A BB plugin that adds an "Activity Overview" nav panel with three live tabs over
   - Tab **Board** — fixed-slot project cards, shelf-packed.
   - Tab **Unit treemap** — squarified regions, honest constant-pitch dot fill.
   - Tab **Strip tiles** — 4px-per-thread strips reflowed to fill the width.
+  - Tab **Token flow** — provider → project → family amplitude wave (burn per interval, totals, and burn crest encodings), served over the `flow` RPC.
   - **What's new**: a gift button in the tab bar lists recent changes after an update — it pulses until opened and never disappears, so the changelog stays reachable.
 
 ## No
-- CLI commands, settings, secrets, background services, storage, RPCs. The views are frontend-only; the backend entry is a load-only stub.
+- CLI commands, settings, secrets, background services, or storage. The backend is a stateless read-only `flow` RPC plus a live push; the aggregate views stay frontend-only.

@@ -5,9 +5,10 @@ description: "What the Activity Overview plugin shows and how it reads thread da
 
 # Activity Overview plugin views
 
-The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with three
-aggregate tabs, all rendered live from the host's sidebar thread data. The backend is a load-only
-stub: no RPCs, no state.
+The Activity Overview plugin adds an "Activity Overview" nav panel in the BB sidebar with four
+tabs: three aggregate tabs rendered live from the host's sidebar thread data, plus the
+**Token flow** tab, whose per-thread burn history is served by the plugin's backend over the
+`flow` RPC (see below).
 
 - **Board** — one card per project, fixed dot slots (13px pitch). Volume of
   dots = thread count; color = status; empty slots stay put so daily change
@@ -34,6 +35,51 @@ stub: no RPCs, no state.
 - **Strip tiles** — one small tile per project: name over a strip, one 4px
   unit per thread (4px + 1px gap), hottest statuses at the left edge. Tiles
   flow-wrap to fill the panel width.
+- **Token flow** — the amplitude wave (below), ported from
+  `docs/user-experience/sankey-amplitude-wave-mockup.html`.
+
+## Token flow (the amplitude wave)
+
+A provider → project → family sankey where one thread is one river that leaves
+its provider block, passes through its project's stacked bar, and lands on the
+thread's own card row in the family column. Painted with hand-rolled SVG (no
+libraries), colors from `views/theme.ts`; the layout math is pure
+(`tokenFlowLayout` and the river path helpers in views/model.ts).
+
+- **Candles = total spend.** Each card row carries its thread's total tokens
+  (context-window usage) as a left-edge bar, provider-colored, bottom-aligned
+  in the row; the row is sized tall enough to hold the whole candle, so a
+  project's candle run equals its middle bar's height exactly. Zero-spend rows
+  carry a full-slot grey no-data bar. The totals px-per-token is a design
+  constant (the biggest spender gets 200px), shrunk only when the rail would
+  otherwise overflow the artboard.
+- **Three encodings**, switched from the floating chrome:
+  - **A · ribbon wave** — each river's width is its thread's burn per
+    interval, all the way back to the provider face; the busiest bucket sets a
+    fixed interval scale (56px). This is the default.
+  - **B · trace lane** — totals bands plus a per-member share bar (each
+    member's share of its family's window total).
+  - **C · burn envelope** — totals bands with an inner per-interval crest at
+    its own mini-scale.
+- **Cards cluster by project** (alphabetical, matching the middle column, so
+  rivers never cross needlessly) with a large gutter between clusters and a
+  small gap between cards inside one; a faint project caption sits over each
+  cluster.
+- **Selection lighting**: clicking a family enlarges its cards with a ~250ms
+  ease-out tween and lights *only that family's members* — the selected
+  threads' rivers, candles, and project slices stay lit while everything else
+  dims; re-clicking the same family (or empty space) releases it. Hover
+  lifts a provider's, project's, or family's rivers.
+- **Beads** stream along running threads at their sampled burn rate; a quiet
+  thread is a flat stream with its tok/min label. A 15 min / last hour window,
+  pause, and a speed slider ride the floating chrome, and wheel zooms, drag
+  pans, double-click resets (viewBox camera, not MapCanvas).
+- **Data**: the `flow` RPC reads each thread's persisted `usedTokens` (the
+  totals) and resamples the plugin's local sample ring of positive context
+  growth into equal wall-clock buckets (the burn profile). The host persists
+  no lifetime consumption, so totals are context usage and the sampler tracks
+  only since the plugin started; unrecognized providers ride the "other" row
+  (`providerOfModel` in views/model.ts — the server imports it).
 
 ## Map-style interface
 
@@ -76,13 +122,21 @@ the content block, no baked-in padding).
   #2e9e45, idle grey fading with age (#a8b3bf toward #2a3038).
 - Dominance is always read from the dot color pattern; no region is ever
   painted with a status override.
+- The Token flow tab is a structural sankey, not an aggregate: its ribbons
+  and card bars are line/area work (like the removed Activity flow's dashed
+  connectors were), and its region fills come from the `--attn-prov-*` tokens,
+  never from status.
 - Hover any dot for the thread tooltip.
 
 ## Operating constraints
 
 - The three aggregate tabs are pure frontend views over sidebar thread data;
-  they have no CLI commands, no settings, and no server state (the backend
-  entry is a load-only stub — the plugin build requires one). Data
+  they have no CLI commands, no settings, and no server state. Data
   refreshes when BB's sidebar data refreshes.
+- The Token flow tab's backend is the plugin's `flow` RPC (server.ts): a
+  stateless read of each thread's context usage plus a local sample ring,
+  pushed live over the coalesced `FLOW_CHANGED` realtime channel. Streaming
+  deltas feed the sampler, they do not rebuild anything.
 - Rendering constants live in views/model.ts and views/Views.tsx; the layout
-  and classification tests are in tests/model.test.ts.
+  and classification tests are in tests/model.test.ts, and the token-flow
+  pipeline tests in tests/token-flow.test.ts.

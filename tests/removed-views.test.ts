@@ -1,13 +1,13 @@
-// Removal contract: the agent lanes, activity flow, and token flow views are
-// deleted. The model must carry no orphan pipeline exports for them, the theme
-// must drop their tokens, and the tab bar must name only the three surviving
-// aggregate views. Guards against a partially-removed view resurfacing as
-// dead code or a dead token.
+// Removal contract: the agent lanes and activity flow views stay deleted, but
+// the token flow view has been revived as the amplitude wave (approved mockup
+// docs/user-experience/sankey-amplitude-wave-mockup.html). This guards against
+// the lane/flow pipelines resurfacing as dead code or a dead token, while
+// permitting the token flow's model, RPC, and provider-ribbon tokens.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as model from "../views/model.ts";
-import { THEME_CSS, THEME_TOKENS } from "../views/theme.ts";
 
+// Pipelines whose removal must stick (agent lanes + activity flow).
 const REMOVED_EXPORTS = [
   "laneRows",
   "makeLaneCards",
@@ -22,53 +22,36 @@ const REMOVED_EXPORTS = [
   "COL_GAP",
   "ROW_GAP",
   "FLOW_COLORS",
-  "PROVIDER_LABELS",
-  "tokenFlowStatus",
-  "buildFamilies",
-  "sankeyLayout",
-  "TOKEN_FLOW",
 ];
 
-test("removed views: the model exports none of the lane/flow/token pipelines", () => {
+test("removed views: the model exports none of the lane/activity-flow pipelines", () => {
   for (const name of REMOVED_EXPORTS) {
     assert.ok(!(name in model), `model still exports ${name}`);
   }
 });
 
-test("removed views: the theme declares no provider-ribbon or flow tokens", () => {
-  const tokens = THEME_TOKENS as readonly string[];
-  for (const name of tokens) {
-    assert.ok(!name.startsWith("attn-prov"), `theme still declares provider token ${name}`);
-    assert.ok(!name.includes("flow"), `theme still declares flow token ${name}`);
+test("revived token flow: the model exports the amplitude-wave pipeline", () => {
+  for (const name of ["tokenFlowLayout", "buildFamilies", "providerOfModel", "resampleWindow"]) {
+    assert.ok(name in model, `model is missing ${name}`);
   }
-  assert.ok(!THEME_CSS.includes("attn-prov"), "THEME_CSS still styles provider ribbons");
 });
 
-test("removed views: the tab bar carries only the three aggregate views", () => {
+test("removed views: the tab bar carries the three aggregate views and token flow", () => {
   const src = readText("views/Views.tsx");
   const tabs = tabsFrom(src);
-  assert.deepEqual(tabs, ["board", "treemap", "tiles"]);
-  for (const stale of ["graph", "flow", "tokenflow"]) {
+  assert.ok(tabs.includes("board") && tabs.includes("treemap") && tabs.includes("tiles"));
+  assert.ok(tabs.includes("tokenflow"), "the token flow tab is restored");
+  for (const stale of ["graph", "flow"]) {
     assert.ok(!tabs.includes(stale), `tab bar still carries ${stale}`);
   }
 });
 
-test("removed views: the flow backend helpers are gone and the backend is a stub", () => {
-  for (const path of [
-    "shared.ts",
-    "views/TokenFlowView.tsx",
-    "views/lineage.ts",
-    "views/timeline.ts",
-  ]) {
+test("removed views: the activity flow backend helpers stay gone", () => {
+  for (const path of ["views/lineage.ts"]) {
     assert.ok(!fileExists(path), `${path} still exists`);
   }
-  // `bb plugin build` requires a server entry; the remaining one must be a
-  // stub: it registers no RPCs, publishes nothing, and reads no timelines.
   const server = readText("server.ts");
-  assert.ok(!server.includes("rpc"), "server.ts still declares RPC work");
-  assert.ok(!server.includes("subscribe"), "server.ts still subscribes to events");
-  assert.ok(!server.includes("timeline"), "server.ts still reads timelines");
-  assert.ok(!fileExists("shared.ts") && !server.includes("SHAPE_CHANGED"), "realtime push contract still exists");
+  assert.ok(!server.includes("shape"), "server.ts still declares the activity-flow shape RPC");
 });
 
 // ---------- helpers ----------

@@ -672,3 +672,799 @@ export function placeRegionLabels(
   }
   return placed;
 }
+
+// ---------- token flow (provider → project → family, amplitude wave) ----------
+//
+// Ported from the approved amplitude-wave mockup
+// (docs/user-experience/sankey-amplitude-wave-mockup.html, v19.1). One thread
+// is one river that leaves its provider block, passes through its project's
+// stacked bar, and lands on the thread's own card row in the family column.
+// The candle is the thread's total spend (context-window usage), and the
+// project's candle run mirrors the middle bar's height exactly.
+
+/** Buckets of burn history a thread series carries (the burn profile). */
+export const FLOW_BUCKETS = 20;
+
+/** A thread as the token flow view consumes it (from the plugin's flow RPC). */
+export type FlowThread = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  title: string;
+  status: string;
+  parentThreadId: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  /** Context-window usage — the per-thread token measure the host persists. */
+  usedTokens: number | null;
+  modelContextWindow: number | null;
+  model: string | null;
+  provider: string | null;
+  /** Sampled burn rate, tokens per second (null: no sample history yet). */
+  rate: number | null;
+  /** Σ positive context growth the sampler has seen since the plugin started. */
+  tracked: number | null;
+  /** Per-bucket burn tokens (oldest → newest), the river's shape. Empty when
+   *  the host has no burn history for the thread. */
+  series: number[];
+};
+
+/** One sampled context reading (usedTokens at a wall-clock time). */
+export type FlowSample = { at: number; used: number };
+
+/**
+ * Resample a thread's context-growth history into `buckets` equal wall-clock
+ * intervals covering the newest `windowMs`, oldest first. Each emitted value
+ * is the Σ positive growth inside that interval (context-window use is flat
+ * or rising, so growth is the honest burn). A reading spanning an interval
+ * boundary contributes its growth to the interval it lands in.
+ */
+export function resampleWindow(
+  samples: FlowSample[],
+  nowMs: number,
+  windowMs: number,
+  buckets = FLOW_BUCKETS,
+): number[] {
+  const out = new Array<number>(buckets).fill(0);
+  if (samples.length < 2 || windowMs <= 0) return out;
+  const start = nowMs - windowMs;
+  const width = windowMs / buckets;
+  const ordered = [...samples].sort((a, b) => a.at - b.at);
+  for (let i = 1; i < ordered.length; i++) {
+    const prev = ordered[i - 1]!;
+    const cur = ordered[i]!;
+    const growth = cur.used - prev.used;
+    if (growth <= 0 || cur.at <= start) continue; // only fresh, positive growth
+    // Attribute the interval's growth to the bucket its end reading falls in.
+    const at = Math.min(cur.at, nowMs);
+    const index = Math.min(buckets - 1, Math.max(0, Math.floor((at - start) / width)));
+    out[index] += growth;
+  }
+  return out;
+}
+
+export const PROVIDER_ORDER = ["anthropic", "openai", "google", "ollama", "other"] as const;
+export type ProviderId = (typeof PROVIDER_ORDER)[number];
+
+export const PROVIDER_LABELS: Record<ProviderId, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+  ollama: "Ollama",
+  other: "Other",
+};
+
+/** Ribbon color per provider — theme tokens (theme.ts), both theme blocks. */
+export const PROVIDER_TOKENS: Record<ProviderId, string> = {
+  anthropic: "var(--attn-prov-anthropic)",
+  openai: "var(--attn-prov-openai)",
+  google: "var(--attn-prov-google)",
+  ollama: "var(--attn-prov-ollama)",
+  other: "var(--attn-prov-other)",
+};
+
+/**
+ * Map a model string ("ollama-cloud/glm…", "anthropic/claude…", "pi") onto a
+ * provider row; unknown prefixes land on "other". Single source of truth: the
+ * server imports this for the flow RPC, so attribution never drifts between
+ * front and back.
+ */
+export function providerOfModel(model: string | null): ProviderId {
+  if (model === null) return "other";
+  const m = model.toLowerCase();
+  const prefix = m.split("/", 1)[0] ?? m;
+  if (prefix.includes("ollama")) return "ollama";
+  if (prefix.includes("anthropic") || m.includes("claude")) return "anthropic";
+  if (prefix.includes("openai") || m.includes("gpt-") || prefix.includes("codex")) return "openai";
+  if (prefix.includes("google") || m.includes("gemini")) return "google";
+  return "other";
+}
+
+const providerOf = (t: FlowThread): ProviderId =>
+  t.provider !== null && (PROVIDER_ORDER as readonly string[]).includes(t.provider)
+    ? (t.provider as ProviderId)
+    : providerOfModel(t.model);
+
+/** Fold the shape statuses into the five token-flow states. */
+export type TokenFlowStatus = "running" | "waiting" | "done" | "error" | "idle";
+export function tokenFlowStatus(status: string): TokenFlowStatus {
+  switch (status) {
+    case "running":
+      return "running";
+    case "waiting":
+    case "queued":
+      return "waiting";
+    case "error":
+      return "error";
+    case "interrupted":
+    case "done":
+      return "done";
+    default:
+      return "idle";
+  }
+}
+
+/** Dot + pace per folded state: color token, bead speed factor, ribbon base
+ * opacity. Factor 0 = still (error/idle carry no beads). */
+export const TOKEN_FLOW_STATUS: Record<
+  TokenFlowStatus,
+  { color: string; factor: number; base: number }
+> = {
+  running: { color: "var(--attn-working)", factor: 1, base: 0.32 },
+  waiting: { color: "var(--attn-needs-you)", factor: 0.35, base: 0.22 },
+  done: { color: "var(--attn-unread)", factor: 0.15, base: 0.18 },
+  error: { color: "var(--attn-error)", factor: 0, base: 0.12 },
+  idle: { color: "var(--attn-grey-2)", factor: 0, base: 0.09 },
+};
+
+/** A family: a parent thread plus its spawned children (childOf). A family
+ * whose parent left the roster collapses to the child thread alone. */
+export type FlowFamily = {
+  key: string;
+  projectId: string;
+  projectName: string;
+  threads: FlowThread[]; // parent first, then children
+};
+
+/**
+ * Group threads into families. Deterministic: families ordered by project
+ * name, then the parent thread's title, then key; members parent-first, then
+ * children by creation time.
+ */
+export function buildFamilies(threads: FlowThread[]): FlowFamily[] {
+  const byId = new Map(threads.map((t) => [t.id, t] as const));
+  const sorted = [...threads].sort(
+    (a, b) =>
+      a.projectName.localeCompare(b.projectName) ||
+      a.title.localeCompare(b.title) ||
+      a.id.localeCompare(b.id),
+  );
+  const families = new Map<string, FlowThread[]>();
+  for (const t of sorted) {
+    const parent = t.parentThreadId !== null ? byId.get(t.parentThreadId) : undefined;
+    const key = parent !== undefined ? parent.id : t.id;
+    const members = families.get(key);
+    if (members === undefined) families.set(key, [t]);
+    else members.push(t);
+  }
+  const built: FlowFamily[] = [...families.entries()].map(([key, members]) => ({
+    key,
+    projectId: members[0]!.projectId,
+    projectName: members[0]!.projectName,
+    threads: members.sort(
+      (a, b) =>
+        Number(a.id === key ? 0 : 1) - Number(b.id === key ? 0 : 1) ||
+        (a.createdAt ?? a.updatedAt ?? 0) - (b.createdAt ?? b.updatedAt ?? 0) ||
+        a.id.localeCompare(b.id),
+    ),
+  }));
+  built.sort(
+    (a, b) =>
+      a.projectName.localeCompare(b.projectName) ||
+      (a.threads[0]?.title ?? "").localeCompare(b.threads[0]?.title ?? "") ||
+      a.key.localeCompare(b.key),
+  );
+  return built;
+}
+
+/** Geometry constants of the amplitude-wave world (the approved mockup). */
+export const TOKEN_FLOW = {
+  /** Artboard width; the world height grows with the card rail. */
+  W: 1740,
+  H_MIN: 880,
+  H_MAX: 4600,
+  /** Column face x positions: faces span [X, X + face width]. */
+  PX: 200,
+  PW: 16,
+  JX: 860,
+  JW: 14,
+  FX: 1400,
+  ZONE_W: 300,
+  TOP: 80,
+  BOTTOM: 40,
+  FAM_TOP: 240,
+  CAPTION_H: 18,
+  /** Gutter between project card clusters; gap between cards inside one. */
+  CLUSTER_GAP: 64,
+  FAMILY_GAP: 28,
+  /** Compact row metrics; the selected card grows toward the *_SEL values. */
+  ROW_H: 26,
+  ROW_H_SEL: 32,
+  PITCH: 32,
+  PITCH_SEL: 42,
+  ZONE_PAD: 12,
+  /** Minimum gap between middle-column project boxes; provider block gap. */
+  PROJ_BOX_GAP: 48,
+  PR_GAP: 64,
+  /** Design-constant px for the largest thread's total (the mockup's 200px). */
+  TOTAL_PX: 200,
+  /** Design-constant px for the busiest burn bucket (the mockup's 56px). */
+  BUCKET_PX: 56,
+  /** Mouth gradient overlay width feeding each candle. */
+  MOUTH_PX: 60,
+} as const;
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const clampN = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+export type FlowPt = { x: number; y: number };
+
+/** Cubic point + the y at a given x (bisection) — the river centerlines. */
+export function cubicPt(p0: FlowPt, p1: FlowPt, p2: FlowPt, p3: FlowPt, t: number): FlowPt {
+  const s = 1 - t;
+  return {
+    x: s * s * s * p0.x + 3 * s * s * t * p1.x + 3 * s * t * t * p2.x + t * t * t * p3.x,
+    y: s * s * s * p0.y + 3 * s * s * t * p1.y + 3 * s * t * t * p2.y + t * t * t * p3.y,
+  };
+}
+export function cubicYAt(p0: FlowPt, p1: FlowPt, p2: FlowPt, p3: FlowPt, x: number): number {
+  if (p3.x - p0.x < 0.5) return p0.y;
+  let lo = 0;
+  let hi = 1;
+  for (let k = 0; k < 26; k++) {
+    const mid = (lo + hi) / 2;
+    if (cubicPt(p0, p1, p2, p3, mid).x < x) lo = mid;
+    else hi = mid;
+  }
+  return cubicPt(p0, p1, p2, p3, (lo + hi) / 2).y;
+}
+/** Catmull-Rom → cubic path through points (the band edges). */
+export function crPath(pts: FlowPt[], first: string): string {
+  if (pts.length === 0) return "";
+  const r = (n: number) => Math.round(n * 10) / 10;
+  let d = `${first} ${r(pts[0]!.x)} ${r(pts[0]!.y)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)]!;
+    const p1 = pts[i]!;
+    const p2 = pts[i + 1]!;
+    const p3 = pts[Math.min(pts.length - 1, i + 2)]!;
+    d +=
+      ` C ${r(p1.x + (p2.x - p0.x) / 6)} ${r(p1.y + (p2.y - p0.y) / 6)},` +
+      ` ${r(p2.x - (p3.x - p1.x) / 6)} ${r(p2.y - (p3.y - p1.y) / 6)},` +
+      ` ${r(p2.x)} ${r(p2.y)}`;
+  }
+  return d;
+}
+
+export type FlowCard = {
+  thread: FlowThread;
+  familyKey: string;
+  projectId: string;
+  isParent: boolean;
+  y: number;
+  h: number;
+  candleH: number;
+  candleY: number;
+  candleMid: number;
+  burn: boolean;
+};
+export type FlowFamilyCard = {
+  key: string;
+  projectId: string;
+  projectName: string;
+  y: number;
+  rowsH: number;
+  pad: number;
+  panelH: number;
+  zoneY: number;
+  zoneH: number;
+  selected: boolean;
+  threads: string[];
+  members: FlowCard[];
+};
+export type FlowCluster = { name: string; captionY: number; families: FlowFamilyCard[] };
+export type FlowSlice = { provider: ProviderId; threadId: string; y: number; h: number };
+export type FlowProjectBox = {
+  id: string;
+  label: string;
+  total: number;
+  y: number;
+  h: number;
+  threads: string[];
+  members: FlowCard[];
+  slices: FlowSlice[];
+};
+export type FlowProviderBlock = {
+  id: ProviderId;
+  label: string;
+  color: string;
+  y: number;
+  h: number;
+  total: number;
+  slots: Array<{ threadId: string; y: number; h: number }>;
+};
+export type FlowRiver = {
+  id: string;
+  provider: ProviderId;
+  threadId: string;
+  familyKey: string;
+  projectId: string;
+  status: TokenFlowStatus;
+  rate: number | null;
+  /** Total tokens (context usage); the candle + totals stroke read from it. */
+  tokens: number;
+  /** Per-bucket burn previews (oldest → newest), the A profile / C crest. */
+  series: number[];
+  /** Piece 1 (provider → project) and piece 2 (project → card row) cubics. */
+  p0: FlowPt;
+  p1: FlowPt;
+  p2: FlowPt;
+  p3: FlowPt;
+  q0: FlowPt;
+  q1: FlowPt;
+  q2: FlowPt;
+  q3: FlowPt;
+  /** Totals stroke width in world px (B/C bands and the landing). */
+  w: number;
+};
+export type FlowEncoding = "A" | "B" | "C";
+export type FlowLayout = {
+  /** Effective px-per-token for totals (candles, bars, B/C widths). */
+  scale: number;
+  /** Effective px-per-token for the busiest burn bucket (A profile, C crest). */
+  bucketScale: number;
+  H: number;
+  clusters: FlowCluster[];
+  families: FlowFamilyCard[];
+  cards: FlowCard[];
+  projects: FlowProjectBox[];
+  providers: FlowProviderBlock[];
+  rivers: FlowRiver[];
+  droppedThreads: FlowThread[];
+};
+
+/**
+ * The full amplitude-wave layout for a thread list (already window-filtered by
+ * the view). Deterministic. `selected` enlarges one family's cards and `mix`
+ * (0 → 1) tweens that enlargement. Cards are clustered by project (the middle
+ * column's order, so rivers never cross needlessly). The totals px-per-token
+ * is the mockup's 200px design constant, shrunk only when the rail would
+ * overflow the artboard; the busiest burn bucket gets a fixed 56px.
+ */
+export function tokenFlowLayout(
+  threads: FlowThread[],
+  opts: { selected?: string | null; mix?: number } = {},
+): FlowLayout {
+  const C = TOKEN_FLOW;
+  const selected = opts.selected ?? null;
+  const mix = clampN(opts.mix ?? 1, 0, 1);
+  const tokensOf = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
+
+  // Crowding: drop the smallest families until the card rail fits the artboard.
+  const dropped: FlowThread[] = [];
+  let families = buildFamilies(threads);
+  const famTokens = (f: FlowFamily) => f.threads.reduce((s, t) => s + tokensOf(t), 0);
+
+  const spanOf2 = (vals: number[]) => (vals.length ? Math.max(...vals) - Math.min(...vals) : 0);
+
+  /** Positions the card rail for one effective totals scale; returns the
+   *  families, cards and the column bottom (world px). */
+  const rail = (fams: FlowFamily[], u: number) => {
+    const clusters: FlowCluster[] = [];
+    const cards: FlowCard[] = [];
+    const familyCards: FlowFamilyCard[] = [];
+    const rowHOf = (isSel: boolean, total: number) => {
+      const base = isSel ? lerp(C.ROW_H, C.ROW_H_SEL, mix) : C.ROW_H;
+      const candle = total > 0 ? Math.max(3, total * u) : 3;
+      return Math.max(base, candle);
+    };
+    const gapOf = (isSel: boolean) =>
+      isSel ? lerp(C.PITCH - C.ROW_H, C.PITCH_SEL - C.ROW_H_SEL, mix) : C.PITCH - C.ROW_H;
+    const padOf = () => C.ZONE_PAD;
+    const panelOf = (f: FlowFamily) =>
+      selected === f.key ? lerp(0, 6 + 14 + f.threads.length * 13 + 4, mix) : 0;
+
+    // Group families into project clusters (alphabetical, like the mockup).
+    const names = [...new Set(fams.map((f) => f.projectName))].sort((a, b) =>
+      a.localeCompare(b),
+    );
+    for (const name of names) {
+      const cfams = fams.filter((f) => f.projectName === name);
+      clusters.push({ name, captionY: 0, families: [] });
+      for (const f of cfams) {
+        const isSel = f.key === selected;
+        const members: FlowCard[] = [];
+        let cy = 0;
+        f.threads.forEach((t, i) => {
+          const tTotal = tokensOf(t);
+          const h = rowHOf(isSel, tTotal);
+          if (i) cy += gapOf(isSel);
+          members.push({
+            thread: t,
+            familyKey: f.key,
+            projectId: f.projectId,
+            isParent: i === 0,
+            y: cy,
+            h,
+            candleH: 0,
+            candleY: 0,
+            candleMid: 0,
+            burn: tTotal > 0,
+          });
+          cy += h;
+        });
+        familyCards.push({
+          key: f.key,
+          projectId: f.projectId,
+          projectName: f.projectName,
+          y: 0,
+          rowsH: cy,
+          pad: padOf(),
+          panelH: panelOf(f),
+          zoneY: 0,
+          zoneH: 0,
+          selected: isSel,
+          threads: f.threads.map((t) => t.id),
+          members,
+        });
+        clusters[clusters.length - 1]!.families.push(familyCards[familyCards.length - 1]!);
+      }
+    }
+
+    let y = C.FAM_TOP;
+    for (const cl of clusters) {
+      cl.captionY = y + 12;
+      y += C.CAPTION_H;
+      cl.families.forEach((fc, fi) => {
+        if (fi) y += C.FAMILY_GAP;
+        fc.y = y;
+        fc.zoneY = y - fc.pad;
+        fc.zoneH = fc.rowsH + 2 * fc.pad + fc.panelH;
+        let my = y;
+        fc.members.forEach((card, mi) => {
+          if (mi) my += gapOf(fc.selected);
+          card.y = my;
+          my += card.h;
+        });
+        y += fc.rowsH + 2 * fc.pad + fc.panelH;
+        for (const card of fc.members) cards.push(card);
+      });
+      y += C.CLUSTER_GAP;
+    }
+    y -= C.CLUSTER_GAP; // back off the trailing cluster gap
+    return { clusters, familyCards, cards, bottom: y };
+  };
+
+  // Effective totals scale: the 200px design constant, shrunk to fit if the
+  // rail would overflow the artboard (cards keep their floors; only the fit
+  // budget shrinks). Solve by fixed-point over the floors, like the mockup.
+  const maxTotal = Math.max(1, ...threads.map(tokensOf));
+  const designU = C.TOTAL_PX / maxTotal;
+  const availH = C.H_MAX - C.FAM_TOP - C.BOTTOM;
+  const solveU = (fams: FlowFamily[], budget: number) => {
+    let famGapCount = 0;
+    let fixed = 0;
+    const names = [...new Set(fams.map((f) => f.projectName))];
+    for (const name of names) {
+      const cfams = fams.filter((f) => f.projectName === name);
+      fixed += C.CAPTION_H;
+      fixed += cfams.reduce((s, f) => s + f.threads.length * C.ROW_H + 2 * C.ZONE_PAD, 0);
+      famGapCount += Math.max(0, cfams.length - 1);
+    }
+    const gaps =
+      Math.max(0, names.length - 1) * C.CLUSTER_GAP + famGapCount * C.FAMILY_GAP + fixed;
+    const room = budget - gaps;
+    const all = fams.flatMap((f) => f.threads);
+    let u = room > 0 && all.length ? room / all.reduce((s, t) => s + tokensOf(t), 0) : 0;
+    for (let pass = 0; pass < 12; pass++) {
+      let floored = 0;
+      let free = 0;
+      for (const t of all) {
+        if (tokensOf(t) * u < C.ROW_H) floored += C.ROW_H;
+        else free += tokensOf(t);
+      }
+      const next = free > 0 ? (room - floored) / free : 0;
+      if (Math.abs(next - u) < 1e-9) {
+        u = Math.max(0, next);
+        break;
+      }
+      u = Math.max(0, next);
+    }
+    return Math.max(0, u);
+  };
+
+  let u = designU;
+  for (;;) {
+    const r = rail(families, u);
+    const need = r.bottom + C.BOTTOM;
+    if (need <= C.H_MIN || r.bottom <= C.FAM_TOP + (C.H_MAX - C.FAM_TOP - C.BOTTOM)) {
+      // Fits by growing the artboard (or already fits the minimum height).
+      break;
+    }
+    // Overflowed the max artboard: shrink the totals scale to the fit budget.
+    const fitU = solveU(families, availH);
+    if (fitU < designU - 1e-9) {
+      const r2 = rail(families, fitU);
+      if (r2.bottom <= C.FAM_TOP + availH) {
+        u = fitU;
+        break;
+      }
+    }
+    if (families.length <= 1) {
+      u = fitU;
+      break;
+    }
+    // Still too crowded: drop the smallest family and retry.
+    const smallest = [...families].sort(
+      (a, b) =>
+        famTokens(a) - famTokens(b) ||
+        (a.threads[0]?.updatedAt ?? 0) - (b.threads[0]?.updatedAt ?? 0) ||
+        a.key.localeCompare(b.key),
+    )[0]!;
+    dropped.push(...smallest.threads);
+    const gone = new Set(smallest.threads.map((t) => t.id));
+    families = families.filter((f) => !f.threads.some((t) => gone.has(t.id)));
+  }
+
+  const placed = rail(families, u);
+  const H = Math.max(C.H_MIN, placed.bottom + C.BOTTOM);
+
+  // Candles: the card row's left-edge bar; burning rows carry their honest
+  // data height, zero rows a full-slot grey stub. The row is sized to hold it.
+  for (const card of placed.cards) {
+    const total = tokensOf(card.thread);
+    card.candleH = total > 0 ? Math.max(3, total * u) : card.h;
+    card.candleY = total > 0 ? card.y + card.h - card.candleH : card.y;
+    card.candleMid = card.y + card.h / 2;
+    card.burn = total > 0;
+  }
+  const cardById = new Map(placed.cards.map((c) => [c.thread.id, c]));
+
+  // Project boxes (middle): each box spans its members' card rows, with the
+  // token-sliced core as the minimum; boxes spread across the column.
+  const projectNames = [...new Set(placed.cards.map((c) => c.thread.projectId))];
+  const projectBoxes: FlowProjectBox[] = projectNames
+    .map((id) => {
+      const members = placed.cards.filter((c) => c.thread.projectId === id);
+      const total = members.reduce((s, c) => s + tokensOf(c.thread), 0);
+      return { id, label: members[0]!.thread.projectName, members, total, y: 0, h: 0, threads: [], slices: [] };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+  for (const p of projectBoxes) {
+    const span = spanOf2(p.members.flatMap((c) => [c.y, c.y + c.h]));
+    // v19.1: the bar's height IS the candle run — the extent its members'
+    // candles span — so a project's candle run mirrors its middle bar exactly.
+    // An all-zero project keeps a thin honest bar.
+    const tops = p.members.map((c) => c.candleY);
+    const bots = p.members.map((c) => c.candleY + c.candleH);
+    const run = Math.max(...bots) - Math.min(...tops);
+    const burning = p.members.some((c) => c.burn);
+    p.h = burning ? Math.max(3, run) : Math.max(8, span, 3);
+    p.threads = p.members.map((c) => c.thread.id);
+  }
+  {
+    const boxTotal = projectBoxes.reduce((s, p) => s + p.h, 0);
+    const slack =
+      projectBoxes.length > 1 ? (H - C.TOP - C.BOTTOM - boxTotal) / (projectBoxes.length - 1) : 0;
+    const gapP = Math.max(C.PROJ_BOX_GAP, slack);
+    let c = C.TOP + Math.max(0, (H - C.TOP - C.BOTTOM - boxTotal - gapP * Math.max(0, projectBoxes.length - 1)) / 2);
+    for (const p of projectBoxes) {
+      p.y = c;
+      let cc = c;
+      for (const m of p.members) {
+        const sliceH = p.total > 0 ? (tokensOf(m.thread) * u) / p.total * p.h : p.h / p.members.length;
+        p.slices.push({ provider: providerOf(m.thread), threadId: m.thread.id, y: cc, h: sliceH });
+        cc += sliceH;
+      }
+      c += p.h + gapP;
+    }
+  }
+  const sliceById = new Map<string, FlowSlice>();
+  for (const p of projectBoxes) for (const s of p.slices) sliceById.set(s.threadId, s);
+
+  // Provider blocks (left): one block per provider, pairs ordered by card y.
+  const providers: FlowProviderBlock[] = [];
+  {
+    const present = PROVIDER_ORDER.filter((id) => placed.cards.some((c) => providerOf(c.thread) === id));
+    const blocks = present.map((id) => {
+      const pairs = placed.cards
+        .filter((c) => providerOf(c.thread) === id)
+        .sort((a, b) => a.y - b.y || a.thread.id.localeCompare(b.thread.id));
+      return { id, pairs, h: pairs.reduce((s, c) => s + Math.max(2, tokensOf(c.thread) * u), 0) };
+    });
+    const stackH = blocks.reduce((s, b) => s + b.h, 0) + Math.max(0, blocks.length - 1) * C.PR_GAP;
+    let y = C.TOP + Math.max(0, (H - C.TOP - C.BOTTOM - stackH) / 2);
+    for (const b of blocks) {
+      const start = y;
+      const slots: Array<{ threadId: string; y: number; h: number }> = [];
+      let sy = start;
+      for (const c of b.pairs) {
+        const sh = Math.max(2, tokensOf(c.thread) * u);
+        slots.push({ threadId: c.thread.id, y: sy, h: sh });
+        sy += sh;
+      }
+      providers.push({
+        id: b.id,
+        label: PROVIDER_LABELS[b.id],
+        color: PROVIDER_TOKENS[b.id],
+        y: start,
+        h: Math.max(2, b.h),
+        total: b.pairs.reduce((s, c) => s + tokensOf(c.thread), 0),
+        slots,
+      });
+      y = sy + C.PR_GAP;
+    }
+  }
+  const provSlot = new Map<string, { y: number; h: number }>();
+  for (const p of providers) for (const s of p.slots) provSlot.set(s.threadId, s);
+
+  // Rivers: one per burning thread, provider slot → project slice → card row.
+  const rivers: FlowRiver[] = [];
+  const seg2X0 = C.JX + C.JW;
+  const seg2Span = C.FX - 6 - seg2X0;
+  // The busiest burn bucket sets the interval scale (A profile, C crest).
+  let maxBucket = 1;
+  for (const t of placed.cards.map((c) => c.thread)) {
+    for (const v of t.series) if (v > maxBucket) maxBucket = v;
+  }
+  const bucketScale = C.BUCKET_PX / maxBucket;
+  for (const card of placed.cards) {
+    const t = card.thread;
+    const total = tokensOf(t);
+    if (total <= 0) continue;
+    const prov = providerOf(t);
+    const ps = provSlot.get(t.id);
+    const js = sliceById.get(t.id);
+    if (ps === undefined || js === undefined) continue;
+    const w = Math.max(1.5, total * u - 1);
+    const sy = ps.y + ps.h / 2;
+    const py = js.y + js.h / 2;
+    const p0 = { x: C.PX + C.PW, y: sy };
+    const p1 = { x: (p0.x + C.JX) / 2, y: sy };
+    const p2 = { x: (p0.x + C.JX) / 2, y: py };
+    const p3 = { x: C.JX, y: py };
+    const q0 = { x: seg2X0, y: py };
+    const q1 = { x: seg2X0 + seg2Span * 0.55, y: py };
+    const q2 = { x: seg2X0 + seg2Span * 0.85, y: card.candleMid };
+    const q3 = { x: C.FX - 6, y: card.candleMid };
+    rivers.push({
+      id: `river:${t.id}`,
+      provider: prov,
+      threadId: t.id,
+      familyKey: card.familyKey,
+      projectId: t.projectId,
+      status: tokenFlowStatus(t.status),
+      rate: t.rate,
+      tokens: total,
+      series: t.series.length ? t.series : new Array<number>(FLOW_BUCKETS).fill(0),
+      p0,
+      p1,
+      p2,
+      p3,
+      q0,
+      q1,
+      q2,
+      q3,
+      w,
+    });
+  }
+
+  return {
+    scale: u,
+    bucketScale,
+    H,
+    clusters: placed.clusters,
+    families: placed.familyCards,
+    cards: placed.cards,
+    projects: projectBoxes,
+    providers,
+    rivers,
+    droppedThreads: dropped,
+  };
+}
+
+/** The river's centerline y at world x. */
+export function riverYAt(r: FlowRiver, x: number): number {
+  if (x <= TOKEN_FLOW.JX) return cubicYAt(r.p0, r.p1, r.p2, r.p3, x);
+  return cubicYAt(r.q0, r.q1, r.q2, r.q3, x);
+}
+/** The centerline's unit-normal denominator (hypot(1, slope)) at world x. */
+export function riverSlope(r: FlowRiver, x: number): number {
+  const xPrev = Math.max(r.p0.x, x - 2);
+  const xNext = Math.min(r.q3.x, x + 2);
+  const yPrev = riverYAt(r, xPrev);
+  const yNext = riverYAt(r, xNext);
+  return Math.hypot(1, (yNext - yPrev) / (xNext - xPrev || 2));
+}
+/** The river's band width (px) at world x for an encoding: A = the per-bucket
+ *  burn profile on the bucket scale; B/C = the totals width everywhere. */
+export function riverWidthAt(r: FlowRiver, x: number, bucketScale: number, enc: FlowEncoding): number {
+  if (enc !== "A") return r.w;
+  const prof = riverProfileAt(r, x, bucketScale);
+  return Math.max(2, prof);
+}
+/** Interpolate the A profile (bucket·bucketScale) at world x. */
+export function riverProfileAt(r: FlowRiver, x: number, bucketScale: number): number {
+  const n = r.series.length || FLOW_BUCKETS;
+  const f01 = ((x - r.p0.x) / (r.q3.x - r.p0.x)) * n - 0.5;
+  if (f01 <= 0) return r.series[0]! * bucketScale;
+  if (f01 >= n - 1) return r.series[n - 1]! * bucketScale;
+  const i = Math.floor(f01);
+  const fr = f01 - i;
+  return (r.series[i]! + (r.series[i + 1]! - r.series[i]!) * fr) * bucketScale;
+}
+
+/** Build the filled band, the gradient mouth and (A/C) the bright crest. */
+export function buildRiverPaths(
+  r: FlowRiver,
+  bucketScale: number,
+  enc: FlowEncoding,
+): { bandD: string; mouthD: string; crestD: string | null; topPts: FlowPt[] } {
+  const C = TOKEN_FLOW;
+  const widthAt = (x: number) => riverWidthAt(r, x, bucketScale, enc);
+  const xs1 = Array.from({ length: 7 }, (_, i) => r.p0.x + (C.JX - r.p0.x) * (i / 6));
+  const xs2 = Array.from({ length: 15 }, (_, i) => seg2Start() + seg2Width() * (i / 14));
+  const xsAll = enc === "A" ? xs1.concat(xs2) : xs2;
+  const top: FlowPt[] = [];
+  const bot: FlowPt[] = [];
+  for (const x of xsAll) {
+    const y = riverYAt(r, x);
+    const nl = riverSlope(r, x);
+    const half = widthAt(x) / 2;
+    top.push({ x, y: y - half / nl });
+    bot.push({ x, y: y + half / nl });
+  }
+  const bandD = crPath(top, "M") + crPath([...bot].reverse(), " L") + " Z";
+  const mx0 = C.FX - C.MOUTH_PX;
+  const mTop: FlowPt[] = [];
+  const mBot: FlowPt[] = [];
+  for (let i = 0; i < 7; i++) {
+    const x = mx0 + (C.FX - mx0) * (i / 6);
+    const y = riverYAt(r, x);
+    const nl = riverSlope(r, x);
+    const half = widthAt(x) / 2;
+    mTop.push({ x, y: y - half / nl });
+    mBot.push({ x, y: y + half / nl });
+  }
+  const mouthD = crPath(mTop, "M") + crPath([...mBot].reverse(), " L") + " Z";
+  let crestD: string | null = null;
+  if (enc === "A") crestD = crPath(top, "M");
+  else if (enc === "C") {
+    // The crest rides inside the totals band at its own (bucket) scale.
+    const half = r.w / 2;
+    const crust: FlowPt[] = [];
+    for (const x of xsAll) {
+      const y = riverYAt(r, x);
+      const nl = riverSlope(r, x);
+      const a = Math.min(riverProfileAt(r, x, bucketScale) / 2, half / nl * 0.98);
+      crust.push({ x, y: y - a / nl });
+    }
+    crestD = crPath(crust, "M");
+  }
+  return { bandD, mouthD, crestD, topPts: top };
+  function seg2Start() {
+    return C.JX + C.JW;
+  }
+  function seg2Width() {
+    return C.FX - 6 - (C.JX + C.JW);
+  }
+}
+
+/** The river centerline as one path (beads ride it in A/B/C). */
+export function riverCenterPath(r: FlowRiver): string {
+  const r2 = (n: number) => Math.round(n * 10) / 10;
+  return (
+    `M ${r2(r.p0.x)} ${r2(r.p0.y)} C ${r2(r.p1.x)} ${r2(r.p1.y)}, ${r2(r.p2.x)} ${r2(r.p2.y)}, ${r2(r.p3.x)} ${r2(r.p3.y)}` +
+    ` L ${r2(r.q0.x)} ${r2(r.q0.y)} C ${r2(r.q1.x)} ${r2(r.q1.y)}, ${r2(r.q2.x)} ${r2(r.q2.y)}, ${r2(r.q3.x)} ${r2(r.q3.y)}`
+  );
+}
