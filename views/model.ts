@@ -414,3 +414,261 @@ export function shelfPack<T extends { w: number; h: number }>(cards: T[], W: num
   }
   return { placed, H: y + shelfH };
 }
+
+/**
+ * The opening fill scale for a shelf-packed view: the largest scale in
+ * `[min, cap]` whose packed height still fits `budget`. This is the Board and
+ * Strip-tiles analogue of the treemap's world-equals-fit-box construction —
+ * grow the pack until the shelves use the chrome-free height, then let the
+ * camera open at k = 1. The cap is the anti-poster guard: with only one or two
+ * projects, `budget / packed.H` can be enormous, so without a cap a single
+ * card would balloon. `heightAt` must be the real pack height at a given
+ * scale; a monotone-ish height in `s` lets the bisection land in ~40 steps.
+ * When even `min` overflows, `min` is returned — never shrink below legible.
+ */
+export function fillScale(
+  heightAt: (s: number) => number,
+  budget: number,
+  cap: number,
+  min = 1,
+): number {
+  if (!(budget > 0) || !(cap > min)) return Math.max(min, Math.min(cap, min));
+  if (heightAt(cap) <= budget) return cap;
+  let lo = min;
+  let hi = cap;
+  for (let i = 0; i < 48; i++) {
+    const mid = (lo + hi) / 2;
+    if (heightAt(mid) <= budget) lo = mid;
+    else hi = mid;
+  }
+  // Re-shelving can make the height non-monotone; fall back to the floor if
+  // the bisected scale does not actually fit.
+  return heightAt(lo) <= budget ? lo : min;
+}
+
+// ---------- unit treemap: layout + always-visible labels ----------
+
+export type TreemapRegion = {
+  p: ProjectModel;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  cols: number;
+  rows: number;
+  cw: number;
+  ch: number;
+  cellTints: number[];
+};
+
+export type TreemapLayout = {
+  regions: TreemapRegion[];
+  pitch: number;
+  d: number;
+  projectCount: number;
+};
+
+/**
+ * Squarified region layout for the unit treemap. Region area = project thread
+ * count; each region is inset by `pad` so thin voids separate projects (no
+ * strokes or seams). Every visible project gets exactly one region, however
+ * small — the layout never drops a project, which is what keeps a label for
+ * every project possible. Returns null when there is nothing to draw.
+ */
+export function treemapLayout(
+  projects: readonly ProjectModel[],
+  W: number,
+  H: number,
+  pad = 2,
+): TreemapLayout | null {
+  const total = projects.reduce((s, p) => s + p.n, 0);
+  if (total === 0 || projects.length === 0 || W <= 0 || H <= 0) return null;
+  const rect = squarify(projects.map((p, i) => ({ key: String(i), weight: p.n })), W, H);
+  const pitch = Math.sqrt((W * H) / total);
+  const d = Math.max(5, Math.min(22, Math.round(pitch * 0.38)));
+  const regions = rect.map((r) => {
+    const p = projects[Number(r.key)]!;
+    const x = r.x + pad, y = r.y + pad;
+    const w = Math.max(1, r.w - 2 * pad), h = Math.max(1, r.h - 2 * pad);
+    let cols = Math.max(1, Math.floor(w / pitch));
+    let rows = Math.max(1, Math.floor(h / pitch));
+    let cap = cols * rows;
+    while (cap < p.n) {
+      if (w / cols >= h / rows) cols++;
+      else rows++;
+      cap = cols * rows;
+    }
+    const cw = w / cols, ch = h / rows;
+    return { p, x, y, w, h, cols, rows, cw, ch, cellTints: familyTints(p.cells.map((c) => c.fam)) };
+  });
+  return { regions, pitch, d, projectCount: projects.length };
+}
+
+/**
+ * The unit treemap's always-visible title layer.
+ *
+ * The old treatment drew a region's title only when the region was big enough
+ * (`w > 64 && h > 30`) and inside the world layer, so small projects had no
+ * title at fit and every title shrank away as the camera zoomed out. The fix
+ * decouples the layer from the camera: each chip is drawn at a fixed screen
+ * size and placed by a deterministic greedy pass that keeps it inside the
+ * chrome-free box and clear of the chips already placed. Association is by
+ * anchor — a chip starts at its own region's corner and is nudged outward only
+ * as far as the next free slot, so distance keeps a title legible as its
+ * own. Because positions are computed in screen space, the layer never
+ * inherits the camera's scale.
+ */
+export const LABEL_H = 15;
+export const LABEL_PAD = 4;
+export const LABEL_CHAR_W = 6.2;
+export const LABEL_SUFFIX_W = 30;
+export const LABEL_MAX_W = 190;
+
+/** A world→viewport camera (matches the map canvas transform). */
+export type LabelCamera = { k: number; tx: number; ty: number };
+/** A viewport-space rectangle; the label layer keeps chips inside it. */
+export type ViewBox = { x: number; y: number; w: number; h: number };
+
+/** Natural screen width of a title chip (untruncated), capped for tidiness. */
+export function labelNaturalWidth(name: string): number {
+  return Math.min(LABEL_MAX_W, Math.round(name.length * LABEL_CHAR_W + LABEL_SUFFIX_W));
+}
+
+/**
+ * The width budget a region hands its title at camera scale `k`: the region's
+ * world width on screen, minus the two side insets, floored at `LABEL_MIN_W`
+ * so a title stays legible even when its region is tiny. `LABEL_MIN_W` is the
+ * smallest chip that still shows a truncated but readable title; a chip wider
+ * than its own region overhangs it, which the greedy pass resolves by
+ * nudging.
+ */
+export const LABEL_MIN_W = 44;
+
+export function labelMaxWidth(regionWorldW: number, k: number): number {
+  return Math.max(LABEL_MIN_W, regionWorldW * k - 2 * LABEL_PAD);
+}
+
+export type RegionInput = { pid: string; name: string; n: number; x: number; y: number; w: number; h: number };
+
+export type PlacedLabel = {
+  pid: string;
+  name: string;
+  n: number;
+  /** Screen-space top-left (0,0 = the canvas's top-left). */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** True when the chip could not sit at its anchor and had to shift. */
+  displaced: boolean;
+  /** True when a focus elsewhere has dimmed this project. */
+  dimmed: boolean;
+};
+
+const OVERLAPS = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean =>
+  !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
+
+/**
+ * Deterministic candidate offsets on a uniform grid, ordered by squared screen
+ * distance from (0,0), nearest first. The grid step is a chip's height plus the
+ * inset. Built per call, bounded to the fit box (an anchor never needs a slot
+ * farther than the box's own span), so the scan is at most a few thousand cells
+ * and a real roster frees a slot within the first few rings.
+ */
+function labelSlots(box: ViewBox): ReadonlyArray<readonly [number, number]> {
+  const step = LABEL_H + LABEL_PAD;
+  const mi = Math.ceil(box.w / step);
+  const mj = Math.ceil(box.h / step);
+  const cells: Array<[number, number]> = [];
+  for (let i = -mi; i <= mi; i++) for (let j = -mj; j <= mj; j++) cells.push([i * step, j * step]);
+  cells.sort((a, b) => (a[0] ** 2 + a[1] ** 2) - (b[0] ** 2 + b[1] ** 2) || a[1] - b[1] || a[0] - b[0]);
+  return cells;
+}
+
+/**
+ * Place one fixed-size chip per on-screen region — the always-visible-title
+ * layer. Chips are drawn at a constant screen size and laid out in screen
+ * space, so the layer is decoupled from the camera scale and a title never
+ * shrinks away with the zoom.
+ *
+ * Search, in priority order:
+ *  1. The nearest free slot that still overlaps the chip's OWN region — the
+ *     title stays over the project it names whenever the region is roomy
+ *     enough (at the opening fit that is all but the two smallest projects).
+ *  2. The nearest free slot anywhere in the box — a region too small to hold
+ *     its own chip still keeps a visible title, nudged just past its edge.
+ *  3. The clamped anchor itself — the box is full, so the chip renders on top
+ *     (visible; only then possibly overlapping). Visibility wins over tidiness,
+ *     which is the operator's requirement.
+ *  A region wholly outside the box contributes no chip. Ordering is
+ *  largest-region-first so big titles win their anchors and small ones route
+ *  around them; the result is deterministic for a given (regions, cam, box,
+ *  focus).
+ */
+export function placeRegionLabels(
+  regions: readonly RegionInput[],
+  cam: LabelCamera,
+  box: ViewBox,
+  focusPid: string | null,
+): PlacedLabel[] {
+  const order = [...regions].sort((a, b) => b.w * b.h - a.w * a.h || (a.pid < b.pid ? -1 : 1));
+  const slots = labelSlots(box);
+  const placed: PlacedLabel[] = [];
+  for (const r of order) {
+    const sx = r.x * cam.k + cam.tx;
+    const sy = r.y * cam.k + cam.ty;
+    const sw = r.w * cam.k;
+    const sh = r.h * cam.k;
+    if (sx + sw <= box.x || sy + sh <= box.y || sx >= box.x + box.w || sy >= box.y + box.h) continue;
+    const natural = labelNaturalWidth(r.name);
+    const w = Math.min(natural, labelMaxWidth(r.w, cam.k));
+    const h = LABEL_H;
+    // Anchor at the top-left of the region's VISIBLE intersection with the
+    // box, clamped so the whole chip fits. Anchoring on the visible part (not
+    // the raw corner, which may be far off-screen) keeps a title near its own
+    // project instead of stranding it at the box edge.
+    const visX = Math.max(box.x, sx);
+    const visY = Math.max(box.y, sy);
+    const ax = Math.max(box.x, Math.min(visX + LABEL_PAD, box.x + box.w - w));
+    const ay = Math.max(box.y, Math.min(visY + LABEL_PAD, box.y + box.h - h));
+    const own = { x: sx, y: sy, w: sw, h: sh };
+    const fits = (cx: number, cy: number) =>
+      cx >= box.x && cy >= box.y && cx + w <= box.x + box.w && cy + h <= box.y + box.h &&
+      !placed.some((p) => OVERLAPS(p, { x: cx, y: cy, w, h }));
+    let slot: { x: number; y: number } | null = null;
+    // Tier 1: a fine scan inside the region's visible rect, so the chip lands
+    // over its own project wherever the region is big enough to hold it. The
+    // scan is bounded by the region (small), so a 4px step stays cheap.
+    const rl = Math.max(box.x, sx), rt = Math.max(box.y, sy);
+    const rr = Math.min(box.x + box.w - w, sx + sw - w);
+    const rb = Math.min(box.y + box.h - h, sy + sh - h);
+    const STEP = 4;
+    for (let cy = rt; cy <= rb && slot === null; cy += STEP) {
+      for (let cx = rl; cx <= rr; cx += STEP) {
+        if (fits(cx, cy)) { slot = { x: cx, y: cy }; break; }
+      }
+    }
+    if (slot === null) {
+      for (const [ox, oy] of slots) { // tier 2: anywhere free in the box
+        const cx = ax + ox, cy = ay + oy;
+        if (!fits(cx, cy)) continue;
+        slot = { x: cx, y: cy };
+        break;
+      }
+    }
+    const displaced = slot !== null && (slot.x !== ax || slot.y !== ay);
+    const at = slot ?? { x: ax, y: ay }; // tier 3: visibility fallback
+    placed.push({
+      pid: r.pid,
+      name: r.name,
+      n: r.n,
+      x: at.x,
+      y: at.y,
+      w,
+      h,
+      displaced,
+      dimmed: focusPid !== null && focusPid !== r.pid,
+    });
+  }
+  return placed;
+}

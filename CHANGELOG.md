@@ -10,6 +10,9 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ### Changed
 
+- **The Board opens at the same size as the Unit treemap now.** Its shelves grow to fill the chrome-free fit box (solving for the largest slot scale whose pack still fits the height, capped at 2×), so the opening camera lands at 1× instead of leaving unused viewport; a one- or two-project roster stays capped rather than ballooning into a poster.
+- **Every treemap project shows its title at every zoom and pan.** Titles moved to a screen-space layer drawn at a fixed size and decoupled from the camera, one chip per visible project seated without overlap — small projects are labeled at fit and no title shrinks away when the camera zooms out.
+
 ### Fixed
 
 ## [0.3.0] - 2026-10-18

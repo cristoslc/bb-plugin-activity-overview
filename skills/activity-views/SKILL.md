@@ -14,19 +14,23 @@ stub: no RPCs, no state.
   lands in a familiar spot.
 - **Unit treemap** — region area = thread count (squarified); each thread
   occupies its true unit area as one constant-size dot; neutral region fill,
-  thin voids separate projects, no strokes. The tab rides the shared
-  `MapCanvas` (wheel zoom, drag pan, corner controls). Zoomed in past 1.2×,
-  hovering a project previews its family structure — one subtle background
-  tint per thread family (`familyTints`, `FAMILY_TINTS` in views/model.ts;
-  family-derived, never status-derived). On touch, press-and-hold (~400ms)
-  on a project gives the same preview, which stays on until the next press.
-  Clicking/tapping a project focuses it: the other projects dim to 30%
-  opacity and the camera zooms (MapCanvas `openRect`) so the project fills
-  the fit box with its family tints locked on. Tapping anything else — the
-  dimmed neighbors or a void — re-fits the zoomed-out world and clears the
-  focus (the corner ⤢ re-fits the camera only; one tap then leaves the
-  focus). Helpers are pure (`familyTints`,
-  `zoomToRect`, `clampPan`) with tests in tests/model.test.ts.
+  thin voids separate projects, no strokes. Every project shows its title at
+  every zoom and pan: the labels live in a screen-space layer drawn at a fixed
+  size, decoupled from the camera, one chip per visible project seated without
+  overlap (`placeRegionLabels`, `treemapLayout` in views/model.ts). The tab
+  rides the shared `MapCanvas` (wheel zoom, drag pan, corner controls). Zoomed
+  in past 1.2×, hovering a project previews its family structure — one subtle
+  background tint per thread family (`familyTints`, `FAMILY_TINTS` in
+  views/model.ts; family-derived, never status-derived). On touch,
+  press-and-hold (~400ms) on a project gives the same preview, which stays on
+  until the next press. Clicking/tapping a project focuses it: the other
+  projects dim to 30% opacity and the camera zooms (MapCanvas `openRect`) so
+  the project fills the fit box with its family tints locked on. Tapping
+  anything else — the dimmed neighbors or a void — re-fits the zoomed-out
+  world and clears the focus (the corner ⤢ re-fits the camera only; one tap
+  then leaves the focus). Helpers are pure (`familyTints`, `treemapLayout`,
+  `placeRegionLabels`, `zoomToRect`, `clampPan`, `fillScale`) with tests in
+  tests/model.test.ts and tests/board-fill-labels.test.ts.
 - **Strip tiles** — one small tile per project: name over a strip, one 4px
   unit per thread (4px + 1px gap), hottest statuses at the left edge. Tiles
   flow-wrap to fill the panel width.
@@ -53,9 +57,11 @@ above the canvas:
 Openings: aggregate tabs open with the whole world fitted and centered
 inside a chrome-free fit box (`SAFE` top 60 / bottom 88 / side 12px, plus a
 16px `GAP` breathing ring); the Unit treemap is sized to exactly fill the
-fit box, and the Board and Strip tiles grow their slot/tile scale (capped
-2×) and re-shelve so their shelves use the fit box's height, the way the
-treemap fills its rect.
+fit box, and the Board solves for the largest slot scale whose shelf pack
+still fits the fit box's height (capped 2×) and re-shelves at that scale, so
+its opening camera also lands at 1× — the whole roster fills the viewport the
+way the treemap fills its rect. Strip tiles still grows its tile scale
+(capped 2×) and re-wraps at that scale.
 `MapCanvas` (views/Views.tsx) owns the pan/zoom state and clamps the world
 so content never fully leaves the viewport and clamped extremes keep a
 16px margin instead of butting flush against the edges; aggregate views

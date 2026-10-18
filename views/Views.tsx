@@ -35,9 +35,10 @@ import {
   classify,
   makeCards,
   shelfPack,
-  squarify,
+  fillScale,
+  treemapLayout,
+  placeRegionLabels,
   tip,
-  familyTints,
   FAMILY_TINTS,
   zoomToRect,
   clampPanEdges,
@@ -101,7 +102,16 @@ type MapApi = {
   openRect: (rect: { x: number; y: number; w: number; h: number }) => void;
   /** The live camera scale (the treemap's hover gates read it at event time). */
   scale: () => number;
+  /**
+   * Subscribe to camera changes (the treemap's label layer projects each
+   * region through the live transform). Fires on mount and on every committed
+   * transform; returns an unsubscribe.
+   */
+  subscribe: (cb: (cam: Cam) => void) => () => void;
 };
+
+/** The live screen→world camera (the map canvas transform). */
+type Cam = { k: number; tx: number; ty: number };
 
 /** World bounds that Stage renders a content region of `contentH` px into. */
 const worldOf = (w: number, contentH: number): WorldSize => ({
@@ -212,6 +222,8 @@ function MapCanvas({
   const dragRef = useRef<{ id: number; px: number; py: number; tx: number; ty: number; captured: boolean } | null>(null);
   const lastPanRef = useRef(0);
   const [panning, setPanning] = useState(false);
+  /** Camera subscribers (the treemap's label layer). */
+  const subsRef = useRef<Set<(cam: Cam) => void>>(new Set());
 
   const applyT = useCallback((next: { k: number; tx: number; ty: number }) => {
     const { vw, vh } = sizeRef.current;
@@ -273,12 +285,29 @@ function MapCanvas({
   // Publish the imperative API for views (the treemap's zoom focus).
   // A layout effect: views' passive effects must see the API on first mount.
   useLayoutEffect(() => {
-    const api = { fit, openRect, scale: () => tRef.current.k };
+    const api = {
+      fit,
+      openRect,
+      scale: () => tRef.current.k,
+      subscribe: (cb: (cam: Cam) => void) => {
+        subsRef.current.add(cb);
+        cb(tRef.current);
+        return () => {
+          subsRef.current.delete(cb);
+        };
+      },
+    };
     apiRef.current = api;
     return () => {
       if (apiRef.current === api) apiRef.current = null;
     };
   }, [apiRef, fit, openRect]);
+
+  // Fan every committed camera out to subscribers (the label layer). A layout
+  // effect, so the layer re-projects in the same frame the world moves.
+  useLayoutEffect(() => {
+    for (const cb of subsRef.current) cb(t);
+  }, [t]);
 
   // The opening view: fill the fit box. Whichever of world/viewport arrives
   // later fires it, so a remount after a tab change always ends fitted.
@@ -493,23 +522,17 @@ export function BoardView({
 }) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
-    // Fill the fit box the way the treemap fills its rect: grow the slot
-    // pitch and re-shelve so the shelves use the available height. Capped at
-    // 2× so one or two projects don't become a poster.
-    let scale = 1;
-    let packed = shelfPack(makeCards(projects, P, LBL, BOARD_MIN_CARD_W), w, 14, 14);
-    if (h > 0 && packed.H > 0) {
-      const s = Math.min(2, h / packed.H);
-      if (s > 1.02) {
-        scale = s;
-        packed = shelfPack(makeCards(projects, P * s, LBL * s, BOARD_MIN_CARD_W * s), w, 14, 14);
-        const s2 = h / packed.H;
-        if (s2 < 1 && s2 > 0.8) {
-          scale *= s2;
-          packed = shelfPack(makeCards(projects, P * scale, LBL * scale, BOARD_MIN_CARD_W * scale), w, 14, 14);
-        }
-      }
-    }
+    // Fill the fit box the way the treemap fills its rect: solve for the
+    // largest slot scale whose shelf pack still fits the chrome-free height,
+    // then re-shelve at that scale. Capped at 2× so one or two projects don't
+    // balloon into a poster; when even 1× overflows a very short panel the
+    // floor stays at 1× (legibility beats filling). The opening camera then
+    // lands at k = 1 — the board opens the same size the treemap does.
+    const scale =
+      h > 0
+        ? fillScale((s) => shelfPack(makeCards(projects, P * s, LBL * s, BOARD_MIN_CARD_W * s), w, 14, 14).H, h, 2)
+        : 1;
+    const packed = shelfPack(makeCards(projects, P * scale, LBL * scale, BOARD_MIN_CARD_W * scale), w, 14, 14);
     return { packed, scale, world: worldOf(w, packed.H) };
   }, [data, nowMs, w, h]);
   useEffect(() => {
@@ -574,33 +597,11 @@ export function UnitTreemapView({
   useEffect(() => {
     onWorld(world);
   }, [world, onWorld]);
-  const model = useMemo(() => {
-    const W = w, H = h, PAD = 2;
-    const { projects, total } = buildProjects(data.threads, data.projects, nowMs);
-    if (total === 0 || projects.length === 0) return null;
-    const rect = squarify(projects.map((p, i) => ({ key: String(i), weight: p.n })), W, H);
-    const pitch = Math.sqrt((W * H) / total);
-    const d = Math.max(5, Math.min(22, Math.round(pitch * 0.38)));
-    const regions = rect.map((r) => {
-      const p = projects[Number(r.key)];
-      const x = r.x + PAD, y = r.y + PAD, w = r.w - 2 * PAD, h = r.h - 2 * PAD;
-      const showLabel = w > 64 && h > 30;
-      const top = showLabel ? 13 : 0;
-      const h2 = Math.max(1, h - top);
-      let cols = Math.max(1, Math.floor(w / pitch));
-      let rows = Math.max(1, Math.floor(h2 / pitch));
-      let cap = cols * rows;
-      while (cap < p.n) {
-        if (w / cols >= h2 / rows) cols++;
-        else rows++;
-        cap = cols * rows;
-      }
-      const cw = w / cols, ch = h2 / rows;
-      const cellTints = familyTints(p.cells.map((c) => c.fam));
-      return { p, x, y, w, h, showLabel, top, cols, rows, cw, ch, cellTints };
-    });
-    return { regions, pitch, d, projectCount: projects.length };
-  }, [data, nowMs, w, h]);
+  const { projects } = useMemo(
+    () => buildProjects(data.threads, data.projects, nowMs),
+    [data, nowMs],
+  );
+  const model = useMemo(() => treemapLayout(projects, w, h), [projects, w, h]);
 
   // Focus: tapping a project dims the rest and zooms the board until the
   // project fills the fit box with its family tints locked on (family-derived
@@ -610,6 +611,14 @@ export function UnitTreemapView({
   const [focusPid, setFocusPid] = useState<string | null>(null);
   // Hover (mouse) / press-and-hold (touch) family-tint preview target.
   const [hoverPid, setHoverPid] = useState<string | null>(null);
+  // The live camera, mirrored here so the always-visible label layer can
+  // project each region into screen space at a fixed size.
+  const [cam, setCam] = useState<Cam>({ k: 1, tx: 0, ty: 0 });
+  useEffect(() => {
+    const api = apiRef.current;
+    if (api === null) return;
+    return api.subscribe(setCam);
+  }, [apiRef]);
   const holdRef = useRef<number | null>(null);
   const suppressTapRef = useRef(false);
   const clearHold = () => {
@@ -622,6 +631,19 @@ export function UnitTreemapView({
   if (!model) {
     return <p className="text-sm text-muted-foreground">No visible threads.</p>;
   }
+
+  // The always-visible title layer. Chips are projected into the chrome-free
+  // fit box in screen space (never in the world layer), so a title keeps its
+  // size and stays on screen at every zoom and pan; the placement pass seats
+  // one chip per visible region with no overlap. Because boxes and labels are
+  // both in view coordinates, the layer is unaffected by the camera scale.
+  const box = { x: SAFE.left + GAP, y: SAFE.top + GAP, w, h };
+  const labels = placeRegionLabels(
+    model.regions.map((r) => ({ pid: r.p.pid, name: r.p.name, n: r.p.n, x: r.x, y: r.y, w: r.w, h: r.h })),
+    cam,
+    box,
+    focusPid,
+  );
 
   // Family tints are a zoomed-in affordance: the camera must be past
   // HOVER_TINT_SCALE (a focused project keeps them regardless of scale).
@@ -703,7 +725,7 @@ export function UnitTreemapView({
                     className="pointer-events-none absolute"
                     style={{
                       left: (i % r.cols) * r.cw,
-                      top: r.top + Math.floor(i / r.cols) * r.ch,
+                      top: Math.floor(i / r.cols) * r.ch,
                       width: r.cw,
                       height: r.ch,
                       background: FAMILY_TINTS[tint],
@@ -719,7 +741,7 @@ export function UnitTreemapView({
                   key={cell.t.id}
                   cell={cell}
                   x={(j + 0.5) * r.cw - model.d / 2}
-                  y={r.top + (k + 0.5) * r.ch - model.d / 2}
+                  y={(k + 0.5) * r.ch - model.d / 2}
                   d={model.d}
                   nowMs={nowMs}
                 />
@@ -728,25 +750,35 @@ export function UnitTreemapView({
           </div>
         );
       })}
-      {model.regions
-        .filter((r) => r.showLabel)
-        .map((r) => (
-          <div
-            key={`lbl-${r.p.pid}`}
-            className="pointer-events-none absolute truncate"
-            style={{
-              left: r.x + 5,
-              top: r.y + 2,
-              maxWidth: r.w - 10,
-              fontSize: 10,
-              color: "var(--attn-label)",
-              opacity: focusPid !== null && focusPid !== r.p.pid ? 0.3 : 1,
-              zIndex: 3,
-            }}
-          >
-            {r.p.name} · {r.p.n}
-          </div>
-        ))}
+      {/* The always-visible title layer. Each chip is rendered counter-scaled
+          (scale 1/k about its own top-left) at its screen-space position, so
+          it keeps a constant size and never shrinks away with the camera; the
+          placement pass seats one chip per visible region with no overlap. */}
+      {cam.k > 0
+        ? labels.map((l) => (
+            <div
+              key={`lbl-${l.pid}`}
+              className="pointer-events-none absolute truncate"
+              title={`${l.name} · ${l.n}`}
+              style={{
+                left: (l.x - cam.tx) / cam.k,
+                top: (l.y - cam.ty) / cam.k,
+                width: l.w,
+                height: l.h,
+                transform: `scale(${1 / cam.k})`,
+                transformOrigin: "0 0",
+                fontSize: 10,
+                lineHeight: `${l.h}px`,
+                color: "var(--attn-label)",
+                background: "var(--attn-card)",
+                opacity: l.dimmed ? 0.3 : 1,
+                zIndex: 3,
+              }}
+            >
+              {l.name} · {l.n}
+            </div>
+          ))
+        : null}
     </Stage>
   );
 }
