@@ -43,8 +43,25 @@ test("plugin storage keys are namespaced to this plugin", () => {
 
 // ---------- changelog → feed derivation ----------
 
-test("the shipped app is a prerelease build on dev: APP_VERSION carries -dev", () => {
-  assert.equal(isPrereleaseVersion(APP_VERSION), true);
+test("a released APP_VERSION has a published entry; a dev build must not", () => {
+  // A released version whose modal cannot describe itself is a silent update;
+  // a -dev build is not a release, so its entry lives in CHANGELOG.md's
+  // [Unreleased] group until the finalize commit strips the suffix. Both
+  // halves matter: the dev half fails loudly if the suffix is dropped early.
+  if (isPrereleaseVersion(APP_VERSION)) {
+    assert.equal(
+      WHATS_NEW.some((entry) => entry.version === APP_VERSION),
+      false,
+    );
+    return;
+  }
+  assert.equal(WHATS_NEW.some((entry) => entry.version === APP_VERSION), true);
+});
+
+test("isPrereleaseVersion recognizes a prerelease suffix", () => {
+  assert.equal(isPrereleaseVersion("0.3.0-dev"), true);
+  assert.equal(isPrereleaseVersion("0.3.0-beta.1"), true);
+  assert.equal(isPrereleaseVersion("0.3.0"), false);
 });
 
 test("every published CHANGELOG section yields a derived entry, newest first", () => {
