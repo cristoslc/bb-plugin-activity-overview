@@ -268,10 +268,10 @@ test("a prerelease build leads the modal with its unreleased group when it has b
     assert.equal(entries[0].unreleased, true);
     assert.equal(entries[0].version, "0.3.0-dev");
     assert.ok(entries[0].items.length > 0);
-    // Behind it, the published feed — nothing runs newer than the last stable
-    // release yet, so the unreleased group stands alone here. The ordering
-    // rule of the merged feed is pinned by the WHATS_NEW sort test.
-    assert.deepEqual(entries.slice(1), []);
+    // Behind it, the published feed the reader has not seen yet — the same
+    // delta a stable build would show, so assert against that live delta and
+    // never assume emptiness (a publish between dev cycles makes it non-empty).
+    assert.deepEqual(entries.slice(1), entriesSince("0.2.0"));
   } else {
     assert.deepEqual(entries, entriesSince("0.2.0"));
   }
