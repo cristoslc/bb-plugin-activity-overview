@@ -190,22 +190,37 @@ unlocked vault; the repo-local override below replaces it.
 - Private key: `~/.ssh/activity_overview_release` (0600, never in
   1Password, never committed)
 - Public key: committed at `scripts/release-signing.pub`
-- Trust: committed at `scripts/release-signing.allowed` (one line per
-  signing key, oldest releases' keys kept so old tags still `git tag -v`)
+- Trust, committed (canonical record): `scripts/release-signing.allowed`
+  (one line per signing key, oldest releases' keys kept so old tags still
+  `git tag -v`)
+- Trust, for verification (`gpg.ssh.allowedSignersFile` points here):
+  `~/.ssh/allowed_signers_activity-overview` — a checkout-independent
+  copy with the same lines as the committed file
+
+The trust file has two locations on purpose. The committed copy is the
+canonical record, but an absolute path into a checkout breaks
+verification whenever that checkout sits at a commit that predates the
+signing files — and `main`'s whole job is to sit at release commits,
+which is exactly when a person runs `git tag -v`. The config therefore
+points at the machine-local `~/.ssh/allowed_signers_activity-overview`,
+which exists whatever commit any checkout is on.
 
 Repo wiring (absolute paths into the main checkout; worktrees share
 `.git/config`, so this applies to every worktree too):
 
 - `gpg.format=ssh`, `gpg.ssh.program=/usr/bin/ssh-keygen`, `tag.gpgSign=true`
 - `user.signingkey=$HOME/.ssh/activity_overview_release.pub`
-- `gpg.ssh.allowedSignersFile=<repo>/scripts/release-signing.allowed`
+- `gpg.ssh.allowedSignersFile=$HOME/.ssh/allowed_signers_activity-overview`
 
 Releasing a signed tag is then just
 `git tag -a vX.Y.Z <commit> -m "Release X.Y.Z: <summary>"` — `git tag -v`
 verifies against the allowed-signers file. Rotate by generating a new
 `~/.ssh/activity_overview_release`, replacing the `.pub` line and adding
-the old one to the allowed file with its era noted (tags never re-sign; a
-tag's fingerprint says which key era produced it).
+the old one to the allowed file with its era noted; rotation updates BOTH
+trust locations (the committed `scripts/release-signing.allowed` and
+`~/.ssh/allowed_signers_activity-overview`) since verification reads the
+latter (tags never re-sign; a tag's fingerprint says which key era
+produced it).
 
 ## 8. Release ledger
 
