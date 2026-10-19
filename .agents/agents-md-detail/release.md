@@ -179,6 +179,34 @@ bug second.
 `bb plugin dev activity-overview` is the watch-mode alternative for
 iterating, not for releases.
 
+## 7a. Tag signing (plain key file)
+
+Tag signing uses a plain, dedicated key file: no 1Password, no wrapper.
+The machine's global git config otherwise forces signing through 1Password
+(`gpg.program=op-ssh-sign`, `gpg.format=ssh`, `tag.gpgSign=true`,
+`user.signingkey` = the vault-held workstation key), which needs an
+unlocked vault; the repo-local override below replaces it.
+
+- Private key: `~/.ssh/activity_overview_release` (0600, never in
+  1Password, never committed)
+- Public key: committed at `scripts/release-signing.pub`
+- Trust: committed at `scripts/release-signing.allowed` (one line per
+  signing key, oldest releases' keys kept so old tags still `git tag -v`)
+
+Repo wiring (absolute paths into the main checkout; worktrees share
+`.git/config`, so this applies to every worktree too):
+
+- `gpg.format=ssh`, `gpg.ssh.program=/usr/bin/ssh-keygen`, `tag.gpgSign=true`
+- `user.signingkey=$HOME/.ssh/activity_overview_release.pub`
+- `gpg.ssh.allowedSignersFile=<repo>/scripts/release-signing.allowed`
+
+Releasing a signed tag is then just
+`git tag -a vX.Y.Z <commit> -m "Release X.Y.Z: <summary>"` — `git tag -v`
+verifies against the allowed-signers file. Rotate by generating a new
+`~/.ssh/activity_overview_release`, replacing the `.pub` line and adding
+the old one to the allowed file with its era noted (tags never re-sign; a
+tag's fingerprint says which key era produced it).
+
 ## 8. Release ledger
 
 - `CHANGELOG.md` is the full Keep-a-Changelog record. The `[Unreleased]`
