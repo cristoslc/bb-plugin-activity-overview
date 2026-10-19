@@ -1,92 +1,84 @@
 ---
-title: Token flow — swimlane flow-control spec
+title: Token flow — project stack + sky beam spec
 status: proposed
 owner: thr_e92b7ef398
 mockup: docs/user-experience/token-flow-swimlane-mockup.html
-supersedes: token-flow-tiled-spec.md (family-fold direction, declined)
+supersedes: token-flow-tiled-spec.md (declined)
 ---
 
-# Token flow — swimlane flow-control spec
+# Token flow — project stack + sky beam spec
 
 > [!IMPORTANT] Proposal, not implemented.
-> Doc-only turn. `views/` and `server.ts` are untouched; `npm test` is 102 pass and `npx tsc --noEmit` is clean. This mockup supersedes the family-fold/tiling direction, which the operator declined ("this isn't quite doing it").
+> Doc-only. `views/` and `server.ts` are untouched; `npm test` is 102 pass and `npx tsc --noEmit` is clean. Three mockup passes landed here (tiled → swimlane cards → this): this note is the current one.
 
-## The goal (operator's words, this is the north star)
+## The goal (north star)
 
-> The primary goal here is to see what the current token flow distribution looks like, in order to spot out-of-control threads. This is primarily a flow control display, with secondary benefits of seeing threads the operator may need to act on.
+> The primary goal is to see what the current token flow distribution looks like, in order to spot out-of-control threads. This is primarily a flow control display, with secondary benefits of seeing threads the operator may need to act on.
 
-So the display is **flow control first**: make "which thread is running away" obvious at a glance. "Who needs me" is a secondary read, served by the status lanes.
-
-## The hierarchy (three visible tiers)
+## The shape (three tiers, two axes)
 
 ```mermaid
-graph LR
-  P[Tier 1 Provider] -->|burn + activity lines| PJ[Tier 2 Project]
-  PJ -->|expand| S[Tier 3 Threads in status swimlanes]
+graph TD
+  P1[Tier 1 Provider — vertical spine] -->|burn + activity lines| P2[Tier 2 Project — pinned vertical stack]
+  P2 -->|expand| L[Tier 3 Threads — four status lanes, tiled across]
 ```
 
-The **family** level (parent + spawned children) drops out of the *visual* hierarchy. It survives in the data (`buildFamilies` still groups, and a thread row can still show the parent/child indent), but it is no longer a spatial container — the operator's list runs Provider → Project → Thread.
+- **Projects pile vertically** — one wide landscape row each, **never tiled**. The row list *is* the stack; it scrolls/grows downward.
+- **The tiers inside a project tile** — an expanded project opens its status lanes **across the row's width**.
+- The **family** level is not a spatial tier; a parent thread lives inside its lane card and can open its own nested beam (§4).
 
-## 1. Status swimlanes (the four lanes)
+This is the key correction from the prior pass: tiling belongs to the *tiers within a project*, not to the projects themselves.
 
-Mapping the five `tokenFlowStatus` values into four lanes; Needs You absorbs error per the operator's call:
+## 1. Status lanes (the tiled tiers)
+
+Five `tokenFlowStatus` values fold into four lanes; Needs You absorbs error (the operator's call):
 
 | Lane (left → right) | Source statuses | Color |
 |---|---|---|
 | **Working** | `running` | `--attn-working` (blue) |
-| **Needs You** | `waiting`, `error`, `queued` | `--attn-needs-you` (amber), error shown with an `--attn-error` half-dot |
+| **Needs You** | `waiting`, `error`, `queued` | `--attn-needs-you` (amber); error = `--attn-error` half-dot |
 | **Unread** | `done`, `interrupted` | `--attn-unread` (green) |
 | **Idle** | `idle` | grey ramp (age) |
 
-**Working is far left**, i.e. closest to the incoming flow — the runaway threads and the links into them are the first thing the eye meets.
+**Working is far left**, closest to the incoming flow. Every lane sorts its threads **highest-consuming at the top** (the Working lane is where this matters most: the runaway thread is always the first row).
 
-## 2. Collapsed project = a landscape card (Tier 2 at rest)
+## 2. Collapsed project = one wide row (Tier 2 at rest)
 
-Each project is a card (~360×150). A card carries:
+A row (~full width × 94px) carries the project name, total tokens, live **tok/min**, thread/working counts, a **provider-mix strip**, and a **burn sparkline** for the hottest thread. Flow lines run provider → row: **thickness = historical burn, beads = current activity**. Quiet projects sit dim.
 
-- a **provider-mix strip** (the project's token split by provider, on a shared scale),
-- the project's **total tokens**,
-- a live **tok/min** read (blue when moving, dim "quiet" when not),
-- a **historical-burn sparkline** for the project's hottest thread over the window,
-- a "click to open swimlanes" affordance.
+## 3. Expanded project = tiled status lanes (Tier 3)
 
-**Flow lines, Tier 1 → Tier 2:** one line per provider contributing to the project.
+Expanding a row reveals the four lanes across the width.
 
-- **thickness = historical burn** (the provider's share of the project's burn),
-- **animated beads = current activity** (the provider's live rate),
-- a quiet project's lines are dim and flat, so the eye lands on what is moving.
+- Each lane stacks its thread cards (dot, title, consumption bar, tok/min).
+- **The sky beam:** the incoming flow enters the row header and falls as a **vertical beam** down the Working lane's left gutter — a bright trunk with a **stem into each thread card** (stem thickness = that thread's burn, beads = live activity). Because the lane is sorted by consumption, the beam is thickest and brightest at the top: the out-of-control thread leads. This is the primary read.
+- **Row height is capped at the Working lane's height.** Needs You / Unread / Idle get the same height.
+- **Each lane scrolls independently** (its own scroll rail); scrolling one lane never moves another.
+- Needs You / Unread / Idle carry **no beam** (they are not burning); they show their cards and counts only.
 
-## 3. Expanded project = status swimlanes (Tier 3)
+## 4. Nested beam (a parent thread's working children)
 
-Expanding a card reveals four vertical lanes, Working leftmost.
+A working thread that is a **parent** shows a `▸ N sub` chip. Opened, its card deploys a **nested sky beam** through its own working children — each child a smaller card with its own consumption bar and tok/min. Parent/child stays inside the card; it never becomes a project-level tier. (Recursion may continue, but the mockup shows one level; recommend clamping at one level in v1 for sanity.)
 
-- Each lane stacks that status's **thread cards** (dot, title, a **burn bar** = the thread's total on a shared scale, and a **tok/min** read).
-- **Flow lines run from the Tier 2 header down to each Tier 3 card.** Concretely: a **provider flow bus** sits under the header (the incoming burn+activity, provider-mix), and each thread card hangs off the bus with a **vertical drop** (thickness = that thread's burn, beads = live). The drops are distributaries — they never cross each other.
-- **The card's height is capped at the Working lane's height.** Working defines the card height; Needs You / Unread / Idle get the same lane height.
-- **Each lane scrolls independently.** A lane whose threads exceed the lane height gets its own scroll rail; scrolling one lane never moves another.
-- The out-of-control thread reads as the **fattest, brightest line** and the longest burn bar — the primary signal.
-
-## 4. The hard problem, re-argued for this shape
-
-The earlier spec's two broken invariants change character here:
-
-- **Project bar ↔ candle run.** There is **no drawn project bar to the candles** any more. The project's quantity is the card: a total, a tok/min, a sparkline, and a provider-mix strip. The candle-run identity is gone by construction; it is not needed, because per-thread candles live in the lane thread cards. **This dissolves the invariant rather than patching it.**
-- **Rivers.** The full provider→thread river is gone. Rivers now exist at two scales: **provider → project** (collapsed, the flow-control lines) and **header bus → thread card** (expanded, the distributary drops). Neither crosses arbitrarily. This is the operator's own decomposition: lines at the level you are looking at.
-- **`droppedThreads`.** Retired. Overflow is absorbed by **lane scrolling** (expanded) and by the collapsed grid wrapping into rows. Nothing is hidden; the camera pans/zooms the world. Keep only a safety pitch-shrink ceiling as in the prior spec.
-
-## 5. What is preserved
+## 5. Invariants preserved
 
 - **One thread = one card** (inside its lane).
-- **No status-derived region fills** — region fill is neutral (`--attn-prov-zone`); status shows as dots and lane headers only. Provider strips and lines use `--attn-prov-*`, never status.
+- **No status-derived region fills** — lane/row fill is neutral; status shows only as dots and lane headers. Provider strips/stems use `--attn-prov-*`, never status.
 - **Idle age via the grey ramp.**
-- **Line-work** stays confined to the flow view — and is now purposeful (the flow-control lines are the point).
+- **Line-work** is confined to the flow view and is now the point (the flow-control lines and the beam).
 - **Theme tokens only**, light + dark.
-- Dashed beads mark live activity; a still lane has no beads.
+- Dashed beads mark live activity only.
 
-## 6. Open questions for the operator
+## 6. What this retires
 
-1. **Collapsed ordering:** order the project cards to minimise line crossings (e.g. by provider or by hotness) rather than alphabetically?
-2. **Sparkline subject:** the collapsed card's sparkline currently shows the project's **hottest thread**; prefer the **project total** burn profile instead?
-3. **Lane scroll affordance:** is the slim scroll rail enough, or should an overflowing lane show a "+N more" pill?
-4. **Family:** keep the parent/child indent inside a thread card (data holds it), or drop families from the collapsed card entirely?
-5. **Needs You ordering:** within the lane, sort by error-first (most urgent) or by recency?
+- **The project-bar↔candle-run invariant** (the tiled direction's headache): there is no drawn project bar to the candles. Per-thread consumption bars live in the lane cards; the collapsed row shows totals + a sparkline. The invariant dissolves.
+- **`droppedThreads`**: overflow is absorbed by lane scrolling and the vertical project stack. Keep only a pitch-shrink safety ceiling.
+- **`TOTAL_PX = 200`**: consumption bars are now lane-relative, not a fixed 200px artboard constant.
+
+## 7. Open questions for the operator
+
+1. **Stack order:** order project rows by hotness (busiest at top) rather than alphabetically?
+2. **Lane sort:** every lane sorts by consumption (proposed) — or should Needs You sort error-first/most-urgent?
+3. **Best-case confirm:** should an all-folded project with no live burn collapse to a single thin line instead of a full row?
+4. **Nested depth:** clamp the nested beam at one level (proposed) or allow full recursion?
+5. **Rows vs. columns for very wide panels:** cap the lane count at 4 (fixed) — confirmed?
