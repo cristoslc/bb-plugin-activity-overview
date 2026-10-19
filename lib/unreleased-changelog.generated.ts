@@ -7,5 +7,13 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
   {
     "text": "**Every treemap project shows its title at every zoom and pan.** Titles moved to a screen-space layer drawn at a fixed size and decoupled from the camera, one chip per visible project seated without overlap — small projects are labeled at fit and no title shrinks away when the camera zooms out.",
     "children": []
+  },
+  {
+    "text": "**A camera saved while the roster was a different shape no longer hides the fitted opening.** The store now stamps each camera with the world dimensions it was captured on, and a restore whose world no longer matches is discarded, so the Board opens at the treemap's size again after the world changes.",
+    "children": []
+  },
+  {
+    "text": "**The Board no longer opens off-centre on a first load.** The panel's first world was its pre-measurement placeholder, so the opening fit was computed before the panel was measured and the roster sat pushed to one side until a tab switch; the opening now waits for the measured panel and re-fits as the world settles, and a stale stored camera can no longer win over it.",
+    "children": []
   }
 ];

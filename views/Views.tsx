@@ -21,12 +21,16 @@ import {
   experimental_useSidebarThreads,
 } from "@get-bb/plugin-sdk/app";
 import {
+  ARMED_LATCH,
   CAMERA_STORE_KEY,
   DEFAULT_CAMERA_STORE,
+  disarm,
   mergeCameraStore,
   parseCameraStore,
+  reportWorld,
   type Camera,
   type CameraStore,
+  type OpeningLatch,
 } from "./camera";
 import {
   buildProjects,
@@ -76,6 +80,10 @@ const fitBox = (vw: number, vh: number) => ({
 });
 const ZOOM_MIN = 0.2; // zoom-out floor
 const ZOOM_MAX = 5; // zoom-in ceiling
+/** Relative tolerance for a restored camera's world dims: a world within 2%
+ * of the one the camera was captured on is the same world (absorbs sub-pixel
+ * drift); beyond it the roster changed shape and the fitted opening runs. */
+const CAMERA_WORLD_TOL = 0.02;
 /** Padding around a treemap project the focus zoom keeps visible. */
 const FOCUS_PAD = 28;
 const P = 13; // card slot pitch
@@ -216,14 +224,21 @@ function MapCanvas({
   const sizeRef = useRef({ vw: 0, vh: 0 });
   const worldRef = useRef<WorldSize | null>(world);
   worldRef.current = world;
-  const initialDoneRef = useRef(false);
-  /** Camera saved by a previous visit, consumed by the opening effect once. */
+  /** The opening latch: while armed the opening auto-fits each world report;
+   * the first operator interaction disarms it for good. */
+  const latchRef = useRef<OpeningLatch>(ARMED_LATCH);
+  /** Camera saved by a previous visit, consumed by the first world report. */
   const restoreRef = useRef<Camera | null>(persistKey === undefined ? null : storedCamera(persistKey));
   const dragRef = useRef<{ id: number; px: number; py: number; tx: number; ty: number; captured: boolean } | null>(null);
   const lastPanRef = useRef(0);
   const [panning, setPanning] = useState(false);
   /** Camera subscribers (the treemap's label layer). */
   const subsRef = useRef<Set<(cam: Cam) => void>>(new Set());
+
+  /** The operator took the camera: stop the opening auto-fit permanently. */
+  const ownCamera = useCallback(() => {
+    latchRef.current = disarm(latchRef.current);
+  }, []);
 
   const applyT = useCallback((next: { k: number; tx: number; ty: number }) => {
     const { vw, vh } = sizeRef.current;
@@ -243,6 +258,7 @@ function MapCanvas({
   }, []);
 
   const fit = useCallback(() => {
+    ownCamera();
     const { vw, vh } = sizeRef.current;
     const sz = worldRef.current;
     if (sz === null || sz.W <= 0 || sz.H <= 0 || vw <= 0 || vh <= 0) return;
@@ -255,10 +271,11 @@ function MapCanvas({
       tx: box.x + (box.w - sz.W * k) / 2,
       ty: box.y + (box.h - sz.H * k) / 2,
     });
-  }, [applyT]);
+  }, [applyT, ownCamera]);
 
   const zoomAt = useCallback(
     (cx: number, cy: number, factor: number) => {
+      ownCamera();
       const cur = tRef.current;
       const k2 = clampT(cur.k * factor, ZOOM_MIN, ZOOM_MAX);
       if (k2 === cur.k) return;
@@ -268,18 +285,19 @@ function MapCanvas({
         ty: cy - (cy - cur.ty) * (k2 / cur.k),
       });
     },
-    [applyT],
+    [applyT, ownCamera],
   );
 
   /** Zoom so a world rect fills the chrome-free fit box (treemap focus). */
   const openRect = useCallback(
     (rect: { x: number; y: number; w: number; h: number }) => {
+      ownCamera();
       const box = fitBox(sizeRef.current.vw, sizeRef.current.vh);
       if (box.w <= 1 || box.h <= 1) return;
       const { scale, tx, ty } = zoomToRect(rect, box.w, box.h, { pad: FOCUS_PAD, maxScale: ZOOM_MAX });
       applyT({ k: scale, tx: box.x + tx, ty: box.y + ty });
     },
-    [applyT],
+    [applyT, ownCamera],
   );
 
   // Publish the imperative API for views (the treemap's zoom focus).
@@ -309,33 +327,44 @@ function MapCanvas({
     for (const cb of subsRef.current) cb(t);
   }, [t]);
 
-  // The opening view: fill the fit box. Whichever of world/viewport arrives
-  // later fires it, so a remount after a tab change always ends fitted.
-  const openOnce = useCallback(() => {
-    if (initialDoneRef.current) return;
-    const sz = worldRef.current;
+  // The opening: run on every world report while the latch is armed. The
+  // panel's first world is its pre-measurement placeholder (MIN_STAGE_W wide),
+  // so a fit computed then would latch off-centre; instead the opening
+  // re-computes as the world settles, and the first operator interaction (pan,
+  // wheel, ⤢, treemap focus) disarms it. A matching saved camera wins once and
+  // disarms immediately.
+  const applyOpening = useCallback(() => {
     const { vw, vh } = sizeRef.current;
-    if (sz === null || sz.W <= 0 || sz.H <= 0 || vw <= 0 || vh <= 0) return;
-    initialDoneRef.current = true;
-    const restored = restoreRef.current;
-    if (restored !== null) {
-      // A camera saved by a previous visit beats the default opening;
-      // applyT clamps the stale transform against the live viewport/world.
-      restoreRef.current = null;
-      applyT(restored);
-      return;
-    }
+    if (vw <= 0 || vh <= 0) return;
     const box = fitBox(vw, vh);
-    const k = clampT(Math.min(box.w / sz.W, box.h / sz.H, 1), ZOOM_MIN, 1);
-    applyT({ k, tx: box.x + (box.w - sz.W * k) / 2, ty: box.y + (box.h - sz.H * k) / 2 });
+    const result = reportWorld(
+      latchRef.current,
+      worldRef.current,
+      restoreRef.current,
+      box,
+      { minScale: ZOOM_MIN, tol: CAMERA_WORLD_TOL },
+    );
+    latchRef.current = result.latch; // a restored camera disarms here
+    // A null opening means the latch is disarmed (nothing to do) or the world
+    // is not yet usable; either way the saved camera is left for the real
+    // world report, so only consume it when an opening actually resolved.
+    if (result.opening === null) return;
+    restoreRef.current = null;
+    applyT({ k: result.opening.k, tx: result.opening.tx, ty: result.opening.ty });
   }, [applyT]);
-  useLayoutEffect(openOnce, [openOnce, world]);
+  useLayoutEffect(applyOpening, [applyOpening, world]);
 
-  // Write-through persistence: every committed transform lands in the session
-  // store under this tab, so bb back-navigation restores the last camera.
+  // Write-through persistence: a committed transform lands in the session
+  // store under this tab, stamped with the live world, so bb back-navigation
+  // restores the last camera AND a later roster change can tell the saved
+  // transform is stale. Gated on the operator owning the camera (the latch
+  // disarmed by a pan, wheel, ⤢ or focus): the default opening and any
+  // provisional pre-measurement fit are never recorded.
   useLayoutEffect(() => {
-    if (persistKey === undefined || !initialDoneRef.current) return;
-    writeCameraStore({ cams: { [persistKey]: tRef.current } });
+    const sz = worldRef.current;
+    if (persistKey === undefined || latchRef.current.armed) return;
+    if (sz === null || sz.W <= 0 || sz.H <= 0) return;
+    writeCameraStore({ cams: { [persistKey]: { ...tRef.current, W: sz.W, H: sz.H } } });
   }, [persistKey, t]);
 
   // Measure the viewport and re-clamp the transform when it resizes.
@@ -344,14 +373,14 @@ function MapCanvas({
     if (view === null) return;
     const read = () => {
       sizeRef.current = { vw: view.clientWidth, vh: view.clientHeight };
-      if (sizeRef.current.vw > 0 && sizeRef.current.vh > 0) openOnce();
+      if (sizeRef.current.vw > 0 && sizeRef.current.vh > 0) applyOpening();
       else applyT({ ...tRef.current });
     };
     read();
     const ro = new ResizeObserver(read);
     ro.observe(view);
     return () => ro.disconnect();
-  }, [applyT, openOnce]);
+  }, [applyT, applyOpening]);
 
   // Wheel zooms around the cursor (non-passive so the page never scrolls).
   useLayoutEffect(() => {
@@ -378,6 +407,7 @@ function MapCanvas({
     const dx = e.clientX - d.px;
     const dy = e.clientY - d.py;
     if (Math.abs(dx) + Math.abs(dy) <= 3) return;
+    ownCamera(); // a real drag is the operator taking the camera
     if (!d.captured) {
       // Capture only once the drag is real: while a capture is active the
       // browser retargets clicks to the capturing element, which would eat
@@ -1031,6 +1061,11 @@ export function OverviewPage() {
   const apiRef = useRef<MapApi | null>(null);
   // Panel viewport: views pack to its width; the treemap fills its height.
   const [panelRef, vw, vh] = usePanelSize(MIN_STAGE_W);
+  // The panel's pre-measurement size (w = MIN_STAGE_W, h = 0) must never reach
+  // a view: a world packed to it is the off-centre fit the operator saw. Mount
+  // the canvas only once the panel has a real height. The measuring layout
+  // effect runs before paint, so this gate is synchronous — no flash.
+  const measured = vh > 0;
   const w = Math.max(MIN_STAGE_W, vw - SAFE.left - GAP - SAFE.right - GAP);
   const hBudget = Math.max(200, vh - SAFE.top - GAP - SAFE.bottom - GAP);
   if (live.state === "loading") {
@@ -1056,11 +1091,13 @@ export function OverviewPage() {
         {THEME_CSS +
           "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
       </style>
-      <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
-        {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
-        {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
-        {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
-      </MapCanvas>
+      {measured ? (
+        <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
+          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
+          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+        </MapCanvas>
+      ) : null}
       <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%_-_1.5rem)] flex-col items-start gap-2">
         <div className="pointer-events-auto flex gap-1 rounded-md border border-border/60 bg-card p-1 shadow-sm">
           {TABS.map((t) => (
