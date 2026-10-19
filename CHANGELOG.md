@@ -8,6 +8,7 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ### Added
 
+- **Clicking a thread dot while zoomed in now opens that thread in bb's default view.** Zoom past the fit (or focus a project) and every dot becomes a control: clicking one opens its thread, and clicking away — or the new top-right close control — returns to the fitted view, where dots stay inert so the region-zoom gesture is unchanged.
 - **The Token flow tab returns, redrawn as an amplitude wave.** A provider → project → family sankey whose rivers are each thread's burn per interval (encoding A), with totals bands (B) and a burn crest (C) as alternates: every thread's card row carries its total-spend candle, project bars stack their members' tokens, and the `flow` RPC resamples each thread's sampled context growth into one-minute buckets so the wave moves as threads stream.
   - Three encodings via the floating chrome: A · ribbon wave (burn per interval all the way back to the provider), B · trace lane (totals with per-member share bars), C · burn envelope (totals band with an inner per-interval crest).
   - Clicking a family enlarges its cards with a tween (~250ms) and lights only that family's members; beads stream on running threads at their sampled rate; a 15 min / last hour window, pause, and speed controls ride the floating chrome.
@@ -21,6 +22,7 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 - **A camera saved while the roster was a different shape no longer hides the fitted opening.** The store now stamps each camera with the world dimensions it was captured on, and a restore whose world no longer matches is discarded, so the Board opens at the treemap's size again after the world changes.
 - **The Board no longer opens off-centre on a first load.** The panel's first world was its pre-measurement placeholder, so the opening fit was computed before the panel was measured and the roster sat pushed to one side until a tab switch; the opening now waits for the measured panel and re-fits as the world settles, and a stale stored camera can no longer win over it.
+- **The Board no longer re-reports its world every render.** Its model rebuilds against a fresh clock on each pass, so equal-but-new bounds kept re-entering the page and re-rendering it; the report is now deduped by value, ending the update loop the zoomed-in camera work exposed.
 
 ## [0.3.0] - 2026-10-18
 

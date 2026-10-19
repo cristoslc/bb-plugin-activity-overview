@@ -177,6 +177,18 @@ async function runCase(page, evidenceDir, kase) {
     try {
       switch (step.action) {
         case "goto": {
+          // Each case starts clean: drop the recorded navigate calls and the
+          // persisted camera/tab store before the app boots, so a previous
+          // case's zoom or navigation never leaks into this one.
+          await page.evaluateOnNewDocument(() => {
+            window.__navCalls = [];
+            try {
+              window.localStorage.removeItem("activity-overview:camera");
+            } catch {
+              // localStorage can throw in embedded contexts; a clean start is
+              // best-effort and the app tolerates a null store.
+            }
+          });
           await page.goto(`${harness.base}${step.params?.query ?? ""}`, { waitUntil: "networkidle0", timeout: 20_000 });
           await page.evaluate((selectors) => window.__profile?.watch(selectors), WATCH_SELECTORS);
           await page.evaluate(() => window.__profile?.mark("harness-opened"));
@@ -237,6 +249,42 @@ async function runCase(page, evidenceDir, kase) {
         case "assertGone": {
           entry.pass = await page.evaluate((selector) => document.querySelector(selector) === null, step.params.selector);
           entry.detail = entry.pass ? "absent" : "still mounted";
+          break;
+        }
+        case "click": {
+          // Click the first element matching `selector` (the harness's generic
+          // gesture; the app's own attributes are the selectors).
+          entry.pass = await page.evaluate((selector) => {
+            const el = document.querySelector(selector);
+            if (el === null) return false;
+            el.click();
+            return true;
+          }, step.params.selector);
+          entry.detail = entry.pass ? `clicked ${step.params.selector}` : `no element for ${step.params.selector}`;
+          break;
+        }
+        case "assertExists": {
+          entry.pass = await page.evaluate((selector) => document.querySelector(selector) !== null, step.params.selector);
+          entry.detail = entry.pass ? `${step.params.selector} present` : `${step.params.selector} absent`;
+          break;
+        }
+        case "assertCount": {
+          const n = await page.evaluate((selector) => document.querySelectorAll(selector).length, step.params.selector);
+          const want = step.params.equals ?? 1;
+          entry.pass = n === want;
+          entry.detail = `${n} match${n === 1 ? "" : "es"} for ${step.params.selector} (want ${want})`;
+          break;
+        }
+        case "assertNavCalls": {
+          // The mock SDK records every toThread call; assert the recorded
+          // navigation, its count, and the thread id it fired with.
+          const ids = await page.evaluate(() => (window.__navCalls ?? []).map((c) => c.toThread));
+          const want = step.params.equals ?? 1;
+          const wanted = step.params.threadId;
+          const okCount = ids.length === want;
+          const okId = wanted === undefined || ids.includes(wanted);
+          entry.pass = okCount && okId;
+          entry.detail = `nav calls ${JSON.stringify(ids)} (count ${ids.length}, want ${want}${wanted !== undefined ? `, id ${wanted}` : ""})`;
           break;
         }
         case "profile": {

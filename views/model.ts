@@ -257,6 +257,31 @@ export function familyTints(fams: readonly string[], paletteSize = FAMILY_TINTS.
 
 export type ZoomTransform = { scale: number; tx: number; ty: number };
 
+// ---------- zoomed-in interaction gate ----------
+
+/**
+ * The single camera-scale threshold past which a thread unit (a dot) becomes
+ * actionable. Below it — at the fitted view and any near-fit zoom — dots stay
+ * inert so the region-focus / pan gestures are unambiguous; above it, a dot
+ * click opens its thread and any non-dot click returns to the fitted view.
+ * Strictly greater: the threshold itself is not zoomed in.
+ */
+export const ZOOMED_IN_SCALE = 1.2;
+
+/** Whether the camera scale is past the zoomed-in threshold. */
+export function isZoomedIn(scale: number, threshold = ZOOMED_IN_SCALE): boolean {
+  return scale > threshold;
+}
+
+/**
+ * What a click on one unit should do at camera scale `k`: `"open"` its thread
+ * while zoomed in, `"inert"` otherwise. One rule, two spellings of the same
+ * threshold — the DOM reads the verb, the gates read the boolean.
+ */
+export function dotAction(scale: number, threshold = ZOOMED_IN_SCALE): "open" | "inert" {
+  return isZoomedIn(scale, threshold) ? "open" : "inert";
+}
+
 /** Clamp one pan axis to a band: the content's low edge keeps `mLow` from the
  * viewport's start (the top, where the nav chrome floats) and `mHigh` from its
  * end. Unlike `clampPan` the two ends differ — chrome-safe asymmetric clamped

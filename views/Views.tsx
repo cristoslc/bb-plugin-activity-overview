@@ -19,6 +19,7 @@ import {
 } from "react";
 import {
   experimental_useSidebarThreads,
+  useBbNavigate,
 } from "@get-bb/plugin-sdk/app";
 import {
   ARMED_LATCH,
@@ -46,6 +47,7 @@ import {
   FAMILY_TINTS,
   zoomToRect,
   clampPanEdges,
+  isZoomedIn,
   type AttnProject,
   type AttnThread,
   type Cell,
@@ -117,10 +119,39 @@ type MapApi = {
    * transform; returns an unsubscribe.
    */
   subscribe: (cb: (cam: Cam) => void) => () => void;
+  /**
+   * Return to the regular fitted view: fit the camera and notify any view
+   * state to clear (the treemap drops its project focus). This is what the
+   * top-right close control and a background click both do.
+   */
+  resetView: () => void;
+  /**
+   * Pin the top-right close control visible regardless of camera scale. Views
+   * that hold a linear "focused" state (the treemap's project focus) pin it so
+   * the control appears whenever the operator is zoomed in OR focused.
+   */
+  setResetPinned: (on: boolean) => void;
+  /** Subscribe to resetView requests; returns an unsubscribe. */
+  onReset: (cb: () => void) => () => void;
 };
 
 /** The live screen→world camera (the map canvas transform). */
 type Cam = { k: number; tx: number; ty: number };
+
+/**
+ * Mirror the map canvas's live camera into view state, so a view can gate its
+ * affordances (dot actionability, the zoomed-in chrome) on the current scale.
+ * Returns the opening camera until the canvas subscribes.
+ */
+function useCamera(apiRef: RefObject<MapApi | null>): Cam {
+  const [cam, setCam] = useState<Cam>({ k: 1, tx: 0, ty: 0 });
+  useEffect(() => {
+    const api = apiRef.current;
+    if (api === null) return;
+    return api.subscribe(setCam);
+  }, [apiRef]);
+  return cam;
+}
 
 /** World bounds that Stage renders a content region of `contentH` px into. */
 const worldOf = (w: number, contentH: number): WorldSize => ({
@@ -235,6 +266,10 @@ function MapCanvas({
   const [panning, setPanning] = useState(false);
   /** Camera subscribers (the treemap's label layer). */
   const subsRef = useRef<Set<(cam: Cam) => void>>(new Set());
+  /** Reset-view subscribers (views clear their focus state on demand). */
+  const resetSubsRef = useRef<Set<() => void>>(new Set());
+  /** View-pinned close-control visibility (the treemap's focus state). */
+  const [resetPinned, setResetPinned] = useState(false);
 
   /** The operator took the camera: stop the opening auto-fit permanently. */
   const ownCamera = useCallback(() => {
@@ -274,6 +309,12 @@ function MapCanvas({
     });
   }, [applyT, ownCamera]);
 
+  /** Return to the regular fitted view and let views clear their own state. */
+  const resetView = useCallback(() => {
+    fit();
+    for (const cb of resetSubsRef.current) cb();
+  }, [fit]);
+
   const zoomAt = useCallback(
     (cx: number, cy: number, factor: number) => {
       ownCamera();
@@ -307,6 +348,7 @@ function MapCanvas({
     const api = {
       fit,
       openRect,
+      resetView,
       scale: () => tRef.current.k,
       subscribe: (cb: (cam: Cam) => void) => {
         subsRef.current.add(cb);
@@ -315,12 +357,19 @@ function MapCanvas({
           subsRef.current.delete(cb);
         };
       },
+      onReset: (cb: () => void) => {
+        resetSubsRef.current.add(cb);
+        return () => {
+          resetSubsRef.current.delete(cb);
+        };
+      },
+      setResetPinned,
     };
     apiRef.current = api;
     return () => {
       if (apiRef.current === api) apiRef.current = null;
     };
-  }, [apiRef, fit, openRect]);
+  }, [apiRef, fit, openRect, resetView, setResetPinned]);
 
   // Fan every committed camera out to subscribers (the label layer). A layout
   // effect, so the layer re-projects in the same frame the world moves.
@@ -461,6 +510,23 @@ function MapCanvas({
         >
           {children}
         </div>
+        {/* The close control: shown while the camera is past the zoomed-in
+            threshold, or while a view pins it (the treemap's project focus).
+            It returns to the fitted view, the same reset a background click
+            does. Top-right, clear of the tab bar (top-left) and the corner
+            controls (bottom-right). */}
+        {isZoomedIn(t.k) || resetPinned ? (
+          <button
+            type="button"
+            data-attn-reset=""
+            onClick={resetView}
+            title="Zoom out to the fitted view"
+            aria-label="Zoom out to the fitted view"
+            className="absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-card text-muted-foreground shadow-sm hover:text-foreground"
+          >
+            ✕
+          </button>
+        ) : null}
         <div className="absolute bottom-3 right-3 z-20 flex gap-1">
           {(
             [
@@ -472,6 +538,7 @@ function MapCanvas({
             <button
               key={title}
               type="button"
+              data-attn-control={label}
               title={title}
               aria-label={title}
               onClick={onClick}
@@ -509,21 +576,66 @@ function LegendRow({ counts }: { counts: Record<Status, number> }) {
   );
 }
 
-/** World-space root of a view: the fixed-region layer the map pans/zooms. */
-function Stage({ w, contentH, children }: { w: number; contentH: number; children: ReactNode }) {
+/** World-space root of a view: the fixed-region layer the map pans/zooms. An
+ * optional `onClick` fires for any click in the world that is NOT a thread
+ * unit — the units stop propagation when actionable, so a background click
+ * (a void, a card's padding) reaching here is the "click away" gesture. */
+function Stage({
+  w,
+  contentH,
+  onClick,
+  children,
+}: {
+  w: number;
+  contentH: number;
+  onClick?: () => void;
+  children: ReactNode;
+}) {
   return (
-    <div className="absolute left-0 top-0" style={{ width: w, height: Math.ceil(contentH) }}>
+    <div
+      data-attn-stage=""
+      className="absolute left-0 top-0"
+      style={{ width: w, height: Math.ceil(contentH) }}
+      onClick={onClick}
+    >
       {children}
     </div>
   );
 }
 
-function Dot({ cell, x, y, d, nowMs }: { cell: Cell; x: number; y: number; d: number; nowMs: number }) {
+function Dot({
+  cell,
+  x,
+  y,
+  d,
+  nowMs,
+  actionable = false,
+  onOpen,
+}: {
+  cell: Cell;
+  x: number;
+  y: number;
+  d: number;
+  nowMs: number;
+  /** Zoomed in: the dot is a control that opens its thread. */
+  actionable?: boolean;
+  /** Open this dot's thread (called only when actionable). */
+  onOpen?: (id: string) => void;
+}) {
   const working = classify(cell.t) === "working";
+  const open = () => onOpen?.(cell.t.id);
   return (
     <div
+      data-attn-unit=""
+      data-thread-id={cell.t.id}
       title={tip(cell.t, nowMs)}
-      className={working ? "attn-pulse rounded-full" : "rounded-full"}
+      role={actionable ? "button" : undefined}
+      tabIndex={actionable ? 0 : undefined}
+      className={
+        (working ? "attn-pulse " : "") +
+        "rounded-full" +
+        (actionable ? " cursor-pointer hover:ring-2 hover:ring-foreground/40" : "")
+      }
       style={{
         position: "absolute",
         left: x,
@@ -532,6 +644,27 @@ function Dot({ cell, x, y, d, nowMs }: { cell: Cell; x: number; y: number; d: nu
         height: d,
         background: cellColor(cell.t, nowMs),
       }}
+      onClick={
+        actionable
+          ? (e) => {
+              // Opening the thread owns this click: stop it reaching the
+              // region/void handler, which would otherwise toggle focus.
+              e.stopPropagation();
+              open();
+            }
+          : undefined
+      }
+      onKeyDown={
+        actionable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                open();
+              }
+            }
+          : undefined
+      }
     />
   );
 }
@@ -543,6 +676,8 @@ export function BoardView({
   w,
   h,
   onWorld,
+  apiRef,
+  onOpenThread,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -550,6 +685,9 @@ export function BoardView({
   /** Fit-box height budget: shelves rescale to use it like the treemap. */
   h: number;
   onWorld: (s: WorldSize | null) => void;
+  apiRef: RefObject<MapApi | null>;
+  /** Open a thread (only wired while the board is zoomed in). */
+  onOpenThread: (id: string) => void;
 }) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
@@ -572,8 +710,16 @@ export function BoardView({
   const pitch = P * model.scale;
   const labelH = LBL * model.scale;
   const dot = DOT * model.scale;
+  // Zoomed in, a dot opens its thread; a background (non-dot) click resets to
+  // the fitted view. At the fit view dots stay inert.
+  const cam = useCamera(apiRef);
+  const zoomed = isZoomedIn(cam.k);
   return (
-    <Stage w={w} contentH={model.packed.H}>
+    <Stage
+      w={w}
+      contentH={model.packed.H}
+      onClick={zoomed ? () => apiRef.current?.resetView() : undefined}
+    >
       {model.packed.placed.map(({ card, x, y }) => (
         <div
           key={card.key}
@@ -593,6 +739,8 @@ export function BoardView({
                 y={Math.floor(i / card.cols) * pitch + 2}
                 d={dot}
                 nowMs={nowMs}
+                actionable={zoomed}
+                onOpen={onOpenThread}
               />
             ))}
           </div>
@@ -603,9 +751,7 @@ export function BoardView({
 }
 
 // ---------- view 2: unit treemap (honest fill + zoom-to-project) ----------
-/** Zoom-in scale past which hovering a project previews family tints. */
-const HOVER_TINT_SCALE = 1.2;
-/** Touch press-and-hold duration for the same family-tint preview. */
+/** Touch press-and-hold duration for the family-tint preview. */
 const LONG_PRESS_MS = 400;
 
 export function UnitTreemapView({
@@ -615,6 +761,7 @@ export function UnitTreemapView({
   h,
   onWorld,
   apiRef,
+  onOpenThread,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -623,6 +770,8 @@ export function UnitTreemapView({
   h: number;
   onWorld: (s: WorldSize | null) => void;
   apiRef: RefObject<MapApi | null>;
+  /** Open a thread (only wired while the treemap is zoomed in). */
+  onOpenThread: (id: string) => void;
 }) {
   const world = useMemo(() => worldOf(w, h), [w, h]);
   useEffect(() => {
@@ -643,13 +792,23 @@ export function UnitTreemapView({
   // Hover (mouse) / press-and-hold (touch) family-tint preview target.
   const [hoverPid, setHoverPid] = useState<string | null>(null);
   // The live camera, mirrored here so the always-visible label layer can
-  // project each region into screen space at a fixed size.
-  const [cam, setCam] = useState<Cam>({ k: 1, tx: 0, ty: 0 });
+  // project each region into screen space at a fixed size, and so a dot's
+  // actionability tracks the current scale.
+  const cam = useCamera(apiRef);
+  const zoomed = isZoomedIn(cam.k);
+  // A reset (the top-right close control or a background click) also clears
+  // the project focus, so the view and the camera return together. While a
+  // project is focused the close control is pinned visible even if the
+  // project already filled the box at or below the zoomed-in threshold.
   useEffect(() => {
     const api = apiRef.current;
     if (api === null) return;
-    return api.subscribe(setCam);
-  }, [apiRef]);
+    api.setResetPinned(focusPid !== null);
+    return api.onReset(() => {
+      setFocusPid(null);
+      setHoverPid(null);
+    });
+  }, [apiRef, focusPid]);
   const holdRef = useRef<number | null>(null);
   const suppressTapRef = useRef(false);
   const clearHold = () => {
@@ -676,9 +835,9 @@ export function UnitTreemapView({
     focusPid,
   );
 
-  // Family tints are a zoomed-in affordance: the camera must be past
-  // HOVER_TINT_SCALE (a focused project keeps them regardless of scale).
-  const zoomedIn = () => apiRef.current !== null && apiRef.current.scale() > HOVER_TINT_SCALE;
+  // Family tints are a zoomed-in affordance: the camera must be past the
+  // zoomed-in threshold (a focused project keeps them regardless of scale).
+  const zoomedIn = () => apiRef.current !== null && isZoomedIn(apiRef.current.scale());
   const setFocus = (pid: string | null) => {
     setHoverPid(null);
     suppressTapRef.current = false;
@@ -698,7 +857,9 @@ export function UnitTreemapView({
         style={{ width: w, height: h }}
         onClick={() => {
           suppressTapRef.current = false;
-          if (focusPid !== null) setFocus(null);
+          // Zoomed in, a click on a void is the "click away" gesture: back to
+          // the regular fitted view (the same reset the close control does).
+          if (zoomed || focusPid !== null) apiRef.current?.resetView();
         }}
       />
       {model.regions.map((r) => {
@@ -707,6 +868,7 @@ export function UnitTreemapView({
         return (
           <div
             key={r.p.pid}
+            data-attn-region={r.p.pid}
             title={`${r.p.name} · ${r.p.n} threads`}
             className="absolute overflow-hidden rounded-sm"
             style={{
@@ -716,7 +878,9 @@ export function UnitTreemapView({
               height: r.h,
               background: "var(--attn-card)",
               opacity: dim ? 0.3 : 1,
-              cursor: "pointer",
+              // Zoomed in the region background is "away" (reset), so it is not
+              // a pointer target; at the fit view it is the zoom-in gesture.
+              cursor: zoomed ? "default" : "pointer",
               transition: "opacity 200ms ease",
             }}
             onClick={() => {
@@ -726,7 +890,14 @@ export function UnitTreemapView({
                 suppressTapRef.current = false;
                 return;
               }
-              setFocus(focusPid === null ? r.p.pid : null);
+              // Zoomed in, anything that is not a dot returns to the fitted
+              // view (dots stop propagation, so they never reach here).
+              if (zoomed || focusPid !== null) {
+                apiRef.current?.resetView();
+                return;
+              }
+              // From the regular view, a region click zooms INTO it (unchanged).
+              setFocus(r.p.pid);
             }}
             onPointerDown={(e) => {
               if (e.pointerType === "touch") {
@@ -775,6 +946,8 @@ export function UnitTreemapView({
                   y={(k + 0.5) * r.ch - model.d / 2}
                   d={model.d}
                   nowMs={nowMs}
+                  actionable={zoomed}
+                  onOpen={onOpenThread}
                 />
               );
             })}
@@ -821,6 +994,8 @@ export function StripTilesView({
   w,
   h,
   onWorld,
+  apiRef,
+  onOpenThread,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -828,6 +1003,9 @@ export function StripTilesView({
   /** Fit-box height budget: tiles rescale to use it like the treemap. */
   h: number;
   onWorld: (s: WorldSize | null) => void;
+  apiRef: RefObject<MapApi | null>;
+  /** Open a thread (only wired while the tiles are zoomed in). */
+  onOpenThread: (id: string) => void;
 }) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
@@ -855,8 +1033,17 @@ export function StripTilesView({
     onWorld(model.world);
   }, [model.world, onWorld]);
   const scale = model.scale;
+  // Zoomed in, a unit opens its thread; a click away (a tile's padding, the
+  // gap between strips) resets to the fitted view. At the fit view units are
+  // inert.
+  const cam = useCamera(apiRef);
+  const zoomed = isZoomedIn(cam.k);
   return (
-    <Stage w={w} contentH={model.packed.H}>
+    <Stage
+      w={w}
+      contentH={model.packed.H}
+      onClick={zoomed ? () => apiRef.current?.resetView() : undefined}
+    >
       {model.packed.placed.map(({ card, x, y }) => (
         <div
           key={card.p.pid}
@@ -871,9 +1058,32 @@ export function StripTilesView({
             {card.units.map((cell) => (
               <div
                 key={cell.t.id}
+                data-attn-unit=""
+                data-thread-id={cell.t.id}
                 title={tip(cell.t, nowMs)}
-                className="rounded-sm"
+                role={zoomed ? "button" : undefined}
+                tabIndex={zoomed ? 0 : undefined}
+                className={"rounded-sm" + (zoomed ? " cursor-pointer hover:ring-2 hover:ring-foreground/40" : "")}
                 style={{ width: 4 * scale, height: 12 * scale, marginRight: scale, background: cellColor(cell.t, nowMs) }}
+                onClick={
+                  zoomed
+                    ? (e) => {
+                        e.stopPropagation();
+                        onOpenThread(cell.t.id);
+                      }
+                    : undefined
+                }
+                onKeyDown={
+                  zoomed
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onOpenThread(cell.t.id);
+                        }
+                      }
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -1058,9 +1268,20 @@ export function OverviewPage() {
   tabRef.current = tab;
   const onWorld = useCallback((size: WorldSize | null) => {
     if (size !== null) worldCache.current.set(tabRef.current, size);
-    setWorld(size);
+    // Dedupe by value: a view whose memo re-runs on every render (the Board
+    // recomputes its model against a fresh Date.now()) reports a new-but-equal
+    // bounds object each pass. Committing it unconditionally re-renders the
+    // page, which re-runs the view, which reports again — an update loop. Only
+    // a real change in the world bounds needs to reach the canvas.
+    setWorld((prev) =>
+      prev !== null && size !== null && prev.W === size.W && prev.H === size.H ? prev : size,
+    );
   }, []);
   const apiRef = useRef<MapApi | null>(null);
+  // Clicking a thread unit while zoomed in opens that thread in bb's default
+  // view (the SDK's real navigate hook; the screenshot mock records calls).
+  const nav = useBbNavigate();
+  const openThread = useCallback((id: string) => nav.toThread(id), [nav]);
   // Panel viewport: views pack to its width; the treemap fills its height.
   const [panelRef, vw, vh] = usePanelSize(MIN_STAGE_W);
   // The panel's pre-measurement size (w = MIN_STAGE_W, h = 0) must never reach
@@ -1097,9 +1318,9 @@ export function OverviewPage() {
         <TokenFlowView />
       ) : measured ? (
         <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
-          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} /> : null}
-          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} /> : null}
+          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} /> : null}
+          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} /> : null}
         </MapCanvas>
       ) : null}
       <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%_-_1.5rem)] flex-col items-start gap-2">

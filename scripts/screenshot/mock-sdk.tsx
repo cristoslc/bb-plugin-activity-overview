@@ -89,7 +89,12 @@ export function experimental_useSidebarThreads(): unknown {
 
 export function useBbNavigate(): unknown {
   return {
-    toThread: () => {},
+    toThread: (threadId: string) => {
+      // Record calls so the UAT can assert navigation actually fired with the
+      // right thread id (the real host opens the thread; the harness cannot).
+      const w = window as unknown as { __navCalls?: Array<{ toThread: string }> };
+      (w.__navCalls ??= []).push({ toThread: threadId });
+    },
     toPluginPanel: () => false,
   };
 }

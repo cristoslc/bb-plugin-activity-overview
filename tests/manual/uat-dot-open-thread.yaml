@@ -1,0 +1,170 @@
+test_suite:
+  id: uat-dot-open-thread-001
+  title: Zoomed-in dot click opens the thread; away/close returns to the fitted view
+  description: >
+    Headless regression suite for the zoomed-in dot affordance (thread
+    thr_dvbkbwki5j). While the camera is past the zoomed-in threshold a click
+    on a thread unit records a toThread navigation (the mock SDK captures it in
+    window.__navCalls); a click away and the top-right close control both
+    return to the fitted view. At the fit view units stay inert, so the
+    existing region-focus gesture is unchanged.
+  tags: [interaction, navigation, zoom, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: A dot click while zoomed in opens that thread in bb's default view
+    criticality: blocker
+    preconditions:
+      - dist/ has been built (`npm run build`); the harness serves it from vite
+      - Headless Chrome is available at CHROME_PATH (default: system Chrome)
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Open the panel; the Unit treemap opens at the fitted view.
+        expected: The tab bar paints and the harness is live.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view (units inert).
+      - order: 3
+        action: click
+        params:
+          selector: '[data-attn-control="+"]'
+        instruction: Zoom in once, past the zoomed-in threshold (1.2).
+        expected: The camera scale rises past 1.2 and the close control appears.
+      - order: 4
+        action: click
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_error"]'
+        instruction: Click the dot for thr_error while zoomed in.
+        expected: A toThread("thr_error") navigation is recorded; focus is not toggled.
+      - order: 5
+        action: assertNavCalls
+        params:
+          threadId: thr_error
+          equals: 1
+        instruction: Assert exactly one navigation fired, with the right thread id.
+        expected: One recorded toThread call for thr_error.
+      - order: 6
+        action: profile
+        instruction: Capture a screenshot of the zoomed-in treemap as evidence.
+        expected: Evidence saved under docs/uat/.
+
+  - id: TC-02
+    title: The top-right close control appears zoomed in and returns to the fitted view
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints at the fitted view.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view.
+      - order: 3
+        action: assertGone
+        params:
+          selector: '[data-attn-reset]'
+        instruction: At the fitted view the close control is absent.
+        expected: No close control is mounted.
+      - order: 4
+        action: click
+        params:
+          selector: '[data-attn-control="+"]'
+        instruction: Zoom in past the threshold.
+        expected: The close control appears in the top-right.
+      - order: 5
+        action: assertExists
+        params:
+          selector: '[data-attn-reset]'
+        instruction: Assert the close control is now reachable.
+        expected: The close control is mounted.
+      - order: 6
+        action: click
+        params:
+          selector: '[data-attn-reset]'
+        instruction: Click the close control to return to the fitted view.
+        expected: The camera returns to fit; the close control unmounts.
+      - order: 7
+        action: assertGone
+        params:
+          selector: '[data-attn-reset]'
+        instruction: Assert the control is gone again at the fitted view.
+        expected: No close control is mounted.
+
+  - id: TC-03
+    title: At the fitted view dots stay inert (the region-focus gesture is unchanged)
+    criticality: standard
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints at the fitted view.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view.
+      - order: 3
+        action: click
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_error"]'
+        instruction: Click a dot at the fitted view.
+        expected: Nothing navigates; the click falls through to the region's zoom-in gesture.
+      - order: 4
+        action: assertNavCalls
+        params:
+          equals: 0
+        instruction: Assert no navigation fired at the fitted view.
+        expected: No recorded toThread calls.
+
+  - id: TC-04
+    title: The Board's dot grids carry the same zoomed-in affordance
+    criticality: standard
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Open the panel on the Board tab.
+        expected: The Board paints at the fitted view.
+      - order: 2
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 3
+        instruction: Assert the fixture's three thread units are mounted.
+        expected: Three units present.
+      - order: 3
+        action: click
+        params:
+          selector: '[data-attn-control="+"]'
+        instruction: Zoom in past the threshold.
+        expected: The Board's dots become actionable.
+      - order: 4
+        action: click
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_running"]'
+        instruction: Click a Board dot while zoomed in.
+        expected: A toThread("thr_running") navigation is recorded.
+      - order: 5
+        action: assertNavCalls
+        params:
+          threadId: thr_running
+          equals: 1
+        instruction: Assert exactly one navigation fired, with the right thread id.
+        expected: One recorded toThread call for thr_running.
