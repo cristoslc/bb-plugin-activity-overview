@@ -162,8 +162,12 @@ export function TokenFlowView() {
   mixRef.current = mix;
   const selectedRef = useRef<string | null>(selected);
   selectedRef.current = selected;
+  // Set when a real pan happens; a click within 200ms of it is a drag-release,
+  // not a selection (mirrors MapCanvas's pan-click suppression).
+  const lastPanRef = useRef(0);
   const selectFamily = useCallback(
     (key: string | null) => {
+      if (Date.now() - lastPanRef.current < 200) return;
       const cur = selectedRef.current;
       if (key === null || key === cur) {
         selectedRef.current = null;
@@ -215,27 +219,38 @@ export function TokenFlowView() {
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
   }, [svgPoint]);
-  const dragRef = useRef<{ px: number; py: number } | null>(null);
+  // Drag pan. The pointer is captured ONLY after a real drag starts (>3px),
+  // mirroring MapCanvas: capturing on pointerdown retargets the subsequent
+  // click to the <svg> root, which eats every card/candle/hit onClick. A press
+  // that never moves is a click and is left for the element's own handler.
+  const dragRef = useRef<{ id: number; px: number; py: number; captured: boolean } | null>(null);
   const onPointerDown = useCallback((event: React.PointerEvent<SVGSVGElement>) => {
-    dragRef.current = { px: event.clientX, py: event.clientY };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.button !== 0) return;
+    dragRef.current = { id: event.pointerId, px: event.clientX, py: event.clientY, captured: false };
   }, []);
   const onPointerMove = useCallback(
     (event: React.PointerEvent<SVGSVGElement>) => {
       const drag = dragRef.current;
-      if (drag === null || svgRef.current === null) return;
+      if (drag === null || event.pointerId !== drag.id || svgRef.current === null) return;
+      const dx = event.clientX - drag.px;
+      const dy = event.clientY - drag.py;
+      if (!drag.captured) {
+        if (Math.abs(dx) + Math.abs(dy) <= 3) return;
+        drag.captured = true;
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
+      lastPanRef.current = Date.now();
       const rect = svgRef.current.getBoundingClientRect();
       const sf = Math.min(rect.width / C.W, rect.height / layout.H);
-      setView((v) => ({
-        ...v,
-        x: v.x + (event.clientX - drag.px) / sf,
-        y: v.y + (event.clientY - drag.py) / sf,
-      }));
-      dragRef.current = { px: event.clientX, py: event.clientY };
+      setView((v) => ({ ...v, x: v.x + dx / sf, y: v.y + dy / sf }));
+      dragRef.current = { id: drag.id, px: event.clientX, py: event.clientY, captured: true };
     },
     [C.W, layout.H],
   );
-  const onPointerUp = useCallback(() => {
+  const onPointerUp = useCallback((event: React.PointerEvent<SVGSVGElement>) => {
+    if (dragRef.current !== null && dragRef.current.captured) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
     dragRef.current = null;
   }, []);
 
