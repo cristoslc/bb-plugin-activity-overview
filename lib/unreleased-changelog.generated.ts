@@ -3,7 +3,7 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
   {
     "text": "**The Token flow tab returns, redrawn as an amplitude wave.** A provider → project → family sankey whose rivers are each thread's burn per interval (encoding A), with totals bands (B) and a burn crest (C) as alternates: every thread's card row carries its total-spend candle, project bars stack their members' tokens, and the `flow` RPC resamples each thread's sampled context growth into one-minute buckets so the wave moves as threads stream.",
     "children": [
-      "Three encodings via the floating chrome: **A · ribbon wave** (burn per interval all the way back to the provider), **B · trace lane** (totals with per-member share bars), **C · burn envelope** (totals band with an inner per-interval crest).",
+      "Three encodings via the floating chrome: A · ribbon wave (burn per interval all the way back to the provider), B · trace lane (totals with per-member share bars), C · burn envelope (totals band with an inner per-interval crest).",
       "Clicking a family enlarges its cards with a tween (~250ms) and lights only that family's members; beads stream on running threads at their sampled rate; a 15 min / last hour window, pause, and speed controls ride the floating chrome."
     ]
   },
