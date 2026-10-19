@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token flow — project stack + sky beam (mockup v3)</title>
+<title>Token flow — project stack + left-tree (mockup v4)</title>
 <style>
   html, body { margin:0; padding:0; background:#0b0f14; color:#dfe7ee;
     font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",sans-serif; }
@@ -34,16 +34,17 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Token flow — project stack + sky beam (mockup v3)</h1>
-  <p class="note">Reworked again to the operator's direction. <b>Projects pile vertically</b> (one wide row each, never tiled);
-    it is the <b>tiers inside a project that tile</b> into the four status lanes. In the Working lane the threads sort
-    <b>highest-consuming at the top</b>, and the flow comes down as a <b>sky beam</b>. A working card that is a parent can open its
-    own sky beam through its working children. Hand-rolled SVG, synthetic data, the shipped dark palette.</p>
+  <h1>Token flow — project stack + left-tree (mockup v4)</h1>
+  <p class="note">Applies the operator's latest direction. <b>Projects pile vertically</b> (one wide row each, never tiled); the
+    <b>tiers inside a project tile</b> into the four status lanes with Working on the left. A parent thread's children are now
+    <b>contained inside the parent's card</b>, and the parent shows the <b>sum of its own and its children's flow</b>. The split is drawn in the
+    <b>left-tree</b> (provider → project → thread → child), the same way threads branch from projects. The blue sky beam is <b>gone</b>.</p>
 
   <div class="hierarchy">
     <span class="lvl">Tier 1 · Provider</span><span class="arrow">›</span>
     <span class="lvl">Tier 2 · Project (vertical stack)</span><span class="arrow">›</span>
-    <span class="lvl">Tier 3 · Thread (tiled status lanes)</span>
+    <span class="lvl">Tier 3 · Thread (tiled status lanes)</span><span class="arrow">›</span>
+    <span class="lvl">Thread child (nested in card)</span>
   </div>
 
   <div class="legend" id="legend"></div>
@@ -51,10 +52,10 @@
   <h2>Overview · projects piled vertically<span class="tag">flow first</span></h2>
   <p class="note" id="note-overview"></p>
 
-  <h2>One project expanded · tiers tiled<span class="tag">Working left · sky beam</span></h2>
+  <h2>One project expanded · tiers tiled<span class="tag">Working left</span></h2>
   <p class="note" id="note-expanded"></p>
 
-  <h2>A parent working card opens its own sky beam<span class="tag">nested</span></h2>
+  <h2>A parent thread contains its children<span class="tag">summed flow · left-tree split</span></h2>
   <p class="note" id="note-nested"></p>
 
   <div id="stage"></div>
@@ -70,7 +71,8 @@ const PROVIDERS = [
   { id:'ollama',    label:'Ollama',    color:'#a78bfa' },
 ];
 const PIDX = Object.fromEntries(PROVIDERS.map((p,i)=>[p.id,i]));
-const pc = (id) => PROVIDERS[PIDX[id]].color;
+const pc = (id) => (PROVIDERS[PIDX[id]]||PROVIDERS[3]).color;
+const plabel = (id) => (PROVIDERS[PIDX[id]]||PROVIDERS[3]).label;
 
 /* Status lanes (the tiers that tile), left → right. Needs You absorbs error. */
 const LANES = [
@@ -108,19 +110,18 @@ function burn(n, peak, shape) {
 }
 const mkThread=(title,status,prov,tot,rate,shape,children)=>({
   title, status, provider:prov, tot, rate,
-  series: rate>0 ? burn(20, rate*60*0.02, shape||'steady') : new Array(20).fill(0),
+  series: rate>0 ? burn(20, rate*1.2, shape||'steady') : new Array(20).fill(0),
   children: children||[],
 });
 
 function roster() {
   return [
     { name:'activity-overview', threads:[
-      mkThread('sankey diagram for PRs','running','anthropic',96200,410,'ramp',[
-        mkThread('layout regression sweep','running','anthropic',41800,190,'steady'),
-        mkThread('river resolution pass','running','google',22400,88,'decay'),
-        mkThread('golden fixture refresh','done','openai',6300,0,'',[]),
+      mkThread('sankey diagram for PRs','running','anthropic',24600,264,'ramp',[
+        mkThread('layout regression sweep','running','anthropic',11400,172,'steady'),
+        mkThread('river resolution pass','running','google',5300,84,'decay'),
       ]),
-      mkThread('amplitude wave revision','running','openai',41100,180,'steady'),
+      mkThread('amplitude wave revision','running','openai',10800,150,'steady'),
       mkThread('visual-check browser driver','error','google',31500,0),
       mkThread('treemap label layer','done','anthropic',12400,0),
       mkThread('legend chips','idle','openai',3100,0),
@@ -143,7 +144,7 @@ function roster() {
       mkThread('stale flag sweep','done','google',3300,0),
     ]},
     { name:'homelab', threads:[
-      mkThread('daemon restart loop','running','openai',188400,1420,'burst'),   /* out of control */
+      mkThread('daemon restart loop','running','openai',188400,1420,'burst'),
       mkThread('cache warm pass','running','openai',41200,260,'steady'),
       mkThread('schema migration','running','google',24800,120,'ramp'),
       mkThread('index rebuild','done','google',9700,0),
@@ -160,30 +161,40 @@ function roster() {
 
 /* ============================== geometry ============================== */
 const SPINE_X=40, SPINE_W=104, ROW_X=200, ROW_R=40;
-const COLLAPSED_H=94, EXP_HDR=80, LANE_H=316, ROW_GAP=24, LANE_GAP=16, LANE_PAD=11,
-      THREAD_H=54, THREAD_GAP=10, HDR_PAD=16;
+const COLLAPSED_H=94, EXP_HDR=80, ROW_GAP=24, LANE_GAP=16, LANE_PAD=11,
+      THREAD_H=54, THREAD_GAP=10, HDR_PAD=16, GUT_LEFT=16, GUT_RIGHT=16;
 const WORLD_W = 1780;
+const LANE_H = 340;
 
 const NS='http://www.w3.org/2000/svg';
 let UID=0;
 function mk(name,attrs,parent){ const n=document.createElementNS(NS,name); for(const k in attrs){ if(attrs[k]!==null&&attrs[k]!==undefined) n.setAttribute(k,attrs[k]); } if(parent) parent.appendChild(n); return n; }
 function T(x,y,s,o={}){ const t=mk('text',{x,y,'font-size':o.size??11,'font-weight':o.weight??400,fill:o.fill??'#cdd8e2','text-anchor':o.anchor??'start','font-family':'inherit','opacity':o.opacity},o.parent); t.textContent=s; return t; }
 function RR(x,y,w,h,r,fill,parent,extra={}){ return mk('rect',{x,y,width:w,height:h,rx:r,fill,...extra},parent); }
-function rateW(rate,max){ return rate<=0 ? 1.4 : 1.6 + 12*Math.pow(rate/max,0.55); }
-function op(rate,max){ return rate<=0 ? 0.12 : 0.22 + 0.68*(rate/max); }
+function rateW(rate,max){ return rate<=0 ? 1.6 : 2 + 15*Math.pow(rate/max,0.5); }
+function op(rate,max){ return rate<=0 ? 0.16 : 0.30 + 0.62*(rate/max); }
 
 /* ============================== prep ============================== */
-function flatten(threads){ const out=[]; for (const t of threads){ out.push(t); if (t.children) out.push(...flatten(t.children)); } return out; }
+function childrenWorking(t){ return (t.children||[]).filter(c=>laneOf(c.status)==='working'); }
+
+/* A thread's flow = its own tokens + (when children are shown) its children's. */
+function flowOf(t, opts){ 
+  const base = t.tot;
+  if (opts.expandParent===t.title && childrenWorking(t).length)
+    return base + childrenWorking(t).reduce((s,c)=>s+c.tot,0);
+  return base;
+}
+function flat(threads){ const o=[]; for(const t of threads){ o.push(t); o.push(...flat(t.children||[])); } return o; }
 function prep(projects){
   const proj = projects.map(p=>{
-    const all = flatten(p.threads);
-    const tagged = all.map(t=>({ ...t, lane: laneOf(t.status) }));
-    const byId = new Map(tagged.map(t=>[t.title,t]));
-    // attach children refs (tagged) for nested rendering
-    p.threads.forEach(root=>{ const walk=(node)=>{ node._tag = byId.get(node.title); (node.children||[]).forEach(walk); }; walk(root); });
+    // mark children first so the tagged copies carry the flag
+    const markKids = (nodes) => { nodes.forEach(n=>{ (n.children||[]).forEach(c=>{ c.__isChild=true; markKids(c.children||[]); }); }); };
+    markKids(p.threads);
+    const all = flat(p.threads);
     const total = all.reduce((s,t)=>s+t.tot,0);
     const rate = all.reduce((s,t)=>s+t.rate,0);
-    const lanes = Object.fromEntries(LANES.map(l=>[l.id, tagged.filter(t=>t.lane===l.id)]));
+    const tagged = all.map(t=>({ ...t, lane:laneOf(t.status) }));
+    const lanes = Object.fromEntries(LANES.map(l=>[l.id, tagged.filter(t=>t.lane===l.id && !t.__isChild)]));
     const prov = PROVIDERS.map(pr=>({ id:pr.id,
       tot: all.filter(t=>t.provider===pr.id).reduce((s,t)=>s+t.tot,0),
       rate: all.filter(t=>t.provider===pr.id).reduce((s,t)=>s+t.rate,0) })).filter(x=>x.tot>0);
@@ -200,132 +211,134 @@ function prep(projects){
 /* ============================== drawing ============================== */
 function drawSpine(svg, prepd, y0){
   const total = prepd.provTot.reduce((s,p)=>s+(p.rate||p.tot),0)||1;
-  let y=y0;
+  let y=y0, maxH=0;
   prepd.provTot.forEach(pv=>{
-    const frac=(pv.rate||pv.tot)/total, h=Math.max(48, 320*frac), c=pc(pv.id);
+    const frac=(pv.rate||pv.tot)/total, h=Math.max(56, 420*frac), c=pc(pv.id);
     RR(SPINE_X,y,SPINE_W,h,7,c,svg,{opacity:0.93});
-    T(SPINE_X+SPINE_W/2,y+20,PROVIDERS[PIDX[pv.id]].label,{size:12,weight:700,anchor:'middle',fill:'#0b1015',parent:svg});
-    T(SPINE_X+SPINE_W/2,y+36,NF(pv.tot)+' tok',{size:10,anchor:'middle',fill:'#0b1015',parent:svg,opacity:0.85});
-    if(pv.rate>0) T(SPINE_X+SPINE_W/2,y+50,NF(pv.rate*60)+' tok/min',{size:9.5,anchor:'middle',fill:'#0b1015',parent:svg,opacity:0.8});
-    pv._y=y; pv._h=h; y+=h+16;
+    T(SPINE_X+SPINE_W/2,y+22,plabel(pv.id),{size:12,weight:700,anchor:'middle',fill:'#0b1015',parent:svg});
+    T(SPINE_X+SPINE_W/2,y+40,NF(pv.tot)+' tok',{size:10,anchor:'middle',fill:'#0b1015',parent:svg,opacity:0.85});
+    if(pv.rate>0) T(SPINE_X+SPINE_W/2,y+55,NF(pv.rate*60)+' tok/min',{size:9.5,anchor:'middle',fill:'#0b1015',parent:svg,opacity:0.8});
+    pv._y=y; pv._h=h; maxH=Math.max(maxH,h); y+=h+16;
   });
   T(SPINE_X+SPINE_W/2, y0-12, 'TIER 1 · providers', {size:9.5,weight:700,anchor:'middle',fill:'#7d8b99',parent:svg});
   return y;
 }
 
-/* provider → project line: thickness = historical burn, beads = current rate */
-function flowLine(svg, x1, y1, x2, y2, color, width, rate, maxRate, emph){
+/* provider → project line */
+function flowLine(svg, x1, y1, x2, y2, color, width, rate, maxRate){
   const mid=(x1+x2)/2;
   const d=`M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
-  mk('path',{d,stroke:color,'stroke-width':Math.max(1.6,width),fill:'none',opacity:emph?0.55:op(rate,maxRate),'stroke-linecap':'round'},svg);
-  if(rate>0) mk('path',{d,stroke:'#ffffff','stroke-width':Math.max(1,width*0.34),fill:'none',opacity:emph?0.95:0.5,'stroke-dasharray':'0.5 11','stroke-linecap':'round',class:emph?'beads':''},svg);
+  mk('path',{d,stroke:color,'stroke-width':Math.max(1.6,width),fill:'none',opacity:op(rate,maxRate),'stroke-linecap':'round'},svg);
+  if(rate>0) mk('path',{d,stroke:'#ffffff','stroke-width':Math.max(1,width*0.3),fill:'none',opacity:0.5,'stroke-dasharray':'0.5 11','stroke-linecap':'round'},svg);
 }
 
-/* the sky beam lives inline in drawLane now (trunk + per-card stems) */
-
-/* one thread card inside a lane */
-function threadCard(g, svg, x, y, w, t, prepd, opts){
-  const lane=laneById(t.lane || laneOf(t.status)), dc = lane.id==='idle'?GREYS[3]:lane.color;
-  RR(x,y,w,THREAD_H,7,'#18222d',g,{stroke:'#243441','stroke-opacity':0.85});
-  RR(x,y,3,THREAD_H,1.5,pc(t.provider),g,{opacity:0.9});
-  mk('circle',{cx:x+14,cy:y+16,r:3,fill:dc},g);
-  T(x+22,y+19,CLIP(t.title,26),{size:10,fill:'#dbe4ec',parent:g});
-  const barX=x+10, barMax=w-20, barW=Math.max(2,barMax*(t.tot/prepd.maxThreadTot));
-  mk('rect',{x:barX,y:y+31,width:barW,height:6,rx:3,fill:pc(t.provider),opacity:0.9},g);
-  if(t.rate>0) T(x+22,y+47,NF(t.rate*60)+' tok/min',{size:9,fill:lane.color,parent:g});
-  else T(x+22,y+47,NF(t.tot)+' tok',{size:9,fill:'#5f6b76',parent:g});
-  // parent affordance
+/* a contained thread card. Returns its height. Children (when shown) are drawn
+   INSIDE the parent's rectangle, indented. */
+function threadCard(svg, x, y, w, t, prepd, opts, depth){
+  depth = depth||0;
+  const lane=laneById(laneOf(t.status)), dc=laneOf(t.status)==='idle'?GREYS[3]:lane.color;
+  const kids = (opts.expandParent===t.title) ? childrenWorking(t) : [];
+  const inner = kids.length;
+  const h = inner ? THREAD_H + 8 + kids.reduce((s,k)=>s+THREAD_H+8,0) + 4 : THREAD_H;
+  RR(x,y,w,h,7,'#18222d',svg,{stroke:'#2b3d4e','stroke-opacity':0.9});
+  RR(x,y,3,h,1.5,pc(t.provider),svg,{opacity:0.9});
+  mk('circle',{cx:x+14,cy:y+16,r:3,fill:dc},svg);
+  T(x+22,y+19,CLIP(t.title,26),{size:10,fill:'#dbe4ec',parent:svg});
+  // flow number: summed when children shown
+  const flow = inner ? t.tot + kids.reduce((s,k)=>s+k.tot,0) : t.tot;
+  const barX=x+10, barMax=w-20, barW=Math.max(2,barMax*(flow/prepd.maxThreadTot));
+  mk('rect',{x:barX,y:y+31,width:barW,height:6,rx:3,fill:pc(t.provider),opacity:0.9},svg);
+  if(t.rate>0) T(x+22,y+47,NF(t.rate*60)+' tok/min',{size:9,fill:lane.color,parent:svg});
+  else T(x+22,y+47,NF(flow)+' tok',{size:9,fill:'#5f6b76',parent:svg});
+  if(flow!==t.tot) T(x+w-10,y+19,NF(flow)+' tok',{size:9,anchor:'end',fill:'#8b98a6',parent:svg});
   if(t.children && t.children.length){
     const open = opts.expandParent===t.title;
-    RR(x+w-74,y+8,66,18,9,'#22303c',g,{opacity:0.95});
-    T(x+w-41,y+21,(open?'▾ ':'▸ ')+t.children.length+' sub',{size:9,anchor:'middle',fill:'#c4cfd9',parent:g});
+    RR(x+w-74,y+8,66,18,9,'#22303c',svg,{opacity:0.95});
+    T(x+w-41,y+21,(open?'▾ ':'▸ ')+childrenWorking(t).length+' sub',{size:9,anchor:'middle',fill:'#c4cfd9',parent:svg});
   }
+  // children inside, indented
+  let cy = y + THREAD_H + 8;
+  const kidX = x + 22, kidW = w - 44;
+  kids.forEach((k)=>{
+    threadCard(svg, kidX, cy, kidW, k, prepd, { ...opts, expandParent:null }, depth+1);
+    cy += THREAD_H + 8;
+  });
+  return h;
+}
+
+/* draw the left-tree: trunk from a source, a branch to each card's left edge;
+   a parent's branch splits again to its nested children. */
+function leftTree(svg, sourceX, sourceY, cards, prepd, opts){
+  // cards: [{x,y,h,t}] with y = card top
+  const gutterX = sourceX + 14;
+  const first = cards[0], last = cards[cards.length-1];
+  const trunkTop = sourceY + 10, trunkBot = last ? last.y + 20 : sourceY;
+  const trunkW = 3.4;
+  // trunk
+  mk('path',{d:`M ${sourceX} ${sourceY} C ${sourceX} ${sourceY+18}, ${gutterX} ${sourceY+18}, ${gutterX} ${sourceY+34} L ${gutterX} ${trunkBot}`,
+    stroke:'#4d6f95','stroke-width':trunkW,fill:'none',opacity:0.6,'stroke-linecap':'round'},svg);
+  cards.forEach(c=>{
+    const cy = c.y + 16;
+    const bw = Math.max(1.6, rateW(c.t.rate, prepd.maxThreadRate));
+    const col = pc(c.t.provider);
+    mk('path',{d:`M ${gutterX} ${cy} L ${c.x} ${cy}`, stroke:col, 'stroke-width':bw, opacity:op(c.t.rate,prepd.maxThreadRate),'stroke-linecap':'round'},svg);
+    if(c.t.rate>0) mk('path',{d:`M ${gutterX} ${cy} L ${c.x} ${cy}`, stroke:'#fff','stroke-width':Math.max(1,bw*0.3),opacity:0.6,'stroke-dasharray':'0.5 10','stroke-linecap':'round'},svg);
+    // nested children: split from the card's left edge downward to each child
+    if(opts.expandParent===c.t.title){
+      const kids = childrenWorking(c.t);
+      const kidTrunkX = c.x + 8;
+      let ky = c.y + THREAD_H + 8;
+      const kidPos = kids.map(k=>{ const p={ k, y:ky }; ky += THREAD_H+8; return p; });
+      if(kidPos.length){
+        mk('path',{d:`M ${c.x} ${cy} L ${kidTrunkX} ${cy} L ${kidTrunkX} ${kidPos[kidPos.length-1].y+16}`,
+          stroke:'#4d6f95','stroke-width':2.2,fill:'none',opacity:0.5,'stroke-linecap':'round'},svg);
+        kidPos.forEach(kp=>{
+          const bw2=Math.max(1.4, rateW(kp.k.rate,prepd.maxThreadRate)), col2=pc(kp.k.provider);
+          mk('path',{d:`M ${kidTrunkX} ${kp.y+16} L ${c.x+22} ${kp.y+16}`, stroke:col2,'stroke-width':bw2,opacity:op(kp.k.rate,prepd.maxThreadRate),'stroke-linecap':'round'},svg);
+        });
+      }
+    }
+  });
 }
 
 /* a lane (tiled tier) */
-function drawLane(svg, x, y, w, lane, list, prepd, opts, beamAnchor){
+function drawLane(svg, x, y, w, lane, list, prepd, opts, source){
   RR(x,y,w,LANE_H,8,'#0f1720',svg,{stroke:'#22303c','stroke-opacity':0.85});
   const hc = lane.id==='idle'?GREYS[2]:lane.color;
   mk('circle',{cx:x+13,cy:y+16,r:3.4,fill:hc},svg);
   T(x+22,y+20,lane.label,{size:10.5,weight:600,fill:'#cdd8e2',parent:svg});
   T(x+w-10,y+20,String(list.length),{size:10.5,anchor:'end',fill:'#7d8b99',parent:svg});
 
-  // Working sorts highest-consuming at the top (the runaway thread leads);
-  // the other lanes sort by consumption too (a stable, scannable order).
-  const sorted = [...list].sort((a,b)=>b.tot-a.tot);
-
+  const sorted = [...list].sort((a,b)=>flowOf(b,opts)-flowOf(a,opts));
   const bodyTop=y+28, visibleH=LANE_H-34;
-  const contentH = sorted.reduce((s,t)=>s+THREAD_H+THREAD_GAP,0) + (opts.expandParent&&lane.id==='working'? nestedHeight(sorted,opts):0);
+
+  // card positions
+  const positions=[]; let cy=bodyTop+LANE_PAD;
+  sorted.forEach(t=>{ const h = (opts.expandParent===t.title && childrenWorking(t).length) ? THREAD_H+8+childrenWorking(t).length*(THREAD_H+8)+4 : THREAD_H; positions.push({ t, y:cy, h }); cy+=h+THREAD_GAP; });
+  const contentH = cy - bodyTop;
   const overflow = contentH > visibleH;
   const clipId='clip-'+(++UID);
   const cg=mk('clipPath',{id:clipId},svg); mk('rect',{x:x+1,y:bodyTop,width:w-2,height:visibleH},cg);
-  const g=mk('g',{'clip-path':`url(#${clipId})`},svg);
 
-  // The Working lane keeps a left gutter for the sky beam: a bright vertical
-  // trunk fed by the header, with a stem into each thread card (stem thickness
-  // = that thread's burn). Drawn behind the cards so the light reads in the
-  // gutter and the stems meet each card's left edge.
-  const GW = lane.id==='working' ? 30 : 0;
+  // left-tree gutter (Working lane only): the flow splits from the source into
+  // the cards, and a parent's branch splits again into its nested children.
+  const GW = lane.id==='working' ? 34 : 0;
   const cardX = x + LANE_PAD + GW, cardW = w - 2*LANE_PAD - GW;
-  const positions=[]; let cy=bodyTop+LANE_PAD;
-  sorted.forEach(t=>{ positions.push({ t, y:cy }); cy+=THREAD_H+THREAD_GAP; });
   if(lane.id==='working' && positions.length){
-    const trunkX = x + LANE_PAD + GW/2;
-    const topY = beamAnchor.y;
-    const botY = positions[positions.length-1].y + THREAD_H/2;
-    const trunkRate = positions.reduce((s,p)=>s+p.t.rate,0);
-    const trunkW = Math.max(3, rateW(trunkRate, prepd.maxThreadRate*1.6));
-    // glow + trunk
-    mk('path',{d:`M ${beamAnchor.x} ${topY} C ${beamAnchor.x} ${topY+18}, ${trunkX} ${topY+18}, ${trunkX} ${topY+34} L ${trunkX} ${botY}`,
-      stroke:'#ffffff', 'stroke-width':trunkW, fill:'none', opacity:0.10, 'stroke-linecap':'round'},svg);
-    mk('path',{d:`M ${beamAnchor.x} ${topY} C ${beamAnchor.x} ${topY+18}, ${trunkX} ${topY+18}, ${trunkX} ${topY+34} L ${trunkX} ${botY}`,
-      stroke:hc, 'stroke-width':Math.max(2.4,trunkW*0.7), fill:'none', opacity:0.5, 'stroke-linecap':'round'},svg);
-    positions.forEach(p=>{
-      const stemW=rateW(p.t.rate, prepd.maxThreadRate), emph=opts.emphasis===p.t.title;
-      mk('path',{d:`M ${trunkX} ${p.y+THREAD_H/2} L ${cardX} ${p.y+THREAD_H/2}`, stroke:pc(p.t.provider),
-        'stroke-width':Math.max(1.6,stemW), opacity:emph?0.9:Math.max(0.4,op(p.t.rate,prepd.maxThreadRate)), 'stroke-linecap':'round'},svg);
-      if(p.t.rate>0) mk('path',{d:`M ${trunkX} ${p.y+THREAD_H/2} L ${cardX} ${p.y+THREAD_H/2}`, stroke:'#ffffff',
-        'stroke-width':Math.max(1,stemW*0.32), opacity:emph?1:0.7, 'stroke-dasharray':'0.5 9','stroke-linecap':'round', class:emph?'beads':''},svg);
-    });
+    leftTree(svg, source.x, source.y, positions.map(p=>({ x:cardX, y:p.y, h:p.h, t:p.t })), prepd, opts);
   }
 
-  positions.forEach(p=>{
-    threadCard(g, svg, cardX, p.y, cardW, p.t, prepd, opts);
-    // nested: a parent working card opens its own sky beam through its working children
-    if(lane.id==='working' && p.t.children && p.t.children.length && opts.expandParent===p.t.title){
-      const kids = p.t.children.filter(c=>laneOf(c.status)==='working');
-      const kx = cardX + 18, kw = cardW - 18;
-      const kTrunkX = cardX + 8;
-      let ky = p.y + THREAD_H + 10;
-      const kPos=[]; kids.forEach(k=>{ kPos.push({ t:k, y:ky }); ky += THREAD_H+THREAD_GAP; });
-      const topY = p.y + THREAD_H, botY = kPos.length? kPos[kPos.length-1].y+THREAD_H/2 : topY;
-      mk('path',{d:`M ${cardX+cardW/2} ${topY} C ${cardX+cardW/2} ${topY+10}, ${kTrunkX} ${topY+10}, ${kTrunkX} ${topY+20} L ${kTrunkX} ${botY}`,
-        stroke:hc,'stroke-width':2.4,fill:'none',opacity:0.45,'stroke-linecap':'round'},svg);
-      kPos.forEach(kp=>{
-        const sw=rateW(kp.t.rate, prepd.maxThreadRate);
-        mk('path',{d:`M ${kTrunkX} ${kp.y+THREAD_H/2} L ${kx} ${kp.y+THREAD_H/2}`, stroke:pc(kp.t.provider),
-          'stroke-width':Math.max(1.5,sw), opacity:Math.max(0.4,op(kp.t.rate,prepd.maxThreadRate)),'stroke-linecap':'round'},svg);
-      });
-      kPos.forEach(kp=>threadCard(g, svg, kx, kp.y, kw, kp.t, prepd, opts));
-    }
-  });
+  const g=mk('g',{'clip-path':`url(#${clipId})`},svg);
+  positions.forEach(p=>{ threadCard(g, cardX, p.y, cardW, p.t, prepd, opts, 0); });
 
   if(overflow){
     const trackX=x+w-4;
     mk('rect',{x:trackX,y:bodyTop,width:3,height:visibleH,rx:1.5,fill:'#22303c'},svg);
-    const contentC = Math.max(contentH, visibleH);
-    mk('rect',{x:trackX,y:bodyTop,width:3,height:Math.max(20,visibleH*visibleH/contentC),rx:1.5,fill:'#4a5b6d'},svg);
+    mk('rect',{x:trackX,y:bodyTop,width:3,height:Math.max(20,visibleH*visibleH/Math.max(contentH,visibleH)),rx:1.5,fill:'#4a5b6d'},svg);
     T(x+w-8,y+LANE_H-4,'scroll ↕',{size:8.5,anchor:'end',fill:'#5f6b76',parent:svg});
   }
 }
-function nestedHeight(sorted,opts){
-  const p=sorted.find(t=>t.title===opts.expandParent);
-  if(!p||!p.children) return 0;
-  const kids=p.children.filter(c=>laneOf(c.status)==='working');
-  return kids.length*(THREAD_H+THREAD_GAP)+6;
-}
 
-/* collapsed project row (wide, landscape) */
 function collapsedRow(svg, x, y, w, p, prepd, opts){
   RR(x,y,w,COLLAPSED_H,11,'#141d27',svg,{stroke:'#2b3a49','stroke-opacity':0.9});
   RR(x,y,4,COLLAPSED_H,2,pc(p.prov[0].id),svg,{opacity:0.85});
@@ -333,63 +346,56 @@ function collapsedRow(svg, x, y, w, p, prepd, opts){
   T(x+w-16,y+24,NF(p.total)+' tok',{size:12,anchor:'end',fill:'#c4cfd9',parent:svg});
   T(x+18,y+42, p.rate>0 ? NF(p.rate*60)+' tok/min' : 'quiet', {size:10.5, fill:p.rate>0?'#3d84e0':'#5f6b76', parent:svg});
   T(x+150,y+42, p.all.length+' threads · '+p.tagged.filter(t=>t.lane==='working').length+' working', {size:10, fill:'#7d8b99', parent:svg});
-  // provider mix strip
   const mixX=x+18, mixW=w-260, ptotal=p.prov.reduce((s,v)=>s+v.tot,0)||1; let px=mixX;
   p.prov.forEach(pv=>{ const seg=mixW*(pv.tot/ptotal); mk('rect',{x:px,y:y+52,width:Math.max(1,seg),height:5,rx:2.5,fill:pc(pv.id),opacity:0.9},svg); px+=seg; });
-  // burn sparkline (hottest thread) across the row
   const busiest = p.tagged.slice().sort((a,b)=>b.rate-a.rate)[0];
   const series = busiest && busiest.rate>0 ? busiest.series : new Array(20).fill(0);
   const smax=Math.max(1,...series), sx0=x+18, sW=w-260, base=y+82, amp=16;
   const pts=series.map((v,i)=>({x:sx0+sW*(i/(series.length-1)), y:base-amp*(v/smax)}));
-  const dl=pts.map((pt,i)=>(i?'L':'M')+` ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' ');
-  mk('path',{d:dl,stroke:pc(p.prov[0].id),'stroke-width':1.5,fill:'none',opacity:0.65},svg);
+  mk('path',{d:pts.map((pt,i)=>(i?'L':'M')+` ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' '),stroke:pc(p.prov[0].id),'stroke-width':1.5,fill:'none',opacity:0.65},svg);
   T(sx0, y+COLLAPSED_H-4, 'burn · last hour', {size:8.5,fill:'#5f6b76',parent:svg});
   T(x+w-16,y+COLLAPSED_H-6,'open swimlanes ▸',{size:9.5,anchor:'end',fill:'#5f6b76',parent:svg});
 }
 
-/* expanded project row: header (burn bus) + tiled lanes + sky beam */
 function expandedRow(svg, x, y, w, p, prepd, opts){
   const hdrH=EXP_HDR;
   RR(x,y,w,hdrH,11,'#141d27',svg,{stroke:'#33506e','stroke-width':2,'stroke-opacity':0.9});
   RR(x,y,4,hdrH,2,pc(p.prov[0].id),svg,{opacity:0.85});
   T(x+18,y+26,CLIP(p.name,40),{size:14,weight:700,fill:'#eef4f9',parent:svg});
   T(x+18,y+46,NF(p.total)+' tok · '+(p.rate>0?NF(p.rate*60)+' tok/min':'quiet')+' · '+p.all.length+' threads',{size:10.5,fill:'#8b98a6',parent:svg});
-  T(x+18,y+62,'burn + activity in ↓',{size:8.5,fill:'#5f6b76',parent:svg});
-  // provider mix bus right side
+  T(x+18,y+62,'flow splits by status ↓',{size:8.5,fill:'#5f6b76',parent:svg});
   const mixX=x+w-360, mixW=344, ptotal=p.prov.reduce((s,v)=>s+v.tot,0)||1; let px=mixX;
   p.prov.forEach(pv=>{ const seg=mixW*(pv.tot/ptotal); mk('rect',{x:px,y:y+40,width:Math.max(1,seg),height:6,rx:3,fill:pc(pv.id),opacity:0.92},svg); px+=seg; });
 
-  // lanes tile across the width
   const laneW=(w-2*HDR_PAD-3*LANE_GAP)/4;
-  let lx=x+HDR_PAD;
   const laneTop=y+hdrH+12;
-  const beamAnchor={ x: lx + laneW/2, y: y+hdrH };
-  LANES.forEach(lane=>{
-    drawLane(svg, lx, laneTop, laneW, lane, p.lanes[lane.id], prepd, opts, beamAnchor);
-    lx += laneW + LANE_GAP;
+  const laneX0=x+HDR_PAD;
+  const source={ x: laneX0 + LANE_PAD, y: y+hdrH };
+  LANES.forEach((lane, i)=>{
+    const lx = laneX0 + i*(laneW+LANE_GAP);
+    drawLane(svg, lx, laneTop, laneW, lane, p.lanes[lane.id], prepd, opts, i===0?source:source);
+    if(i===0) drawLane.__x = lx;
   });
   return hdrH + 12 + LANE_H + 16;
 }
 
-/* ============================== world ============================== */
 function renderWorld(host, projects, opts){
   opts=opts||{};
   const prepd=prep(projects);
   const W=WORLD_W, rowX=ROW_X, rowW=W-ROW_X-ROW_R;
-  let heights = prepd.proj.map(p=> opts.expand===p.name ? (EXP_HDR+12+LANE_H+16) : COLLAPSED_H);
+  const heights = prepd.proj.map(p=> opts.expand===p.name ? (EXP_HDR+12+LANE_H+16) : COLLAPSED_H);
   const H = 60 + heights.reduce((s,h)=>s+h+ROW_GAP,0) + 30;
   const svg=mk('svg',{viewBox:`0 0 ${W} ${H}`,preserveAspectRatio:'xMidYMid meet'},host);
 
-  drawSpine(svg, prepd, 60+30);
+  drawSpine(svg, prepd, 90);
   const spineEndX=SPINE_X+SPINE_W;
 
   let y=60;
   prepd.proj.forEach((p,i)=>{
-    // provider → project line(s)
     const cy = y + (opts.expand===p.name ? EXP_HDR/2 : COLLAPSED_H/2);
     p.prov.forEach(pv=>{
       const spine=prepd.provTot.find(x=>x.id===pv.id); if(!spine) return;
-      flowLine(svg, spineEndX, spine._y+spine._h/2, rowX+4, cy, pc(pv.id), Math.min(rateW(pv.rate,prepd.maxThreadRate),9), pv.rate, prepd.maxThreadRate, false);
+      flowLine(svg, spineEndX, spine._y+spine._h/2, rowX+4, cy, pc(pv.id), Math.min(rateW(pv.rate,prepd.maxThreadRate),9), pv.rate, prepd.maxThreadRate);
     });
     if(opts.expand===p.name) expandedRow(svg, rowX, y, rowW, p, prepd, opts);
     else collapsedRow(svg, rowX, y, rowW, p, prepd, opts);
@@ -410,26 +416,26 @@ panel('Overview · projects piled vertically', '6 projects · one wide row each'
   renderWorld(body, roster(), { footnote:'collapsed stack · provider → project burn+activity lines' });
 });
 document.getElementById('note-overview').innerHTML =
-  'Projects <b>pile vertically</b> — one wide landscape row each, never tiled across columns. ' +
-  'The provider spine on the left feeds each row with a burn+activity line (thickness = historical burn, beads = current rate). ' +
-  'A row shows the project name, total, live tok/min, thread counts, a provider-mix strip, and the hottest thread’s burn sparkline.';
+  'Projects <b>pile vertically</b> — one wide landscape row each, never tiled. The provider spine feeds each row with a ' +
+  'burn+activity line (thickness = historical burn, beads = current rate). A row shows name, total, live tok/min, thread counts, ' +
+  'a provider-mix strip, and the hottest thread’s burn sparkline.';
 
-panel('One project expanded · the tiers tile', 'Working far left · sorted by consumption', (body)=>{
+panel('One project expanded · the tiers tile', 'Working far left · sorted by flow', (body)=>{
   renderWorld(body, roster(), { expand:'homelab', footnote:'expanded “homelab” · lanes tile: Working ▸ Needs You ▸ Unread ▸ Idle' });
 });
 document.getElementById('note-expanded').innerHTML =
-  'Expanding a row reveals the <b>tiers tiled across the width</b>: Working, Needs You, Unread, Idle. ' +
-  'In the Working lane the threads are <b>sorted highest-consuming at the top</b>, and the incoming flow comes down as a <b>sky beam</b> — ' +
-  'a bundle of strands from the header into each card, so the runaway thread (<b>daemon restart loop</b>, 1.4M tok/min) is the thickest, brightest strand at the top. ' +
-  'Lanes scroll independently; the row height is capped at the Working lane.';
+  'Expanding a row reveals the <b>tiers tiled across the width</b>: Working, Needs You, Unread, Idle. The Working lane sorts threads ' +
+  '<b>highest-flow at the top</b>. The flow arrives as a <b>left-tree</b> — from the project header a trunk branches into each working ' +
+  'card, so the runaway thread (<b>daemon restart loop</b>) carries the thickest branch at the top. Lanes scroll independently; row height ' +
+  'is capped at the Working lane. No beam: the branching lines carry the flow.';
 
-panel('A parent working card opens its own sky beam', 'nested through its working children', (body)=>{
-  renderWorld(body, roster(), { expand:'activity-overview', expandParent:'sankey diagram for PRs', footnote:'“sankey diagram for PRs” is a parent → its working children beam in' });
+panel('A parent thread contains its children', 'summed flow · split in the tree', (body)=>{
+  renderWorld(body, roster(), { expand:'activity-overview', expandParent:'sankey diagram for PRs', footnote:'“sankey diagram for PRs” is a parent → children nested inside its card' });
 });
 document.getElementById('note-nested').innerHTML =
-  'A working card that is a <b>parent</b> shows a “▸ N sub” chip. Opened, it deploys its <b>own sky beam</b> through its working children, ' +
-  'each child a smaller card with its own burn bar and tok/min — the same flow-control read, one level down. ' +
-  'Parent/child lives inside the card; it is not a separate spatial tier in the project stack.';
+  'A parent thread’s children are <b>contained inside the parent’s card</b>, not laid out as siblings. The parent shows the ' +
+  '<b>sum of its own and its children’s flow</b> (bar + number), and the <b>left-tree splits</b> at the parent into its children — ' +
+  'the same way threads branch from projects. There is no sky beam; the tree is the flow.';
 
 document.getElementById('legend').innerHTML =
   PROVIDERS.map(p=>`<span><span class="sw" style="background:${p.color}"></span>${p.label}</span>`).join('')
@@ -437,7 +443,7 @@ document.getElementById('legend').innerHTML =
       ? `<span class="sdot" style="background:linear-gradient(90deg,${l.color} 50%,${l.alt} 50%)"></span>`
       : `<span class="sdot" style="background:${l.id==='idle'?GREYS[2]:l.color}"></span>`;
     return `<span>${dot}${l.label}</span>`; }).join('')
-  + `<span style="color:#7d8b99">thickness = historical burn · animated beads = current activity · Working sorted by consumption</span>`;
+  + `<span style="color:#7d8b99">branch thickness = flow · animated beads = current activity · Working sorted by flow</span>`;
 </script>
 </body>
 </html>
