@@ -104,9 +104,35 @@ export function useBbNavigate(): unknown {
  * per-render object feeds set-of-deps effect loops). The `shape` call stalls
  * for `?shapeDelay=` milliseconds before resolving the fixture — the lever
  * the throbber UAT pulls to open a loading window it can assert inside.
+ *
+ * `pulse` and `threadCard` answer the hover-card and burn-rate features: the
+ * fixture's threads burn at distinct rates so a UAT can assert that a busier
+ * dot pulses faster, and each thread quotes a real-looking end-of-thread line.
  */
+const MOCK_RATES: Record<string, number> = {
+  thr_running: 10, // the hot thread: 10 tok/s → the fast floor (220ms)
+  thr_running_slow: 1, // exactly 10× slower → the base period (2200ms)
+  thr_error: 0, // not working, but a measured zero is still reported
+  thr_idle: 0, // measured zero
+};
+
+const MOCK_SNIPPETS: Record<string, { role: "user" | "assistant"; text: string } | null> = {
+  thr_running: { role: "assistant", text: "Reworked the export path and the three tests that pinned the old shape." },
+  thr_running_slow: { role: "user", text: "Check the migration notes before we cut the next prerelease." },
+  thr_error: { role: "assistant", text: "The importer test fails only on a cold cache; tracing the setup order now." },
+  // A thread with no usable history: the card must say so, not invent one.
+  thr_idle: null,
+};
+
 const rpcClient = {
-  call: async (method: string, _args: unknown): Promise<unknown> => {
+  call: async (method: string, args: unknown): Promise<unknown> => {
+    if (method === "pulse") {
+      return { rates: MOCK_RATES, generatedAt: Date.now() };
+    }
+    if (method === "threadCard") {
+      const threadId = (args as { threadId?: string }).threadId ?? "";
+      return { threadId, snippet: MOCK_SNIPPETS[threadId] ?? null };
+    }
     if (method !== "shape") throw new Error(`mock rpc: unknown method ${method}`);
     if (SHAPE_DELAY_MS > 0) await new Promise((resolve) => setTimeout(resolve, SHAPE_DELAY_MS));
     window.__profile?.mark("mock-shape-resolved");

@@ -48,6 +48,19 @@ export const SIM_THREADS: readonly SimThread[] = [
     createdAt: NOW - 900_000,
   },
   {
+    // A second working thread, deliberately 10× slower than thr_running: the
+    // hover/pulse UAT asserts a real 10× period contrast in the DOM, which
+    // needs two units that pulse at different rates.
+    id: "thr_running_slow",
+    projectId: "proj_beta",
+    title: "Audit the migration notes",
+    titleFallback: "New thread",
+    status: "active",
+    parentThreadId: null,
+    updatedAt: NOW - 240_000,
+    createdAt: NOW - 1_200_000,
+  },
+  {
     id: "thr_idle",
     projectId: "proj_beta",
     title: null,

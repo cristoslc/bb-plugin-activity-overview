@@ -1,0 +1,105 @@
+test_suite:
+  id: uat-hover-card-pulse-001
+  title: Status-dot hover shows a card with the full title and end-of-thread snippet; working dots pulse at their burn rate
+  description: >
+    Headless suite for the two thread-status features: hovering a unit shows a
+    card (full title plus the newest message, fetched on hover and cached) in
+    place of the browser tooltip, and a working unit's blink period follows its
+    measured token burn so a busier thread pulses faster. The mock SDK serves
+    fixed rates (thr_running is the hot thread, thr_idle is a measured zero with
+    no conversation) so the assertions are deterministic.
+  tags: [interaction, hover, pulse, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: Hovering a treemap dot opens the card with the full title and a resolved snippet
+    criticality: blocker
+    preconditions:
+      - dist/ has been built (`npm run build`); the harness serves it from vite
+      - Headless Chrome is available at CHROME_PATH (default: system Chrome)
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Open the panel.
+        expected: The tab bar paints and the harness is live.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints.
+      - order: 3
+        action: hover
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_running"]'
+        instruction: Hover the hot thread's dot.
+        expected: A card appears above the dot with the full title, the status/age line, and the end-of-thread snippet, entirely inside the panel and not under the floating chrome.
+
+  - id: TC-02
+    title: A thread with no conversation says so instead of showing an empty snippet
+    criticality: standard
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints.
+      - order: 3
+        action: hover
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle"]'
+        instruction: Hover the idle thread's dot (the mock returns no outline for it).
+        expected: The card renders its "No conversation yet" state (data-attn-hover-snippet="empty") rather than an invented quote.
+
+  - id: TC-03
+    title: Working dots pulse at their burn rate, and the busiest pulses fastest
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints.
+      - order: 3
+        action: assertPulse
+        instruction: Read every pulsing unit's period and animation.
+        expected: Every working unit carries an attn-pulse animation; thr_running (10 tok/s) pulses about 10× faster than thr_running_slow (1 tok/s).
+
+  - id: TC-04
+    title: The card is gone once the pointer leaves, and the board's dots hover identically
+    criticality: standard
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: hover
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_error"]'
+        instruction: Hover a dot on the Board tab.
+        expected: The same card appears, so the behavior is shared across views, not special-cased to the treemap.
+      - order: 3
+        action: pointerAway
+        instruction: Move the pointer off the dot.
+        expected: The card unmounts; no stale card is left floating.

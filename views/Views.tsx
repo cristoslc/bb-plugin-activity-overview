@@ -44,6 +44,9 @@ import {
   treemapLayout,
   placeRegionLabels,
   tip,
+  ageLabel,
+  pulsePeriodMs,
+  threadTitle,
   FAMILY_TINTS,
   zoomToRect,
   clampPanEdges,
@@ -55,6 +58,8 @@ import {
 } from "./model";
 import { THEME_CSS } from "./theme";
 import { TokenFlowView } from "./TokenFlowView";
+import { ThreadHoverCard, useCardSnippets, type CardSnippet, type HoverTarget } from "./HoverCard";
+import { usePulseRates } from "./pulse";
 import {
   APP_VERSION,
   CURRENT_UNRELEASED_FINGERPRINT,
@@ -576,6 +581,65 @@ function LegendRow({ counts }: { counts: Record<Status, number> }) {
   );
 }
 
+// ---------- hover card state (shared by all dot surfaces) ----------
+
+/** What every dot surface needs to open the shared hover card and pulse. */
+type DotWiring = {
+  /** threadId → measured tokens/second (absent = not measurable yet). */
+  pulseRates: ReturnType<typeof usePulseRates>;
+  onHover: (thread: AttnThread, el: HTMLElement) => void;
+  onHoverEnd: () => void;
+};
+
+/**
+ * The operator's hover target, owned by the panel so one card serves every
+ * view. Coordinates are captured from the dot's live rect relative to the
+ * panel root: the world layer is camera-scaled, so world coordinates would be
+ * wrong the moment the operator zooms.
+ */
+function useHoverCard(
+  panelRef: RefObject<HTMLDivElement | null>,
+  snippets: ReturnType<typeof useCardSnippets>,
+): {
+  target: HoverTarget | null;
+  thread: AttnThread | null;
+  snippet: CardSnippet | undefined;
+  onHover: DotWiring["onHover"];
+  onHoverEnd: DotWiring["onHoverEnd"];
+} {
+  const [hover, setHover] = useState<{ target: HoverTarget; thread: AttnThread } | null>(null);
+  const onHover = (thread: AttnThread, el: HTMLElement) => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    // Re-measure on every enter: the card must land on the dot as it is now,
+    // not where it was when this handler was created.
+    const dotRect = el.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    setHover({
+      thread,
+      target: {
+        threadId: thread.id,
+        title: threadTitle(thread),
+        x: dotRect.left - panelRect.left,
+        y: dotRect.top - panelRect.top,
+        w: dotRect.width,
+        h: dotRect.height,
+      },
+    });
+    snippets.request(thread.id);
+  };
+  const onHoverEnd = () => setHover(null);
+  return {
+    target: hover?.target ?? null,
+    thread: hover?.thread ?? null,
+    // Tri-state: undefined while the fetch is in flight, null when the thread
+    // has nothing to quote, the object once resolved.
+    snippet: hover === null ? undefined : snippets.snippets.get(hover.target.threadId),
+    onHover,
+    onHoverEnd,
+  };
+}
+
 /** World-space root of a view: the fixed-region layer the map pans/zooms. An
  * optional `onClick` fires for any click in the world that is NOT a thread
  * unit — the units stop propagation when actionable, so a background click
@@ -611,6 +675,9 @@ function Dot({
   nowMs,
   actionable = false,
   onOpen,
+  pulseRate,
+  onHover,
+  onHoverEnd,
 }: {
   cell: Cell;
   x: number;
@@ -621,18 +688,27 @@ function Dot({
   actionable?: boolean;
   /** Open this dot's thread (called only when actionable). */
   onOpen?: (id: string) => void;
+  /** Measured burn (tok/s) for a working dot; null/absent = not measurable. */
+  pulseRate?: number | null;
+  /** Pointer entered this dot. */
+  onHover?: (thread: AttnThread, el: HTMLElement) => void;
+  /** Pointer left this dot (or the panel). */
+  onHoverEnd?: () => void;
 }) {
-  const working = classify(cell.t) === "working";
+  const status = classify(cell.t);
+  const working = status === "working";
   const open = () => onOpen?.(cell.t.id);
+  // A working dot's blink period tracks its burn. Unmeasured keeps the base
+  // pulse; a measured zero holds the slowest pulse (never a frozen dot).
+  const period = working ? pulsePeriodMs(pulseRate ?? null) : null;
   return (
     <div
       data-attn-unit=""
       data-thread-id={cell.t.id}
-      title={tip(cell.t, nowMs)}
+      data-attn-pulse={working ? (period === null ? "none" : String(Math.round(period))) : undefined}
       role={actionable ? "button" : undefined}
       tabIndex={actionable ? 0 : undefined}
       className={
-        (working ? "attn-pulse " : "") +
         "rounded-full" +
         (actionable ? " cursor-pointer hover:ring-2 hover:ring-foreground/40" : "")
       }
@@ -643,7 +719,19 @@ function Dot({
         width: d,
         height: d,
         background: cellColor(cell.t, nowMs),
+        // The blink rides an inline animation so each dot carries its own
+        // period; the keyframes live in the panel's style block.
+        animation: period === null ? undefined : `attn-pulse ${period}ms ease-in-out infinite`,
       }}
+      onPointerEnter={
+        onHover === undefined
+          ? undefined
+          : (e) => {
+              if (e.pointerType !== "mouse") return; // touch has no hover
+              onHover(cell.t, e.currentTarget);
+            }
+      }
+      onPointerLeave={onHoverEnd}
       onClick={
         actionable
           ? (e) => {
@@ -678,6 +766,7 @@ export function BoardView({
   onWorld,
   apiRef,
   onOpenThread,
+  wiring,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -688,6 +777,8 @@ export function BoardView({
   apiRef: RefObject<MapApi | null>;
   /** Open a thread (only wired while the board is zoomed in). */
   onOpenThread: (id: string) => void;
+  /** Hover card + burn-rate pulse, shared with the other views. */
+  wiring: DotWiring;
 }) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
@@ -741,6 +832,9 @@ export function BoardView({
                 nowMs={nowMs}
                 actionable={zoomed}
                 onOpen={onOpenThread}
+                pulseRate={wiring.pulseRates.get(cell.t.id)}
+                onHover={wiring.onHover}
+                onHoverEnd={wiring.onHoverEnd}
               />
             ))}
           </div>
@@ -762,6 +856,7 @@ export function UnitTreemapView({
   onWorld,
   apiRef,
   onOpenThread,
+  wiring,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -772,6 +867,8 @@ export function UnitTreemapView({
   apiRef: RefObject<MapApi | null>;
   /** Open a thread (only wired while the treemap is zoomed in). */
   onOpenThread: (id: string) => void;
+  /** Hover card + burn-rate pulse, shared with the other views. */
+  wiring: DotWiring;
 }) {
   const world = useMemo(() => worldOf(w, h), [w, h]);
   useEffect(() => {
@@ -948,6 +1045,9 @@ export function UnitTreemapView({
                   nowMs={nowMs}
                   actionable={zoomed}
                   onOpen={onOpenThread}
+                  pulseRate={wiring.pulseRates.get(cell.t.id)}
+                  onHover={wiring.onHover}
+                  onHoverEnd={wiring.onHoverEnd}
                 />
               );
             })}
@@ -996,6 +1096,7 @@ export function StripTilesView({
   onWorld,
   apiRef,
   onOpenThread,
+  wiring,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -1006,6 +1107,8 @@ export function StripTilesView({
   apiRef: RefObject<MapApi | null>;
   /** Open a thread (only wired while the tiles are zoomed in). */
   onOpenThread: (id: string) => void;
+  /** Hover card + burn-rate pulse, shared with the other views. */
+  wiring: DotWiring;
 }) {
   const model = useMemo(() => {
     const { projects } = buildProjects(data.threads, data.projects, nowMs);
@@ -1055,37 +1158,56 @@ export function StripTilesView({
             {card.p.name} · {card.p.n}
           </div>
           <div className="flex">
-            {card.units.map((cell) => (
-              <div
-                key={cell.t.id}
-                data-attn-unit=""
-                data-thread-id={cell.t.id}
-                title={tip(cell.t, nowMs)}
-                role={zoomed ? "button" : undefined}
-                tabIndex={zoomed ? 0 : undefined}
-                className={"rounded-sm" + (zoomed ? " cursor-pointer hover:ring-2 hover:ring-foreground/40" : "")}
-                style={{ width: 4 * scale, height: 12 * scale, marginRight: scale, background: cellColor(cell.t, nowMs) }}
-                onClick={
-                  zoomed
-                    ? (e) => {
-                        e.stopPropagation();
-                        onOpenThread(cell.t.id);
-                      }
-                    : undefined
-                }
-                onKeyDown={
-                  zoomed
-                    ? (e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
+            {card.units.map((cell) => {
+              const status = classify(cell.t);
+              const period = status === "working" ? pulsePeriodMs(wiring.pulseRates.get(cell.t.id) ?? null) : null;
+              return (
+                <div
+                  key={cell.t.id}
+                  data-attn-unit=""
+                  data-thread-id={cell.t.id}
+                  data-attn-pulse={period === null ? undefined : String(Math.round(period))}
+                  role={zoomed ? "button" : undefined}
+                  tabIndex={zoomed ? 0 : undefined}
+                  className={"rounded-sm" + (zoomed ? " cursor-pointer hover:ring-2 hover:ring-foreground/40" : "")}
+                  style={{
+                    width: 4 * scale,
+                    height: 12 * scale,
+                    marginRight: scale,
+                    background: cellColor(cell.t, nowMs),
+                    animation: period === null ? undefined : `attn-pulse ${period}ms ease-in-out infinite`,
+                  }}
+                  onPointerEnter={
+                    wiring.onHover === undefined
+                      ? undefined
+                      : (e) => {
+                          if (e.pointerType !== "mouse") return;
+                          wiring.onHover(cell.t, e.currentTarget);
+                        }
+                  }
+                  onPointerLeave={wiring.onHoverEnd}
+                  onClick={
+                    zoomed
+                      ? (e) => {
                           e.stopPropagation();
                           onOpenThread(cell.t.id);
                         }
-                      }
-                    : undefined
-                }
-              />
-            ))}
+                      : undefined
+                  }
+                  onKeyDown={
+                    zoomed
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onOpenThread(cell.t.id);
+                          }
+                        }
+                      : undefined
+                  }
+                />
+              );
+            })}
           </div>
         </div>
       ))}
@@ -1284,6 +1406,15 @@ export function OverviewPage() {
   const openThread = useCallback((id: string) => nav.toThread(id), [nav]);
   // Panel viewport: views pack to its width; the treemap fills its height.
   const [panelRef, vw, vh] = usePanelSize(MIN_STAGE_W);
+  // Hover card and burn-rate pulse: one card and one rate feed serve every
+  // view, so a dot behaves identically in the board, treemap, and tiles.
+  const snippets = useCardSnippets();
+  const pulseRates = usePulseRates();
+  const hover = useHoverCard(panelRef, snippets);
+  const wiring: DotWiring = useMemo(
+    () => ({ pulseRates, onHover: hover.onHover, onHoverEnd: hover.onHoverEnd }),
+    [pulseRates, hover.onHover, hover.onHoverEnd],
+  );
   // The panel's pre-measurement size (w = MIN_STAGE_W, h = 0) must never reach
   // a view: a world packed to it is the off-centre fit the operator saw. Mount
   // the canvas only once the panel has a real height. The measuring layout
@@ -1312,16 +1443,30 @@ export function OverviewPage() {
     <div ref={panelRef} className="attn-theme relative h-full min-h-0 flex-1 overflow-hidden">
       <style>
         {THEME_CSS +
+          // Dots carry their own period inline (the burn-rate pulse), so the
+          // class keeps the fixed 2.2s blink for the What's-new button only.
           "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
       </style>
       {tab === "tokenflow" ? (
         <TokenFlowView />
       ) : measured ? (
         <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
-          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} /> : null}
-          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} /> : null}
+          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
+          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
         </MapCanvas>
+      ) : null}
+      {/* The hover card lives above the canvas (portal on the panel root), so
+          the camera never scales it and no view can clip it. */}
+      {hover.target !== null && hover.thread !== null ? (
+        <ThreadHoverCard
+          target={hover.target}
+          snippet={hover.snippet}
+          status={classify(hover.thread)}
+          age={ageLabel(hover.thread, nowMs)}
+          panel={{ w: vw, h: vh }}
+          root={panelRef.current}
+        />
       ) : null}
       <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%_-_1.5rem)] flex-col items-start gap-2">
         <div className="pointer-events-auto flex gap-1 rounded-md border border-border/60 bg-card p-1 shadow-sm">

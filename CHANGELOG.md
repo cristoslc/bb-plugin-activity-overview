@@ -8,6 +8,8 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ### Added
 
+- **Hovering a thread dot now shows a card with the full thread title and the end of its conversation.** The card replaces the bare browser tooltip and says who spoke last, or states plainly that the thread has no conversation yet, so an unfamiliar dot can be identified without opening it.
+- **A Working dot's pulse now tracks how fast the thread is burning tokens.** The blink period follows the thread's measured token rate, so a thread consuming 10× the tokens pulses 10× as fast; a thread with a rate that cannot be measured yet keeps the original pulse, and one measured at zero holds the slowest blink rather than freezing or strobing.
 - **Clicking a thread dot while zoomed in now opens that thread in bb's default view.** Zoom past the fit (or focus a project) and every dot becomes a control: clicking one opens its thread, and clicking away — or the new top-right close control — returns to the fitted view, where dots stay inert so the region-zoom gesture is unchanged.
 - **The Token flow tab returns, redrawn as an amplitude wave.** A provider → project → family sankey whose rivers are each thread's burn per interval (encoding A), with totals bands (B) and a burn crest (C) as alternates: every thread's card row carries its total-spend candle, project bars stack their members' tokens, and the `flow` RPC resamples each thread's sampled context growth into one-minute buckets so the wave moves as threads stream.
   - Three encodings via the floating chrome: A · ribbon wave (burn per interval all the way back to the provider), B · trace lane (totals with per-member share bars), C · burn envelope (totals band with an inner per-interval crest).

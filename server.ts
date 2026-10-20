@@ -9,7 +9,7 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { executionModel, type Row } from "./views/timeline";
-import { FLOW_BUCKETS, providerOfModel, resampleWindow } from "./views/model";
+import { FLOW_BUCKETS, burnRate, endSnippet, providerOfModel, resampleWindow } from "./views/model";
 import { FLOW_CHANGED, type FlowChangedPayload } from "./shared";
 
 type FlowStatus = z.infer<typeof flowStatusSchema>;
@@ -64,6 +64,36 @@ export const rpcContract = defineRpcContract({
     input: z.object({}),
     output: flowSchema,
   },
+  // Burn rates only, read straight from the in-memory sample ring: no thread
+  // listing and no context reads, so the aggregate views can poll it while
+  // they paint. A thread absent from `rates` has no measurable rate yet —
+  // absence is the honest "unknown", never a fabricated zero.
+  pulse: {
+    input: z.object({}),
+    output: z.object({
+      /** threadId → measured tokens/second (flat rings report a measured 0). */
+      rates: z.record(z.string(), z.number()),
+      generatedAt: z.number(),
+    }),
+  },
+  // The hover card's orientation text for one thread, read on demand because
+  // the sidebar payload carries no conversation text. Stateless per call: the
+  // card hook on the client memoizes one fetch per thread per session, and a
+  // server cache would need invalidating on every new message to avoid
+  // serving stale text.
+  threadCard: {
+    input: z.object({ threadId: z.string() }),
+    output: z.object({
+      threadId: z.string(),
+      /** The newest message, or null when the thread has no usable history. */
+      snippet: z
+        .object({
+          role: z.enum(["user", "assistant"]),
+          text: z.string(),
+        })
+        .nullable(),
+    }),
+  },
 });
 
 type ThreadDto = {
@@ -86,6 +116,8 @@ type ThreadDto = {
 const THREAD_PAGE = 300;
 const THREAD_CEILING = 3000;
 const BUILD_MEMO_MS = 750;
+/** The hover card's snippet length: enough to orient, short enough to scan. */
+const CARD_SNIPPET_CAP = 160;
 
 // ── flow sampling ─────────────────────────────────────────────────────────
 // The host persists only per-thread *context-window usage*, never throughput,
@@ -123,21 +155,17 @@ export default async function plugin(bb: BbPluginApi) {
   const sampleRings = new Map<string, Sample[]>();
   const lastSampledAt = new Map<string, number>();
 
-  /** The sampled burn rate (tok/s) and everything the ring has tracked so far. */
-  function tokenRate(threadId: string): { rate: number; tracked: number } {
+  /** The sampled burn rate (tok/s, the shared `burnRate` rule so the dot pulse
+   *  and the flow view can never disagree) and everything the ring has tracked
+   *  so far. */
+  function tokenRate(threadId: string): { rate: number | null; tracked: number } {
     const ring = sampleRings.get(threadId) ?? [];
     let tracked = 0;
-    let rate = 0;
-    const now = Date.now();
     for (let i = 1; i < ring.length; i++) {
       const d = ring[i]!.used - ring[i - 1]!.used;
-      const dt = ring[i]!.at - ring[i - 1]!.at;
-      if (d > 0 && dt > 0 && dt <= SAMPLE_SPAN_MS) {
-        tracked += d;
-        if (ring[i]!.at >= now - SAMPLE_SPAN_MS) rate += d / (dt / 1000);
-      }
+      if (d > 0) tracked += d;
     }
-    return { rate, tracked };
+    return { rate: burnRate(ring, Date.now(), SAMPLE_SPAN_MS), tracked };
   }
 
   function noteSample(threadId: string, usedTokens: number | null, at = Date.now()): void {
@@ -256,7 +284,9 @@ export default async function plugin(bb: BbPluginApi) {
         modelContextWindow,
         model,
         provider: providerOfModel(model),
-        rate,
+        // The schema keeps a number here (0 = no measurable rate yet); the
+        // dot pulse reads `pulse`, where absence means "unknown".
+        rate: rate ?? 0,
         tracked,
         series,
       };
@@ -284,6 +314,31 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     flow: () => flowFor(),
+    // Straight from the sample ring: no thread listing, no context reads.
+    pulse: () => {
+      const now = Date.now();
+      const rates: Record<string, number> = {};
+      for (const threadId of sampleRings.keys()) {
+        const rate = burnRate(sampleRings.get(threadId) ?? [], now, SAMPLE_SPAN_MS);
+        // Absent = unmeasured. Never write a fabricated 0 for it.
+        if (rate !== null) rates[threadId] = rate;
+      }
+      return { rates, generatedAt: now };
+    },
+    threadCard: async ({ threadId }) => {
+      try {
+        const outline = await bb.sdk.threads.conversationOutline({ threadId });
+        const items = Array.isArray(outline.items)
+          ? outline.items.map((item) => ({ role: item.role, preview: item.preview }))
+          : [];
+        return { threadId, snippet: endSnippet(items, CARD_SNIPPET_CAP) };
+      } catch (cause) {
+        // A thread with no outline yet (never messaged, or still provisioning)
+        // has nothing honest to show: say so instead of failing the hover.
+        bb.log.warn(`card snippet failed for ${threadId}: ${String(cause)}`);
+        return { threadId, snippet: null };
+      }
+    },
   });
 
   // Live updates: coalesce thread changes and tell open flow views to refetch.

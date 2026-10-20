@@ -90,6 +90,48 @@ export function tip(t: AttnThread, nowMs: number): string {
   return `${t.title || t.id} · ${classify(t)} · ${ageLabel(t, nowMs)}`;
 }
 
+/** Collapse every whitespace run to one space and trim. Card text is one line. */
+function flatten(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The full one-line title a hover card shows. Precedence mirrors the host's
+ * own display text (title, then the untitled fallback, then the id), so a card
+ * never shows an empty heading.
+ */
+export function threadTitle(t: {
+  title: string | null;
+  titleFallback?: string | null;
+  id: string;
+}): string {
+  return flatten(t.title ?? t.titleFallback ?? "") || t.id;
+}
+
+/** One conversation message as the outline RPC exposes it. */
+export type OutlineItem = { role: "user" | "assistant"; preview: string };
+
+/**
+ * The card's orientation snippet: the newest message that actually has text,
+ * with its role so the card can say who last spoke. Blank trailing messages
+ * (an empty pending assistant row) are skipped, and a thread with no usable
+ * history yields null — the card then shows no snippet rather than inventing
+ * one. `cap` bounds the text; longer text is cut with an ellipsis.
+ */
+export function endSnippet(
+  items: readonly OutlineItem[],
+  cap = 160,
+): { role: "user" | "assistant"; text: string } | null {
+  if (cap < 1) throw new RangeError(`endSnippet: cap must be >= 1, got ${cap}`);
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    const text = flatten(item.preview);
+    if (text.length === 0) continue;
+    return { role: item.role, text: text.length > cap ? `${text.slice(0, cap - 1)}…` : text };
+  }
+  return null;
+}
+
 /** attentionScore: lower = hotter. */
 export function attentionScore(t: AttnThread, nowMs: number): number {
   switch (classify(t)) {
@@ -280,6 +322,125 @@ export function isZoomedIn(scale: number, threshold = ZOOMED_IN_SCALE): boolean 
  */
 export function dotAction(scale: number, threshold = ZOOMED_IN_SCALE): "open" | "inert" {
   return isZoomedIn(scale, threshold) ? "open" : "inert";
+}
+
+// ---------- working-dot pulse rate (token burn) ----------
+//
+// A working dot's pulse is a slow blink (opacity 1 → 0.55 → 1). Its period is
+// inversely proportional to the thread's measured token burn, so a thread
+// consuming 10× the tokens pulses 10× as fast. The mapping stays legible: a
+// floor keeps a very fast burn from strobing, and a ceiling keeps a very slow
+// one from looking frozen.
+
+/** The burn rate that pulses at the historical 2.2s period. Measured context
+ *  growth on this machine's live roster ran ~0.2–10 tok/s, so 1 tok/s is a
+ *  mid-range anchor; 10× that (10 tok/s) lands exactly on the fast floor. */
+export const PULSE_REFERENCE_RATE = 1;
+/** The slowest (and the pre-change) pulse period, for a zero or tiny burn. */
+export const PULSE_MAX_PERIOD_MS = 2200;
+/** The fastest legible pulse period, for an enormous burn. The band spans
+ *  exactly 10× (2200 → 220), so a 10× burn really does pulse 10× as fast
+ *  across the whole usable range; only rates outside it clamp. */
+export const PULSE_MIN_PERIOD_MS = 220;
+/** The period of an unmeasured thread: the pre-existing pulse, unchanged. */
+export const PULSE_BASE_PERIOD_MS = PULSE_MAX_PERIOD_MS;
+
+/**
+ * The pulse period for a measured burn rate (tokens/second).
+ *
+ * - `null` means "no measurable rate yet" (the sampler needs two readings):
+ *   the thread keeps the base pulse. No rate is invented for it.
+ * - `0` is a measured zero: the thread holds the slowest pulse rather than
+ *   freezing (an unchanging dot would read as idle) or strobing.
+ * - Otherwise `PULSE_MAX_PERIOD_MS × reference / rate`, clamped to the band.
+ *
+ * Non-finite rates throw: a NaN sneaking in from a bad sample must surface,
+ * never silently become a frozen or frantic dot.
+ */
+export function pulsePeriodMs(
+  rate: number | null,
+  opts: { reference?: number; min?: number; max?: number } = {},
+): number {
+  const reference = opts.reference ?? PULSE_REFERENCE_RATE;
+  const min = opts.min ?? PULSE_MIN_PERIOD_MS;
+  const max = opts.max ?? PULSE_MAX_PERIOD_MS;
+  if (rate === null) return max;
+  if (!Number.isFinite(rate)) throw new RangeError(`pulsePeriodMs: rate must be finite, got ${rate}`);
+  if (rate <= 0) return max;
+  const period = (max * reference) / rate;
+  return Math.min(max, Math.max(min, period));
+}
+
+/** The measured burn rate (tokens/second) from a sample ring, over the newest
+ * `windowMs`. Returns null when fewer than two in-window readings exist — the
+ * honest "unknown", distinct from a measured zero. Growth is the sum of
+ * positive deltas (context use is flat or rising between compactions, and a
+ * shrink is compaction, not negative burn), divided by the elapsed time from
+ * the first to the last in-window reading.
+ */
+export function burnRate(
+  samples: readonly FlowSample[],
+  nowMs: number,
+  windowMs: number,
+): number | null {
+  const start = nowMs - windowMs;
+  const fresh = samples.filter((s) => s.at >= start && s.at <= nowMs).sort((a, b) => a.at - b.at);
+  if (fresh.length < 2) return null;
+  let growth = 0;
+  for (let i = 1; i < fresh.length; i++) {
+    const delta = fresh[i]!.used - fresh[i - 1]!.used;
+    if (delta > 0) growth += delta;
+  }
+  const spanMs = fresh[fresh.length - 1]!.at - fresh[0]!.at;
+  if (spanMs <= 0) return null;
+  return (growth * 1000) / spanMs;
+}
+
+// ---------- hover card placement ----------
+
+export type Box = { x: number; y: number; w: number; h: number };
+export type Size = { w: number; h: number };
+
+/** Where the hover card sits, relative to the dot. */
+export type CardPlacement = { left: number; top: number; side: "above" | "below" };
+
+/**
+ * Seat a hover card next to its dot without letting it leave the panel.
+ * Preference is above the dot (out of the way of the legend, which floats at
+ * the bottom); a dot too close to the top flips the card below it. Both axes
+ * clamp inside the panel, so a card near an edge slides inward instead of
+ * being cut off. A card taller than the panel pins to the top edge and stays
+ * finite — it is never pushed off-screen to "clear" the dot.
+ */
+export function hoverCardPlacement(
+  dot: Box,
+  card: Size,
+  panel: Size,
+  gap = 8,
+): CardPlacement {
+  const above = dot.y - gap - card.h;
+  const below = dot.y + dot.h + gap;
+  const maxTop = Math.max(0, panel.h - card.h);
+  // Prefer above the dot when the whole card fits there; otherwise below when
+  // that fits. When neither fits (a card taller than the room on either side)
+  // keep the nearer edge, then clamp into the panel — the card stays finite
+  // and visible instead of being pushed off-screen to "clear" the dot.
+  let side: "above" | "below" = "above";
+  let top = above;
+  if (above < 0 && below + card.h <= panel.h) {
+    side = "below";
+    top = below;
+  } else if (above < 0) {
+    // Neither side fits: pin to the top edge, still marked above-or-below by
+    // which side has more room.
+    side = below <= panel.h - (above + card.h) ? "below" : "above";
+    top = side === "below" ? below : above;
+  }
+  top = Math.min(maxTop, Math.max(0, top));
+  const centered = dot.x + dot.w / 2 - card.w / 2;
+  const maxLeft = Math.max(0, panel.w - card.w);
+  const left = Math.min(maxLeft, Math.max(0, centered));
+  return { left, top, side };
 }
 
 /** Clamp one pan axis to a band: the content's low edge keeps `mLow` from the

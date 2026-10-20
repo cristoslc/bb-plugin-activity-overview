@@ -118,7 +118,8 @@ the content block, no baked-in padding).
 
 - Status classification (most urgent wins): needs-you (pending interaction) >
   error > working (active) > unread > idle.
-- Colors: error #e5534b, needs-you #d9a53f, working #3d84e0 (pulses), unread
+- Colors: error #e5534b, needs-you #d9a53f, working #3d84e0 (pulses at its
+  measured token burn: 10× the tokens, 10× the pulse), unread
   #2e9e45, idle grey fading with age (#a8b3bf toward #2a3038).
 - Dominance is always read from the dot color pattern; no region is ever
   painted with a status override.
@@ -126,13 +127,19 @@ the content block, no baked-in padding).
   and card bars are line/area work (like the removed Activity flow's dashed
   connectors were), and its region fills come from the `--attn-prov-*` tokens,
   never from status.
-- Hover any dot for the thread tooltip.
+- Hover any dot for a card with the full thread title, status, age, and the end
+  of its conversation. The card portals into the panel root, so it never
+  scales with the camera; a thread whose rate is not measurable yet keeps the
+  base pulse, and a measured zero holds the slowest blink (never frozen).
 
 ## Operating constraints
 
 - The three aggregate tabs are pure frontend views over sidebar thread data;
-  they have no CLI commands, no settings, and no server state. Data
-  refreshes when BB's sidebar data refreshes.
+  they have no CLI commands and no settings. The one backend read they make is
+  the `pulse` RPC (the burn-rate map for the working-dot blink); the hover
+  card's snippet comes from the `threadCard` RPC, fetched once per thread per
+  session and never re-fetched. Data refreshes when BB's sidebar data
+  refreshes.
 - The Token flow tab's backend is the plugin's `flow` RPC (server.ts): a
   stateless read of each thread's context usage plus a local sample ring,
   pushed live over the coalesced `FLOW_CHANGED` realtime channel. Streaming

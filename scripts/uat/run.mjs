@@ -132,8 +132,135 @@ async function clickTab(page, label) {
   }, label);
 }
 
-/** The TC-01 heart: mounted/size/animation assertions with a mid-spin screenshot. */
-async function assertThrobber(page, evidenceDir, slug) {
+/**
+ * Hover the first element matching `selector` with a real mouse move, then
+ * report what the hover card did. `puppeteer`'s own `hover` is used (not a
+ * synthetic pointer event) so the pointerType is genuinely "mouse" and the
+ * card's own mouse gate admits it.
+ */
+async function hoverCard(page, evidenceDir, slug, selector) {
+  const handle = await page.$(selector);
+  if (handle === null) return { pass: false, detail: `no element for ${selector}`, checks: [] };
+  await handle.hover();
+  // The card fetches its snippet on hover, so give it a beat to land.
+  await sleep(400);
+  const probe = await page.evaluate(() => {
+    const card = document.querySelector("[data-attn-hover-card]");
+    if (card === null) return { present: false };
+    const rect = card.getBoundingClientRect();
+    const panel = card.closest("[data-bb-plugin]") ?? document.body;
+    const panelRect = panel.getBoundingClientRect();
+    const title = card.querySelector("[data-attn-hover-title]");
+    const snippet = card.querySelector("[data-attn-hover-snippet]");
+    // Occlusion: the card is deliberately pointer-events:none (it must never
+    // eat a hover), so elementFromPoint is blind to it by design and cannot be
+    // used. Paint order is the real question: does any other visible element
+    // with a higher stacking order cover the card's center? Compare the card's
+    // z-index against every positioned ancestor-sibling that also covers the
+    // point, which is what the floating chrome would be.
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const cardZ = Number(getComputedStyle(card).zIndex) || 0;
+    const covers = (el) => {
+      if (el === card || card.contains(el) || el.contains(card)) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) return false;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === "hidden" || cs.display === "none" || cs.opacity === "0") return false;
+      return (Number(cs.zIndex) || 0) >= cardZ;
+    };
+    const blockers = [...panel.querySelectorAll("*")].filter(covers);
+    return {
+      present: true,
+      width: rect.width,
+      height: rect.height,
+      title: title?.textContent?.trim() ?? "",
+      snippetState: snippet?.getAttribute("data-attn-hover-snippet") ?? "missing",
+      snippetText: snippet?.textContent?.trim() ?? "",
+      insidePanel:
+        rect.left >= panelRect.left - 1 &&
+        rect.top >= panelRect.top - 1 &&
+        rect.right <= panelRect.right + 1 &&
+        rect.bottom <= panelRect.bottom + 1,
+      blockerCount: blockers.length,
+      blockers: blockers.slice(0, 3).map((el) => el.getAttribute("class") ?? el.tagName),
+    };
+  });
+  const shot = `${evidenceDir}/${slug}.png`;
+  await page.screenshot({ path: shot });
+  if (!probe.present) {
+    return {
+      pass: false,
+      detail: "no hover card mounted",
+      checks: [{ name: "card mounted", ok: false }],
+      evidence: shot.replace(`${repo}/`, ""),
+    };
+  }
+  const checks = [
+    { name: "card mounted", ok: probe.present },
+    { name: "full title present", ok: probe.title.length > 0, detail: probe.title },
+    { name: "snippet resolved", ok: probe.snippetState !== "loading" && probe.snippetState !== "missing", detail: probe.snippetState },
+    { name: "card inside panel", ok: probe.insidePanel },
+    { name: "card not occluded", ok: probe.blockerCount === 0, detail: probe.blockers.join(", ") },
+  ];
+  const pass = checks.every((c) => c.ok);
+  return {
+    pass,
+    checks,
+    detail: pass ? `card "${probe.title}" (${probe.snippetState})` : checks.filter((c) => !c.ok).map((c) => c.name).join("; "),
+    evidence: shot.replace(`${repo}/`, ""),
+  };
+}
+
+/**
+ * Assert the burn-rate pulse: every working unit with a rate carries an inline
+ * `attn-pulse` animation whose duration follows `pulsePeriodMs`, and a busier
+ * thread's duration is strictly shorter. Reads the DOM, so it verifies what the
+ * operator actually sees rather than the mapper in isolation.
+ */
+async function assertPulse(page) {
+  const probe = await page.evaluate(() => {
+    const units = [...document.querySelectorAll("[data-attn-unit][data-attn-pulse]")];
+    if (units.length === 0) return { units: [] };
+    return {
+      units: units.map((el) => ({
+        threadId: el.getAttribute("data-thread-id") ?? "",
+        period: Number(el.getAttribute("data-attn-pulse")),
+        animation: getComputedStyle(el).animationName,
+        duration: getComputedStyle(el).animationDuration,
+      })),
+    };
+  });
+  if (probe.units.length === 0) {
+    return { pass: false, detail: "no pulsing units carry a period", checks: [{ name: "pulsing units present", ok: false }] };
+  }
+  const animated = probe.units.filter((u) => u.animation === "attn-pulse");
+  const byPeriod = new Map(probe.units.map((u) => [u.period, u]));
+  const find = (id) => probe.units.find((u) => u.threadId === id);
+  const hot = find("thr_running");
+  const slow = find("thr_running_slow");
+  // The operator's literal requirement: 10× the tokens, 10× the pulses.
+  const ratio = hot && slow ? slow.period / hot.period : null;
+  const checks = [
+    { name: "every pulsing unit animates", ok: animated.length === probe.units.length, detail: `${animated.length}/${probe.units.length}` },
+    { name: "periods are positive", ok: probe.units.every((u) => Number.isFinite(u.period) && u.period > 0) },
+    { name: "rates produce distinct periods", ok: byPeriod.size > 1, detail: `${byPeriod.size} distinct period(s)` },
+    {
+      name: "10× burn is 10× the pulse",
+      ok: ratio !== null && Math.abs(ratio - 10) < 0.01,
+      detail: ratio === null ? "missing thr_running or thr_running_slow" : `ratio ${ratio.toFixed(3)}`,
+    },
+  ];
+  const pass = checks.every((c) => c.ok);
+  return {
+    pass,
+    checks,
+    detail: pass ? `${probe.units.length} pulsing units, ${byPeriod.size} periods` : checks.filter((c) => !c.ok).map((c) => c.name).join("; "),
+  };
+}
+
+/** The TC-01 heart: mounted/size/animation assertions with a mid-spin screenshot. */async function assertThrobber(page, evidenceDir, slug) {
   const first = await page.evaluate(THROBBER_PROBE);
   if (!first.present) {
     return { pass: false, detail: `no spinner element is mounted during the shape load (selector: ${SPINNER_SELECTOR})` };
@@ -268,8 +395,31 @@ async function runCase(page, evidenceDir, kase) {
           entry.detail = entry.pass ? `${step.params.selector} present` : `${step.params.selector} absent`;
           break;
         }
-        case "assertCount": {
-          const n = await page.evaluate((selector) => document.querySelectorAll(selector).length, step.params.selector);
+        case "hover": {
+          const outcome = await hoverCard(page, evidenceDir, slug, step.params.selector);
+          entry.pass = outcome.pass;
+          entry.detail = outcome.detail;
+          entry.checks = outcome.checks;
+          entry.evidence = outcome.evidence ?? "";
+          break;
+        }
+        case "assertPulse": {
+          const outcome = await assertPulse(page);
+          entry.pass = outcome.pass;
+          entry.detail = outcome.detail;
+          entry.checks = outcome.checks;
+          break;
+        }
+        case "pointerAway": {
+          // Move the real mouse off every unit so hover state can be asserted
+          // to clear. A synthetic click would not move the pointer.
+          await page.mouse.move(1, 1);
+          await sleep(200);
+          entry.pass = await page.evaluate(() => document.querySelector("[data-attn-hover-card]") === null);
+          entry.detail = entry.pass ? "pointer left; card dismissed" : "card still open after the pointer left";
+          break;
+        }
+        case "assertCount": {          const n = await page.evaluate((selector) => document.querySelectorAll(selector).length, step.params.selector);
           const want = step.params.equals ?? 1;
           entry.pass = n === want;
           entry.detail = `${n} match${n === 1 ? "" : "es"} for ${step.params.selector} (want ${want})`;
