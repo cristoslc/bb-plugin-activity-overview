@@ -184,6 +184,8 @@ function op(rate,max){ return rate<=0 ? 0.16 : 0.30 + 0.62*(rate/max); }
 function allKids(t){ return t.children||[]; }
 /* a whole subtree's consumption (own + every descendant) */
 function subtreeFlow(t){ return t.tot + allKids(t).reduce((s,c)=>s+subtreeFlow(c),0); }
+/* a whole subtree's live rate (own + every descendant) */
+function subtreeRate(t){ return t.rate + allKids(t).reduce((s,c)=>s+subtreeRate(c),0); }
 function isOpen(t, opts){ return !!(opts.open && opts.open.has(t.title)); }
 /* the height a card occupies: its header plus (when open) each child's block.
    Children only render above the grandchild cap (MAX_DEPTH). */
@@ -211,11 +213,12 @@ function prep(projects){
     return { name:p.name, roots:p.threads, all, tagged, total, rate, lanes, prov };
   });
   const maxThreadRate = Math.max(1, ...proj.flatMap(p=>p.tagged.map(t=>t.rate)));
+  const maxShownRate = Math.max(1, ...proj.flatMap(p=>p.tagged.map(t=>subtreeRate(t))));
   const maxFlow = Math.max(1, ...proj.flatMap(p=>p.tagged.map(t=>subtreeFlow(t))));
   const provTot = PROVIDERS.map(pr=>({ id:pr.id,
     tot: proj.reduce((s,p)=>s+(p.prov.find(x=>x.id===pr.id)?.tot||0),0),
     rate: proj.reduce((s,p)=>s+(p.prov.find(x=>x.id===pr.id)?.rate||0),0) })).filter(x=>x.tot>0);
-  return { proj, provTot, maxThreadRate, maxFlow };
+  return { proj, provTot, maxThreadRate, maxShownRate, maxFlow };
 }
 
 /* ============================== drawing ============================== */
@@ -256,44 +259,51 @@ function drawRiver(svg, x1, y1, x2, y2, w, color, rate, maxRate){
   if(rate>0) mk('path',{d:`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`, stroke:'#fff','stroke-width':Math.max(1,Math.min(2.2,w*0.22)), opacity:0.55,'stroke-dasharray':'0.5 11','stroke-linecap':'round'},svg);
 }
 
-/* a contained thread card, drawn as one interleaved unit so nested rivers are
-   never hidden under a parent card: its incoming river (from inX,inY in the
-   parent gutter), then its own rectangle, then — when open — a vertical trunk
-   with each child's river + card recursively. Capped at MAX_DEPTH (grandchild). */
-function threadCard(svg, x, y, w, t, prepd, opts, depth, inX, inY){
+/* a contained thread card: its incoming river comes from the SAME project-level
+   mouth as every other card (never inherited through ancestry); then its own
+   rectangle; then — when open — its children recursively, each also fed from
+   that same mouth. A card whose group is COLLAPSED shows the whole subtree's
+   flow; expanding it drops the card to its own flow (the set has split up).
+   Capped at MAX_DEPTH (grandchild). */
+function threadCard(svg, x, y, w, t, prepd, opts, depth, mouthX, mouthY){
   depth = depth||0;
   const by = y + 16;
-  if(inX!==undefined) drawRiver(svg, inX, inY, x, by, bandW(t.rate, prepd.maxThreadRate), pc(t.provider), t.rate, prepd.maxThreadRate);
+  const kids = allKids(t);
+  const canOpen = depth<MAX_DEPTH && kids.length>0;
+  const open = isOpen(t,opts) && canOpen;
+  const openKids = open ? kids : [];
+  const hasGroup = kids.length>0;
+  /* the flow this card shows: a collapsed group head carries its whole subtree;
+     an expanded head (or a leaf) carries only its own flow */
+  const shownRate = (hasGroup && !open) ? subtreeRate(t) : t.rate;
+  if(mouthX!==undefined){
+    drawRiver(svg, mouthX, mouthY, x, by, bandW(shownRate, prepd.maxShownRate), pc(t.provider), shownRate, prepd.maxShownRate);
+  }
   const lane=laneById(laneOf(t.status)), dc=laneOf(t.status)==='idle'?GREYS[3]:lane.color;
-  const canOpen = depth<MAX_DEPTH && allKids(t).length;
-  const openKids = (isOpen(t,opts) && canOpen) ? allKids(t) : [];
   const h = cardHeight(t, opts, depth);
   RR(x,y,w,h,7,'#18222d',svg,{stroke: openKids.length ? '#33506e' : '#2b3d4e','stroke-opacity':0.9});
   RR(x,y,3,h,1.5,pc(t.provider),svg,{opacity:0.9});
   mk('circle',{cx:x+14,cy:y+16,r:3,fill:dc},svg);
   T(x+22,y+19,CLIP(t.title,24-depth*3),{size:10,fill:'#dbe4ec',parent:svg});
-  const flow = openKids.length ? subtreeFlow(t) : t.tot;
+  const flow = subtreeFlow(t);
   const barW=Math.max(2,(w-20)*(flow/prepd.maxFlow));
   mk('rect',{x:x+10,y:y+31,width:barW,height:6,rx:3,fill:pc(t.provider),opacity:0.9},svg);
-  if(openKids.length){
-    T(x+22,y+47,'own '+NF(t.rate*60)+' tok/min · '+NF(flow)+' total',{size:8.5,fill:lane.color,parent:svg});
+  if(hasGroup){
+    T(x+22,y+47,(open?'own ':'Σ ')+NF(shownRate*60)+' tok/min · '+NF(flow)+' total',{size:8.5,fill:lane.color,parent:svg});
   } else if(t.rate>0){
     T(x+22,y+47,NF(t.rate*60)+' tok/min',{size:9,fill:lane.color,parent:svg});
   } else {
     T(x+22,y+47,NF(flow)+' tok',{size:9,fill:'#5f6b76',parent:svg});
   }
   if(canOpen){
-    const open = isOpen(t,opts);
     RR(x+w-72,y+8,64,18,9,'#22303c',svg,{opacity:0.95});
-    T(x+w-40,y+21,(open?'▾ ':'▸ ')+allKids(t).length+(depth? ' nested':' sub'),{size:9,anchor:'middle',fill:'#c4cfd9',parent:svg});
+    T(x+w-40,y+21,(open?'▾ ':'▸ ')+kids.length+(depth? ' nested':' sub'),{size:9,anchor:'middle',fill:'#c4cfd9',parent:svg});
   }
   if(openKids.length){
-    const trunkX = x + 11, kidX = x + INDENT;
+    const kidX = x + INDENT;
     let cy = y + THREAD_H;
     const cs = openKids.map(k=>{ cy += SUB_GAP; const p={ k, y:cy }; cy += cardHeight(k,opts,depth+1); return p; });
-    const lastBy = cs[cs.length-1].y + 16;
-    mk('path',{d:`M ${x} ${by} L ${trunkX} ${by} L ${trunkX} ${lastBy}`, stroke:'#33475c','stroke-width':4, fill:'none', opacity:0.95,'stroke-linecap':'round'},svg);
-    cs.forEach(c=>{ threadCard(svg, kidX, c.y, w-INDENT-8, c.k, prepd, opts, depth+1, trunkX, c.y+16); });
+    cs.forEach(c=>{ threadCard(svg, kidX, c.y, w-INDENT-8, c.k, prepd, opts, depth+1, mouthX, mouthY); });
   }
   return h;
 }
@@ -426,23 +436,23 @@ panel('One project expanded · the tiers tile', 'Working far left · sorted by s
 });
 document.getElementById('note-expanded').innerHTML =
   'Expanding a row reveals the <b>tiers tiled across the width</b>: Working, Needs You, Unread, Idle. The Working lane sorts threads ' +
-  '<b>by whole-subtree flow, highest at the top</b>. The flow arrives as a <b>left-tree</b> — from the project header a trunk branches into ' +
-  'each working card, so the runaway thread (<b>daemon restart loop</b>) carries the thickest branch at the top. Lanes scroll independently; ' +
+  '<b>by whole-subtree flow, highest at the top</b>. Every card’s river fans from <b>the one project-level dot in the lane’s top-left</b> — ' +
+  'the runaway thread (<b>daemon restart loop</b>) carries the thickest river at the top. Lanes scroll independently; ' +
   'row height is capped at the Working lane.';
 
-panel('Parent → child → grandchild', 'contained · branch = own flow', (body)=>{
+panel('Parent → child → grandchild', 'one mouth · Σ collapsed, own expanded', (body)=>{
   renderWorld(body, roster(), {
     expand:'activity-overview',
     open:new Set(['sankey diagram for PRs','layout regression sweep']),
-    footnote:'“sankey diagram for PRs” open → child open → grandchild; each branch carries its own flow',
+    footnote:'“sankey diagram for PRs” open → child open → grandchild; every river from the one project mouth',
   });
 });
 document.getElementById('note-nested').innerHTML =
   'Children are <b>contained inside their parent’s card</b>, and the containment <b>recurses</b>: here <b>sankey diagram for PRs</b> contains ' +
-  '<b>layout regression sweep</b>, which contains <b>pixel snapshot pass</b>. The <b>left-tree splits at every level</b> — a sub-trunk inside ' +
-  'each open card branches into its children, the same way threads branch from projects. Critically, <b>the branch into a thread carries only ' +
-  'that thread’s own flow</b> (its white-beaded stem): the parent’s total (the wider bar and the “total” number) is the sum of its subtree, ' +
-  'but the incoming branch is <b>never</b> the sum.';
+  '<b>layout regression sweep</b>, which contains <b>pixel snapshot pass</b>. Every card draws its river from <b>the same project-level mouth</b> ' +
+  'in the top-left — rivers are never inherited through ancestry, they all fan out of one dot. Note the flow drops as the set disaggregates: a ' +
+  '<b>collapsed</b> group head carries its <b>whole subtree’s flow</b> (Σ), but once expanded it drops to <b>its own flow only</b>, because the ' +
+  'descendants now show theirs. The parent’s bar and “total” number stay the subtree sum.';
 
 document.getElementById('legend').innerHTML =
   PROVIDERS.map(p=>`<span><span class="sw" style="background:${p.color}"></span>${p.label}</span>`).join('')
@@ -450,7 +460,7 @@ document.getElementById('legend').innerHTML =
       ? `<span class="sdot" style="background:linear-gradient(90deg,${l.color} 50%,${l.alt} 50%)"></span>`
       : `<span class="sdot" style="background:${l.id==='idle'?GREYS[2]:l.color}"></span>`;
     return `<span>${dot}${l.label}</span>`; }).join('')
-  + `<span style="color:#7d8b99">branch thickness = that thread’s OWN flow · bar = subtree total · beads = current activity</span>`;
+  + `<span style="color:#7d8b99">river = the card’s shown flow (Σ subtree while collapsed, own flow once expanded) · bar = subtree total · beads = current activity</span>`;
 </script>
 </body>
 </html>

@@ -1,12 +1,12 @@
 ---
-title: Token flow — project stack + left-tree spec
+title: Token flow — project stack + flow-river spec
 status: proposed
 owner: thr_e92b7ef398
 mockup: docs/user-experience/token-flow-swimlane-mockup.html
 supersedes: token-flow-tiled-spec.md (declined)
 ---
 
-# Token flow — project stack + left-tree spec
+# Token flow — project stack + flow-river spec
 
 > [!IMPORTANT] Proposal, not implemented.
 > Doc-only. `views/` and `server.ts` are untouched; `npm test` is 102 pass and `npx tsc --noEmit` is clean.
@@ -26,7 +26,7 @@ graph TD
 
 - **Projects pile vertically** — one wide landscape row each, **never tiled**. The row list *is* the stack; it scrolls/grows downward.
 - **The tiers inside a project tile** — an expanded project opens its status lanes **across the row's width**.
-- A **parent thread's children nest inside its card** (not a separate spatial tier), the containment **recursing to a grandchild and hard-capping there**, and the **rivers split** into them the same way threads branch from projects. The river into a thread carries **only that thread's own flow**; the card's total is the whole subtree.
+- A **parent thread's children nest inside its card** (not a separate spatial tier), the containment **recursing to a grandchild and hard-capping there**. **Every card's river fans from the one project-level mouth**; a **collapsed** group head carries its **subtree sum**, and **expanding** it drops the river to its **own flow**, because the set has disaggregated. The card's total stays the subtree sum.
 
 This is the key correction from the prior pass: tiling belongs to the *tiers within a project*, not to the projects themselves.
 
@@ -52,18 +52,19 @@ A row (~full width × 94px) carries the project name, total tokens, live **tok/m
 Expanding a row reveals the four lanes across the width.
 
 - Each lane stacks its thread cards (dot, title, subtree bar, tok/min).
-- **Rivers recurse to grandchildren.** All rivers fan from **one mouth** at the lane's top-left (fed by the project header) and land on each thread card: **a filled, provider-colored band whose thickness is that thread's own flow**, with white beads for live activity. Because the lane is sorted by flow, the runaway thread's river is the widest at the top. Inside an open card a vertical trunk runs down its inner-left and **each child peels a river off that trunk**; a child with children repeats the pattern, so **parent, child and grandchild each receive a river**. This is the primary read.
+- **Every river fans from ONE project-level mouth.** All rivers — parent, child and grandchild alike — leave the **single dot at the lane's top-left** (fed by the project header) and land on their card: a filled, provider-colored band whose thickness is that card's shown flow, with white beads for live activity. Rivers are **never inherited through ancestry**; they all originate from the same mouth. Because the lane is sorted by flow, the runaway thread's river is the widest at the top. This is the primary read.
+- **Collapsed shows the subtree sum; expanded drops to own flow.** A card that heads a group carries its **whole subtree's flow** (Σ own + descendants) while the group is **collapsed**, because it stands in for the set. Once **expanded**, its river drops to **its own flow only** — the descendants now show theirs, so the set has disaggregated. The card's bar and total number stay the subtree sum either way.
 - **Row height is capped at the Working lane's height.** Needs You / Unread / Idle get the same height.
 - **Each lane scrolls independently** (its own scroll rail); scrolling one lane never moves another.
 - Needs You / Unread / Idle carry **no rivers** (they are not burning); they show their cards and counts only.
-- No sky beam, and no pale connecting line: the flow is drawn as real sankey rivers in provider colors.
+- No sky beam, and no pale connecting line: the flow is drawn as real sankey rivers in provider colors, all from the one project mouth.
 
 ## 4. Nested children (contained, recursing to grandchildren)
 
 A thread with children shows a `▸ N sub` / `▾ N nested` chip. Opened, its children are **contained inside the parent's card** (indented, not laid out as siblings), and the containment **recurses one further level**: parent → child → **grandchild**. **Hard cap at grandchild** (operator's call, `MAX_DEPTH = 2`): a grandchild does not open its own children. At each level:
 
-- The **rivers split again at every open level** — a vertical trunk runs down the open card's inner-left and each child peels its own river off that trunk; a child with children repeats it, so parent, child and grandchild each receive a river — the same way threads branch from projects.
-- **The river into a thread carries just that thread's OWN flow.** The **card's bar and total number show the whole-subtree sum** (own + every descendant shown). So a parent reads "own 15.8k tok/min · 46.5k total": the river that feeds it is its own, while its total includes its children. The two are deliberately different reads.
+- **Every level's river comes from the same project mouth.** A child or grandchild is fed by the one top-left dot exactly like a top-level card; nothing is inherited through the parent (there is no sub-trunk).
+- **The shown flow depends on expansion.** A group head that is **collapsed** carries its **subtree sum** (Σ); once **expanded** it carries **only its own flow**, since the descendants now report theirs. Leaves always carry their own flow. The **card's bar and total number show the whole-subtree sum** regardless, so while expanded a parent reads "own 15.8k tok/min · 46.5k total" — the river is its own, the total is not.
 - Children stay inside the card; nesting is never a project-level tier.
 
 ## 5. Invariants preserved
@@ -71,7 +72,7 @@ A thread with children shows a `▸ N sub` / `▾ N nested` chip. Opened, its ch
 - **One thread = one card** (inside its lane); a child lives inside its parent's card, at any depth.
 - **No status-derived region fills** — lane/row fill is neutral; status shows only as dots and lane headers. Provider strips/branches use `--attn-prov-*`, never status.
 - **Idle age via the grey ramp.**
-- **Line-work** is confined to the flow view and is now the point (the left-tree lines).
+- **Line-work** is confined to the flow view and is now the point (the rivers from the project mouth).
 - **Theme tokens only**, light + dark.
 - Dashed beads mark live activity only.
 
