@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token flow — project stack + recursive left-tree (mockup v5)</title>
+<style>
+  html, body { margin:0; padding:0; background:#0b0f14; color:#dfe7ee;
+    font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",sans-serif; }
+  .wrap { max-width:1820px; margin:0 auto; padding:20px 24px 72px; }
+  h1 { font-size:20px; font-weight:700; color:#eef4f9; margin:0 0 6px; }
+  h2 { font-size:14px; font-weight:700; color:#cdd8e2; margin:30px 0 6px; }
+  h2 .tag { font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#7d8b99;
+    background:#1b232d; border:1px solid #24303c; border-radius:999px; padding:2px 8px; margin-left:8px; vertical-align:1px; }
+  p.note { font-size:12px; color:#8b98a6; line-height:1.6; margin:4px 0 12px; max-width:1200px; }
+  p.note b { color:#a9b6c2; }
+  .panel { border:1px solid #223040; border-radius:12px; background:#0d131a; overflow:hidden; margin-bottom:22px; }
+  .panel .bar { display:flex; align-items:center; gap:8px; padding:7px 12px; background:#131a22;
+    border-bottom:1px solid #223040; font-size:11px; color:#7d8b99; }
+  .panel .bar .dot { width:8px; height:8px; border-radius:50%; background:#3d84e0; }
+  .panel .bar .dim { margin-left:auto; }
+  svg { display:block; width:100%; height:auto; }
+  .legend { display:flex; flex-wrap:wrap; gap:16px; font-size:12px; color:#a9b6c2; margin:12px 0 4px; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .sw { width:13px; height:13px; border-radius:3px; display:inline-block; }
+  .sdot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .hierarchy { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; font-size:12px; color:#cdd8e2; margin:8px 0 16px; }
+  .hierarchy .lvl { background:#16202b; border:1px solid #243441; border-radius:7px; padding:4px 9px; }
+  .hierarchy .arrow { color:#5b6873; }
+  @keyframes flow { to { stroke-dashoffset:-22; } }
+  .beads { animation: flow 1.8s linear infinite; }
+  @media (prefers-reduced-motion: reduce) { .beads { animation:none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Token flow — project stack + recursive left-tree (mockup v5)</h1>
+  <p class="note">Projects <b>pile vertically</b> (one wide row each, never tiled); the <b>tiers inside a project tile</b> into the
+    four status lanes with Working on the left. A thread's children are <b>contained inside its own card</b>, and the containment
+    <b>recurses: parent → child → grandchild</b>. The <b>left-tree</b> splits at every level, exactly as threads branch from projects.
+    The branch <b>into</b> a thread carries <b>just that thread's own flow</b> — never the subtree sum — while the sum appears only as
+    the card's total. There is no sky beam.</p>
+
+  <div class="hierarchy">
+    <span class="lvl">Tier 1 · Provider</span><span class="arrow">›</span>
+    <span class="lvl">Tier 2 · Project (vertical stack)</span><span class="arrow">›</span>
+    <span class="lvl">Tier 3 · Thread (tiled status lanes)</span><span class="arrow">›</span>
+    <span class="lvl">child</span><span class="arrow">›</span>
+    <span class="lvl">grandchild</span>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <h2>Overview · projects piled vertically<span class="tag">flow first</span></h2>
+  <p class="note" id="note-overview"></p>
+
+  <h2>One project expanded · tiers tiled<span class="tag">Working left</span></h2>
+  <p class="note" id="note-expanded"></p>
+
+  <h2>Parent → child → grandchild<span class="tag">contained · branch = own flow</span></h2>
+  <p class="note" id="note-nested"></p>
+
+  <div id="stage"></div>
+</div>
+
+<script>
+'use strict';
+/* ============================== palette ============================== */
+const PROVIDERS = [
+  { id:'anthropic', label:'Anthropic', color:'#d97757' },
+  { id:'openai',    label:'OpenAI',    color:'#10a37f' },
+  { id:'google',    label:'Google AI', color:'#4d8ef7' },
+  { id:'ollama',    label:'Ollama',    color:'#a78bfa' },
+];
+const PIDX = Object.fromEntries(PROVIDERS.map((p,i)=>[p.id,i]));
+const pc = (id) => (PROVIDERS[PIDX[id]]||PROVIDERS[3]).color;
+const plabel = (id) => (PROVIDERS[PIDX[id]]||PROVIDERS[3]).label;
+
+/* Status lanes (the tiers that tile), left → right. Needs You absorbs error. */
+const LANES = [
+  { id:'working',   label:'Working',   color:'#3d84e0', statuses:['running'] },
+  { id:'attention', label:'Needs You', color:'#d9a53f', alt:'#e5534b', statuses:['waiting','error','queued'] },
+  { id:'unread',    label:'Unread',    color:'#2e9e45', statuses:['done','interrupted'] },
+  { id:'idle',      label:'Idle',      color:'#8b97a3', statuses:['idle'] },
+];
+const GREYS = ['#a8b3bf','#8f9ba8','#78838f','#5f6a75','#4a545e','#39424b'];
+const laneOf = (s) => (LANES.find(l=>l.statuses.includes(s))||LANES[3]).id;
+const laneById = (id) => LANES.find(l=>l.id===id);
+
+/* ============================== synthetic data ============================== */
+let SEED = 91;
+const rnd = () => { SEED = (SEED*1103515245 + 12345) & 0x7fffffff; return SEED/0x7fffffff; };
+const pick = (a) => a[Math.floor(rnd()*a.length)];
+const TITLES = ['board chip status polling','stale flag sweep','backup script review','shell prompt cleanup',
+  'nightly sync sweep','retry sweep','treemap label layer','camera store stamp','whats-new fingerprint',
+  'export path refactor','importer test fix','inbox digest build','token sampler ring','project band mix',
+  'status fold spec','river resolution','grid packer','landscape tiling','legend chips','cache warm pass',
+  'index rebuild','log tail probe','disk scan cron','uptime reporter','edge cache purge','schema migration'];
+const NF = (n) => n>=1e6 ? (n/1e6).toFixed(1)+'M' : n>=1000 ? (n/1000).toFixed(1)+'k' : String(Math.round(n));
+const CLIP = (s,n) => s.length>n ? s.slice(0,n-1)+'…' : s;
+
+function burn(n, peak, shape) {
+  const out=[];
+  for (let i=0;i<n;i++){ const u=i/(n-1); let v;
+    if (shape==='ramp') v=0.12+0.88*Math.pow(u,1.5);
+    else if (shape==='burst') v=u<0.62?0.12:0.12+3.4*Math.pow((u-0.62)/0.38,1.3);
+    else if (shape==='decay') v=1.1-0.9*u;
+    else v=0.8+0.3*rnd();
+    out.push(Math.max(0, Math.round(peak*v*(0.9+0.2*rnd()))));
+  }
+  return out;
+}
+const mkThread=(title,status,prov,tot,rate,shape,children)=>({
+  title, status, provider:prov, tot, rate,
+  series: rate>0 ? burn(20, rate*1.2, shape||'steady') : new Array(20).fill(0),
+  children: children||[],
+});
+
+function roster() {
+  return [
+    { name:'activity-overview', threads:[
+      mkThread('sankey diagram for PRs','running','anthropic',24600,264,'ramp',[
+        mkThread('layout regression sweep','running','anthropic',11400,172,'steady',[
+          mkThread('pixel snapshot pass','running','google',5200,60,'steady'),
+        ]),
+        mkThread('river resolution pass','running','google',5300,84,'decay'),
+      ]),
+      mkThread('amplitude wave revision','running','openai',10800,150,'steady'),
+      mkThread('visual-check browser driver','error','google',31500,0),
+      mkThread('treemap label layer','done','anthropic',12400,0),
+      mkThread('legend chips','idle','openai',3100,0),
+      mkThread('camera store stamp','idle','openai',1800,0),
+    ]},
+    { name:'focus-board', threads:[
+      mkThread('parent-thread view','running','openai',38200,150,'steady'),
+      mkThread('card tween','waiting','anthropic',9600,0),
+      mkThread('nesting lanes','done','google',7300,0),
+      mkThread('board fit','idle','anthropic',2400,0),
+    ]},
+    { name:'cove', threads:[
+      mkThread('forge CI runner notes','waiting','openai',22400,0),
+      mkThread('vault rotation cron','idle','google',5100,0),
+      mkThread('pages publish hook','idle','openai',1200,0),
+    ]},
+    { name:'dotfiles', threads:[
+      mkThread('shell prompt cleanup','running','google',15800,95,'decay'),
+      mkThread('backup script review','idle','anthropic',8200,0),
+      mkThread('stale flag sweep','done','google',3300,0),
+    ]},
+    { name:'homelab', threads:[
+      mkThread('daemon restart loop','running','openai',188400,1420,'burst'),
+      mkThread('cache warm pass','running','openai',41200,260,'steady'),
+      mkThread('schema migration','running','google',24800,120,'ramp'),
+      mkThread('index rebuild','done','google',9700,0),
+      mkThread('log tail probe','idle','ollama',2100,0),
+      mkThread('disk scan cron','idle','ollama',1400,0),
+    ]},
+    { name:'houseops', threads:[
+      mkThread('inbox digest build','running','anthropic',27300,120,'steady'),
+      mkThread('importer test fix','error','openai',6100,0),
+      mkThread('export path refactor','done','anthropic',4400,0),
+    ]},
+  ];
+}
+
+/* ============================== geometry ============================== */
+const SPINE_X=40, SPINE_W=104, ROW_X=200, ROW_R=44;
+const COLLAPSED_H=94, EXP_HDR=80, ROW_GAP=24, LANE_GAP=22, LANE_PAD=13,
+      THREAD_H=54, THREAD_GAP=10, SUB_GAP=8, INDENT=42, HDR_PAD=22;
+const WORLD_W = 1860;
+const LANE_H = 370;
+const MAX_DEPTH = 2;          // parent(0) → child(1) → grandchild(2); hard cap, no deeper
+const TRUNK_W = 46;           // px the working trunk's rivers span in the gutter
+
+const NS='http://www.w3.org/2000/svg';
+let UID=0;
+function mk(name,attrs,parent){ const n=document.createElementNS(NS,name); for(const k in attrs){ if(attrs[k]!==null&&attrs[k]!==undefined) n.setAttribute(k,attrs[k]); } if(parent) parent.appendChild(n); return n; }
+function T(x,y,s,o={}){ const t=mk('text',{x,y,'font-size':o.size??11,'font-weight':o.weight??400,fill:o.fill??'#cdd8e2','text-anchor':o.anchor??'start','font-family':'inherit','opacity':o.opacity},o.parent); t.textContent=s; return t; }
+function RR(x,y,w,h,r,fill,parent,extra={}){ return mk('rect',{x,y,width:w,height:h,rx:r,fill,...extra},parent); }
+function rateW(rate,max){ return rate<=0 ? 1.6 : 2 + 15*Math.pow(rate/max,0.5); }
+function op(rate,max){ return rate<=0 ? 0.16 : 0.30 + 0.62*(rate/max); }
+
+/* ============================== tree helpers ============================== */
+function allKids(t){ return t.children||[]; }
+/* a whole subtree's consumption (own + every descendant) */
+function subtreeFlow(t){ return t.tot + allKids(t).reduce((s,c)=>s+subtreeFlow(c),0); }
+/* a whole subtree's live rate (own + every descendant) */
+function subtreeRate(t){ return t.rate + allKids(t).reduce((s,c)=>s+subtreeRate(c),0); }
+function isOpen(t, opts){ return !!(opts.open && opts.open.has(t.title)); }
+/* the height a card occupies: its header plus (when open) each child's block.
+   Children only render above the grandchild cap (MAX_DEPTH). */
+function cardHeight(t, opts, depth){
+  depth = depth||0;
+  const kids = (isOpen(t,opts) && depth<MAX_DEPTH && allKids(t).length) ? allKids(t) : [];
+  return THREAD_H + kids.reduce((s,k)=>s+SUB_GAP+cardHeight(k,opts,depth+1), 0);
+}
+
+/* ============================== prep ============================== */
+function flat(threads){ const o=[]; for(const t of threads){ o.push(t); o.push(...flat(t.children||[])); } return o; }
+function prep(projects){
+  const proj = projects.map(p=>{
+    const markKids = (nodes) => { nodes.forEach(n=>{ (n.children||[]).forEach(c=>{ c.__isChild=true; markKids(c.children||[]); }); }); };
+    markKids(p.threads);
+    const all = flat(p.threads);
+    const total = all.reduce((s,t)=>s+t.tot,0);
+    const rate = all.reduce((s,t)=>s+t.rate,0);
+    const tagged = all.map(t=>({ ...t, lane:laneOf(t.status) }));
+    const roots = tagged.filter(t=>!t.__isChild);
+    const lanes = Object.fromEntries(LANES.map(l=>[l.id, roots.filter(t=>t.lane===l.id)]));
+    const prov = PROVIDERS.map(pr=>({ id:pr.id,
+      tot: all.filter(t=>t.provider===pr.id).reduce((s,t)=>s+t.tot,0),
+      rate: all.filter(t=>t.provider===pr.id).reduce((s,t)=>s+t.rate,0) })).filter(x=>x.tot>0);
+    return { name:p.name, roots:p.threads, all, tagged, total, rate, lanes, prov };
+  });
+  const maxThreadRate = Math.max(1, ...proj.flatMap(p=>p.tagged.map(t=>t.rate)));
+  const maxShownRate = Math.max(1, ...proj.flatMap(p=>p.tagged.map(t=>subtreeRate(t))));
+  const maxFlow = Math.max(1, ...proj.flatMap(p=>p.tagged.map(t=>subtreeFlow(t))));
+  const provTot = PROVIDERS.map(pr=>({ id:pr.id,
+    tot: proj.reduce((s,p)=>s+(p.prov.find(x=>x.id===pr.id)?.tot||0),0),
+    rate: proj.reduce((s,p)=>s+(p.prov.find(x=>x.id===pr.id)?.rate||0),0) })).filter(x=>x.tot>0);
+  return { proj, provTot, maxThreadRate, maxShownRate, maxFlow };
+}
+
+/* ============================== drawing ============================== */
+function drawSpine(svg, prepd, y0){
+  const total = prepd.provTot.reduce((s,p)=>s+(p.rate||p.tot),0)||1;
+  let y=y0;
+  prepd.provTot.forEach(pv=>{
+    const frac=(pv.rate||pv.tot)/total, h=Math.max(56, 420*frac), c=pc(pv.id);
+    RR(SPINE_X,y,SPINE_W,h,7,c,svg,{opacity:0.93});
+    T(SPINE_X+SPINE_W/2,y+22,plabel(pv.id),{size:12,weight:700,anchor:'middle',fill:'#0b1015',parent:svg});
+    T(SPINE_X+SPINE_W/2,y+40,NF(pv.tot)+' tok',{size:10,anchor:'middle',fill:'#0b1015',parent:svg,opacity:0.85});
+    if(pv.rate>0) T(SPINE_X+SPINE_W/2,y+55,NF(pv.rate*60)+' tok/min',{size:9.5,anchor:'middle',fill:'#0b1015',parent:svg,opacity:0.8});
+    pv._y=y; pv._h=h; y+=h+16;
+  });
+  T(SPINE_X+SPINE_W/2, y0-12, 'TIER 1 · providers', {size:9.5,weight:700,anchor:'middle',fill:'#7d8b99',parent:svg});
+  return y;
+}
+
+/* provider → project river (same sankey treatment as the card rivers) */
+function flowLine(svg, x1, y1, x2, y2, color, width, rate, maxRate){
+  drawRiver(svg, x1, y1, x2, y2, Math.max(2.4, width), color, rate, maxRate);
+}
+
+/* a card's own river thickness (px), from its live rate */
+function bandW(rate, maxRate){ return rate<=0 ? 2.6 : 2.6 + 13*Math.sqrt(Math.max(0,rate)/maxRate); }
+/* a filled sankey river: a band of thickness w leaving a mouth at (x1,y1) and
+   landing at (x2,y2); the white beads ride its centerline. */
+function riverPath(x1,y1,w,x2,y2){
+  const mx=(x1+x2)/2;
+  const a1=y1-w/2, b1=y1+w/2, a2=y2-w/2, b2=y2+w/2;
+  return `M ${x1} ${a1} C ${mx} ${a1}, ${mx} ${a2}, ${x2} ${a2}`+
+         ` L ${x2} ${b2} C ${mx} ${b2}, ${mx} ${b1}, ${x1} ${b1} Z`;
+}
+function drawRiver(svg, x1, y1, x2, y2, w, color, rate, maxRate){
+  const mx=(x1+x2)/2;
+  mk('path',{d:riverPath(x1,y1,w,x2,y2), fill:color, opacity:0.32+0.5*op(rate,maxRate), stroke:'none'},svg);
+  mk('path',{d:`M ${x1} ${y1-w/2} C ${mx} ${y1-w/2}, ${mx} ${y2-w/2}, ${x2} ${y2-w/2}`, stroke:'#ffffff','stroke-width':0.9, opacity:0.22, fill:'none'},svg);
+  if(rate>0) mk('path',{d:`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`, stroke:'#fff','stroke-width':Math.max(1,Math.min(2.2,w*0.22)), opacity:0.55,'stroke-dasharray':'0.5 11','stroke-linecap':'round', fill:'none'},svg);
+}
+
+/* Gather a card and its contained descendants (parent first) with the geometry
+   each needs. A card whose group is COLLAPSED shows the whole subtree's flow;
+   expanding it drops the card to its own flow (the set has split up). Every
+   card's incoming river comes from the SAME project-level mouth as every other
+   card, never inherited through ancestry. Capped at MAX_DEPTH (grandchild). */
+function collectCard(t, x, y, w, depth, mouthX, mouthY, out, prepd, opts){
+  const kids = allKids(t);
+  const canOpen = depth<MAX_DEPTH && kids.length>0;
+  const open = isOpen(t,opts) && canOpen;
+  const openKids = open ? kids : [];
+  const hasGroup = kids.length>0;
+  const shownRate = (hasGroup && !open) ? subtreeRate(t) : t.rate;
+  const h = cardHeight(t, opts, depth);
+  out.push({ t, x, y, w, h, depth, shownRate, hasGroup, open, canOpen, hasOpenKids: openKids.length>0, kidCount: kids.length, mouthX, mouthY });
+  if(openKids.length){
+    const kidX = x + INDENT;
+    let cy = y + THREAD_H;
+    for(const k of openKids){ cy += SUB_GAP; const ky = cy; cy += cardHeight(k, opts, depth+1); collectCard(k, kidX, ky, w-INDENT-8, depth+1, mouthX, mouthY, out, prepd, opts); }
+  }
+}
+/* a card's incoming river (one band + bead ridge), from the shared mouth */
+function drawCardRiver(g, c, prepd){
+  if(c.mouthX===undefined) return;
+  drawRiver(g, c.mouthX, c.mouthY, c.x, c.y+16, bandW(c.shownRate, prepd.maxShownRate), pc(c.t.provider), c.shownRate, prepd.maxShownRate);
+}
+/* the card rectangle + contents */
+function drawCardRect(g, c, prepd){
+  const { t, x, y, w, h, depth, shownRate, hasGroup, open, canOpen, hasOpenKids, kidCount } = c;
+  const lane=laneById(laneOf(t.status)), dc=laneOf(t.status)==='idle'?GREYS[3]:lane.color;
+  RR(x,y,w,h,7,'#18222d',g,{stroke: hasOpenKids ? '#33506e' : '#2b3d4e','stroke-opacity':0.9});
+  RR(x,y,3,h,1.5,pc(t.provider),g,{opacity:0.9});
+  mk('circle',{cx:x+14,cy:y+16,r:3,fill:dc},g);
+  T(x+22,y+19,CLIP(t.title,24-depth*3),{size:10,fill:'#dbe4ec',parent:g});
+  const flow = subtreeFlow(t);
+  const barW=Math.max(2,(w-20)*(flow/prepd.maxFlow));
+  mk('rect',{x:x+10,y:y+31,width:barW,height:6,rx:3,fill:pc(t.provider),opacity:0.9},g);
+  if(hasGroup){
+    T(x+22,y+47,(open?'own ':'Σ ')+NF(shownRate*60)+' tok/min · '+NF(flow)+' total',{size:8.5,fill:lane.color,parent:g});
+  } else if(t.rate>0){
+    T(x+22,y+47,NF(t.rate*60)+' tok/min',{size:9,fill:lane.color,parent:g});
+  } else {
+    T(x+22,y+47,NF(flow)+' tok',{size:9,fill:'#5f6b76',parent:g});
+  }
+  if(canOpen){
+    RR(x+w-72,y+8,64,18,9,'#22303c',g,{opacity:0.95});
+    T(x+w-40,y+21,(open?'▾ ':'▸ ')+kidCount+(depth? ' nested':' sub'),{size:9,anchor:'middle',fill:'#c4cfd9',parent:g});
+  }
+}
+/* backward-compatible single call used by the non-working lanes (no rivers) */
+function threadCard(svg, x, y, w, t, prepd, opts, depth){
+  const out=[]; collectCard(t, x, y, w, depth||0, undefined, undefined, out, prepd, opts);
+  out.forEach(c=>drawCardRect(svg, c, prepd));
+}
+
+/* a lane (tiled tier) */
+function drawLane(svg, x, y, w, lane, list, prepd, opts, source){
+  RR(x,y,w,LANE_H,8,'#0f1720',svg,{stroke:'#22303c','stroke-opacity':0.85});
+  const hc = lane.id==='idle'?GREYS[2]:lane.color;
+  mk('circle',{cx:x+13,cy:y+16,r:3.4,fill:hc},svg);
+  T(x+22,y+20,lane.label,{size:10.5,weight:600,fill:'#cdd8e2',parent:svg});
+  T(x+w-10,y+20,String(list.length),{size:10.5,anchor:'end',fill:'#7d8b99',parent:svg});
+
+  // sorted by whole-subtree flow so a heavy child lifts its parent
+  const sorted = [...list].sort((a,b)=>subtreeFlow(b)-subtreeFlow(a));
+  const bodyTop=y+28, visibleH=LANE_H-38;
+
+  const positions=[]; let cy=bodyTop+LANE_PAD;
+  sorted.forEach(t=>{ const h=cardHeight(t,opts,0); positions.push({ t, y:cy, h }); cy+=h+THREAD_GAP; });
+  const contentH = cy - bodyTop;
+  const overflow = contentH > visibleH;
+  const clipId='clip-'+(++UID);
+  const cg=mk('clipPath',{id:clipId},svg); mk('rect',{x:x+1,y:bodyTop,width:w-2,height:visibleH},cg);
+
+  // the left-tree lives in the Working lane (the flow story); other lanes stack.
+  const GW = lane.id==='working' ? TRUNK_W + 10 : 0;
+  const cardX = x + LANE_PAD + GW, cardW = w - 2*LANE_PAD - GW;
+
+  const g=mk('g',{'clip-path':`url(#${clipId})`},svg);
+  if(lane.id==='working'){
+    // one mouth at the lane's top-left (fed by the project header); every
+    // card's river fans out of it, colored by that card's provider
+    const mouthX = x + LANE_PAD + 4, mouthY = bodyTop + 14;
+    const cards=[];
+    positions.forEach(p=>{ collectCard(p.t, cardX, p.y, cardW, 0, mouthX, mouthY, cards, prepd, opts); });
+    // Z-order: cards first — parent-first, so a contained child sits atop its
+    // parent's rect — then ALL rivers in front of every card. Among rivers,
+    // deepest is furthest back and each higher level is more front-most.
+    [...cards].sort((a,b)=>a.depth-b.depth).forEach(c=>drawCardRect(g, c, prepd));
+    mk('circle',{cx:mouthX, cy:mouthY, r:3, fill:'#4d6f95', opacity:0.8},g);
+    [...cards].sort((a,b)=>b.depth-a.depth).forEach(c=>drawCardRiver(g, c, prepd));
+  } else {
+    positions.forEach(p=>{ threadCard(g, cardX, p.y, cardW, p.t, prepd, opts, 0); });
+  }
+
+  if(overflow){
+    const trackX=x+w-4;
+    mk('rect',{x:trackX,y:bodyTop,width:3,height:visibleH,rx:1.5,fill:'#22303c'},svg);
+    mk('rect',{x:trackX,y:bodyTop,width:3,height:Math.max(20,visibleH*visibleH/Math.max(contentH,visibleH)),rx:1.5,fill:'#4a5b6d'},svg);
+    T(x+w-8,y+LANE_H-4,'scroll ↕',{size:8.5,anchor:'end',fill:'#5f6b76',parent:svg});
+  }
+}
+
+function collapsedRow(svg, x, y, w, p, prepd, opts){
+  RR(x,y,w,COLLAPSED_H,11,'#141d27',svg,{stroke:'#2b3a49','stroke-opacity':0.9});
+  RR(x,y,4,COLLAPSED_H,2,pc(p.prov[0].id),svg,{opacity:0.85});
+  T(x+18,y+24,CLIP(p.name,34),{size:13,weight:700,fill:'#eef4f9',parent:svg});
+  T(x+w-16,y+24,NF(p.total)+' tok',{size:12,anchor:'end',fill:'#c4cfd9',parent:svg});
+  T(x+18,y+42, p.rate>0 ? NF(p.rate*60)+' tok/min' : 'quiet', {size:10.5, fill:p.rate>0?'#3d84e0':'#5f6b76', parent:svg});
+  T(x+150,y+42, p.all.length+' threads · '+p.tagged.filter(t=>t.lane==='working').length+' working', {size:10, fill:'#7d8b99', parent:svg});
+  const mixX=x+18, mixW=w-260, ptotal=p.prov.reduce((s,v)=>s+v.tot,0)||1; let px=mixX;
+  p.prov.forEach(pv=>{ const seg=mixW*(pv.tot/ptotal); mk('rect',{x:px,y:y+52,width:Math.max(1,seg),height:5,rx:2.5,fill:pc(pv.id),opacity:0.9},svg); px+=seg; });
+  const busiest = p.tagged.slice().sort((a,b)=>b.rate-a.rate)[0];
+  const series = busiest && busiest.rate>0 ? busiest.series : new Array(20).fill(0);
+  const smax=Math.max(1,...series), sx0=x+18, sW=w-260, base=y+82, amp=16;
+  const pts=series.map((v,i)=>({x:sx0+sW*(i/(series.length-1)), y:base-amp*(v/smax)}));
+  mk('path',{d:pts.map((pt,i)=>(i?'L':'M')+` ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' '),stroke:pc(p.prov[0].id),'stroke-width':1.5,fill:'none',opacity:0.65},svg);
+  T(sx0, y+COLLAPSED_H-4, 'burn · last hour', {size:8.5,fill:'#5f6b76',parent:svg});
+  T(x+w-16,y+COLLAPSED_H-6,'open swimlanes ▸',{size:9.5,anchor:'end',fill:'#5f6b76',parent:svg});
+}
+
+function expandedRow(svg, x, y, w, p, prepd, opts){
+  const hdrH=EXP_HDR;
+  RR(x,y,w,hdrH,11,'#141d27',svg,{stroke:'#33506e','stroke-width':2,'stroke-opacity':0.9});
+  RR(x,y,4,hdrH,2,pc(p.prov[0].id),svg,{opacity:0.85});
+  T(x+18,y+26,CLIP(p.name,40),{size:14,weight:700,fill:'#eef4f9',parent:svg});
+  T(x+18,y+46,NF(p.total)+' tok · '+(p.rate>0?NF(p.rate*60)+' tok/min':'quiet')+' · '+p.all.length+' threads',{size:10.5,fill:'#8b98a6',parent:svg});
+  T(x+18,y+62,'flow splits by status ↓',{size:8.5,fill:'#5f6b76',parent:svg});
+  const mixX=x+w-360, mixW=344, ptotal=p.prov.reduce((s,v)=>s+v.tot,0)||1; let px=mixX;
+  p.prov.forEach(pv=>{ const seg=mixW*(pv.tot/ptotal); mk('rect',{x:px,y:y+40,width:Math.max(1,seg),height:6,rx:3,fill:pc(pv.id),opacity:0.92},svg); px+=seg; });
+
+  const laneW=(w-2*HDR_PAD-3*LANE_GAP)/4;
+  const laneTop=y+hdrH+12;
+  const laneX0=x+HDR_PAD;
+  const source={ x: laneX0 + LANE_PAD, y: y+hdrH };
+  const heights = LANES.map(l=>LANE_H);
+  LANES.forEach((lane, i)=>{
+    const lx = laneX0 + i*(laneW+LANE_GAP);
+    drawLane(svg, lx, laneTop, laneW, lane, p.lanes[lane.id], prepd, opts, source);
+  });
+  return hdrH + 12 + Math.max(...heights) + 16;
+}
+
+function renderWorld(host, projects, opts){
+  opts=opts||{};
+  const prepd=prep(projects);
+  const W=WORLD_W, rowX=ROW_X, rowW=W-ROW_X-ROW_R;
+  const heights = prepd.proj.map(p=> opts.expand===p.name ? (EXP_HDR+12+LANE_H+16) : COLLAPSED_H);
+  const H = 60 + heights.reduce((s,h)=>s+h+ROW_GAP,0) + 30;
+  const svg=mk('svg',{viewBox:`0 0 ${W} ${H}`,preserveAspectRatio:'xMidYMid meet'},host);
+
+  drawSpine(svg, prepd, 90);
+  const spineEndX=SPINE_X+SPINE_W;
+
+  let y=60;
+  prepd.proj.forEach((p,i)=>{
+    const cy = y + (opts.expand===p.name ? EXP_HDR/2 : COLLAPSED_H/2);
+    p.prov.forEach(pv=>{
+      const spine=prepd.provTot.find(x=>x.id===pv.id); if(!spine) return;
+      flowLine(svg, spineEndX, spine._y+spine._h/2, rowX+4, cy, pc(pv.id), Math.min(rateW(pv.rate,prepd.maxThreadRate),9), pv.rate, prepd.maxThreadRate);
+    });
+    if(opts.expand===p.name) expandedRow(svg, rowX, y, rowW, p, prepd, opts);
+    else collapsedRow(svg, rowX, y, rowW, p, prepd, opts);
+    y += heights[i] + ROW_GAP;
+  });
+
+  T(ROW_X, H-10, opts.footnote||`world ${W}×${Math.round(H)}`, {size:10,fill:'#5f6b76',parent:svg});
+  return {W,H};
+}
+
+/* ============================== panels ============================== */
+const stage=document.getElementById('stage');
+function panel(title,sub,fn){ const d=document.createElement('div'); d.className='panel';
+  d.innerHTML=`<div class="bar"><span class="dot"></span><span>${title}</span><span class="dim">${sub}</span></div>`;
+  const b=document.createElement('div'); d.appendChild(b); stage.appendChild(d); fn(b); }
+
+panel('Overview · projects piled vertically', '6 projects · one wide row each', (body)=>{
+  renderWorld(body, roster(), { footnote:'collapsed stack · provider → project burn+activity lines' });
+});
+document.getElementById('note-overview').innerHTML =
+  'Projects <b>pile vertically</b> — one wide landscape row each, never tiled. The provider spine feeds each row with a ' +
+  'burn+activity line (thickness = historical burn, beads = current rate). A row shows name, total, live tok/min, thread counts, ' +
+  'a provider-mix strip, and the hottest thread’s burn sparkline.';
+
+panel('One project expanded · the tiers tile', 'Working far left · sorted by subtree flow', (body)=>{
+  renderWorld(body, roster(), { expand:'homelab', footnote:'expanded “homelab” · lanes tile: Working ▸ Needs You ▸ Unread ▸ Idle' });
+});
+document.getElementById('note-expanded').innerHTML =
+  'Expanding a row reveals the <b>tiers tiled across the width</b>: Working, Needs You, Unread, Idle. The Working lane sorts threads ' +
+  '<b>by whole-subtree flow, highest at the top</b>. Every card’s river fans from <b>the one project-level dot in the lane’s top-left</b> — ' +
+  'the runaway thread (<b>daemon restart loop</b>) carries the thickest river at the top. Lanes scroll independently; ' +
+  'row height is capped at the Working lane.';
+
+panel('Parent → child → grandchild', 'one mouth · Σ collapsed, own expanded', (body)=>{
+  renderWorld(body, roster(), {
+    expand:'activity-overview',
+    open:new Set(['sankey diagram for PRs','layout regression sweep']),
+    footnote:'“sankey diagram for PRs” open → child open → grandchild; every river from the one project mouth',
+  });
+});
+document.getElementById('note-nested').innerHTML =
+  'Children are <b>contained inside their parent’s card</b>, and the containment <b>recurses</b>: here <b>sankey diagram for PRs</b> contains ' +
+  '<b>layout regression sweep</b>, which contains <b>pixel snapshot pass</b>. Every card draws its river from <b>the same project-level mouth</b> ' +
+  'in the top-left — rivers are never inherited through ancestry, they all fan out of one dot. Note the flow drops as the set disaggregates: a ' +
+  '<b>collapsed</b> group head carries its <b>whole subtree’s flow</b> (Σ), but once expanded it drops to <b>its own flow only</b>, because the ' +
+  'descendants now show theirs. The parent’s bar and “total” number stay the subtree sum.';
+
+document.getElementById('legend').innerHTML =
+  PROVIDERS.map(p=>`<span><span class="sw" style="background:${p.color}"></span>${p.label}</span>`).join('')
+  + LANES.map(l=>{ const dot = l.id==='attention'
+      ? `<span class="sdot" style="background:linear-gradient(90deg,${l.color} 50%,${l.alt} 50%)"></span>`
+      : `<span class="sdot" style="background:${l.id==='idle'?GREYS[2]:l.color}"></span>`;
+    return `<span>${dot}${l.label}</span>`; }).join('')
+  + `<span style="color:#7d8b99">river = the card’s shown flow (Σ subtree while collapsed, own flow once expanded) · bar = subtree total · beads = current activity</span>`;
+</script>
+</body>
+</html>

@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token flow — tiled hierarchy mockup (v1)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b0f14; color: #dfe7ee;
+    font-family: -apple-system, "SF Pro Text", system-ui, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1760px; margin: 0 auto; padding: 20px 24px 64px; }
+  h1 { font-size: 20px; font-weight: 700; color: #eef4f9; margin: 0 0 4px; }
+  h2 { font-size: 14px; font-weight: 700; color: #cdd8e2; margin: 30px 0 8px; }
+  h2 .tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #7d8b99;
+    background: #1b232d; border: 1px solid #24303c; border-radius: 999px; padding: 2px 8px; margin-left: 8px; vertical-align: 1px; }
+  p.note { font-size: 12px; color: #8b98a6; line-height: 1.55; margin: 4px 0 12px; max-width: 1100px; }
+  p.note b { color: #a9b6c2; }
+  .panel { border: 1px solid #223040; border-radius: 12px; background: #0d131a; overflow: hidden; }
+  .panel .bar { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: #131a22;
+    border-bottom: 1px solid #223040; font-size: 11px; color: #7d8b99; }
+  .panel .bar .dot { width: 8px; height: 8px; border-radius: 50%; background: #3d84e0; }
+  .panel .bar .dim { margin-left: auto; }
+  svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #a9b6c2; margin: 10px 0 0; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .sdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .hierarchy { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; color: #cdd8e2; margin: 6px 0 16px; }
+  .hierarchy .lvl { background: #16202b; border: 1px solid #243441; border-radius: 7px; padding: 4px 9px; }
+  .hierarchy .arrow { color: #5b6873; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Token flow — tiled hierarchy (mockup v1)</h1>
+  <p class="note">Jam-session proposal for the operator. Synthetic data. Hand-rolled SVG, dark palette matching the shipped view.
+    Growth axis is <b>width</b>: family cells tile into roughly 16:7 landscape rectangles instead of stacking in one tall rail.</p>
+
+  <div class="hierarchy">
+    <span class="lvl">1 · Provider</span><span class="arrow">›</span>
+    <span class="lvl">2 · Project</span><span class="arrow">›</span>
+    <span class="lvl">3 · Family</span><span class="arrow">›</span>
+    <span class="lvl">4 · Status group</span><span class="arrow">›</span>
+    <span class="lvl">5 · Thread</span>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <h2>Tiling at a landscape panel<span class="tag">folded by default</span></h2>
+  <p class="note" id="note-landscape"></p>
+
+  <h2>One status group expanded<span class="tag">landscape kept</span></h2>
+  <p class="note" id="note-expanded"></p>
+
+  <h2>Variant (i) · three columns, rail-only tiling<span class="tag">not recommended</span></h2>
+  <p class="note" id="note-variant-i"></p>
+
+  <h2>Roster sizes<span class="tag">small · medium · large</span></h2>
+  <p class="note" id="note-sizes"></p>
+
+  <h2>Narrow (portrait-ish) panel<span class="tag">fewer columns</span></h2>
+  <p class="note" id="note-narrow"></p>
+
+  <div id="stage"></div>
+</div>
+
+<script>
+'use strict';
+/* ============================ palette ============================ */
+const PROVIDERS = [
+  { id:'anthropic', label:'Anthropic', color:'#d97757' },
+  { id:'openai',    label:'OpenAI',    color:'#10a37f' },
+  { id:'google',    label:'Google',    color:'#4d8ef7' },
+  { id:'ollama',    label:'Ollama',    color:'#a78bfa' },
+];
+const PIDX = Object.fromEntries(PROVIDERS.map((p,i)=>[p.id,i]));
+
+/* Status groups: the fold level. Mapping folded from tokenFlowStatus's five
+   values into the operator's four groups. */
+const GROUPS = [
+  { id:'attention', label:'Needs Attention', members:['waiting','error'],
+    color:'#d9a53f', color2:'#e5534b' },
+  { id:'working',   label:'Working',         members:['running'],
+    color:'#3d84e0' },
+  { id:'unread',    label:'Unread',          members:['done'],
+    color:'#2e9e45' },
+  { id:'idle',      label:'Idle',            members:['idle'],
+    color:'#8b97a3' },
+];
+const GROUP_OF = {
+  waiting:'attention', error:'attention',
+  running:'working', queued:'working',
+  done:'unread', interrupted:'unread',
+  idle:'idle',
+};
+/* idle age ramp (grey) for idle-row dots: index = age bucket */
+const GREY_RAMP = ['#a8b3bf','#8f9ba8','#78838f','#5f6a75','#4a545e','#39424b'];
+
+/* ============================ synthetic data ============================ */
+let SEED = 7;
+const rnd = () => { SEED = (SEED * 1103515245 + 12345) & 0x7fffffff; return SEED / 0x7fffffff; };
+const pick = (a) => a[Math.floor(rnd()*a.length)];
+
+const TITLES = ['board chip status polling','stale flag sweep','backup script review','shell prompt cleanup',
+  'nightly sync sweep','retry sweep','sankey diagram for PRs','amplitude wave revision','visual-check browser driver',
+  'forge CI runner notes','vault rotation cron','treemap label layer','camera store stamp','whats-new fingerprint',
+  'export path refactor','importer test fix','inbox digest build','token sampler ring','project band mix',
+  'status fold spec','river resolution','grid packer','landscape tiling','legend chips'];
+
+function mkThread(status, provider, tot, rate) {
+  return { title: pick(TITLES), status, provider, tot, rate };
+}
+function mkFamily(parentTitle, threads) {
+  return { parent: parentTitle, threads };
+}
+
+function roster(kind) {
+  // returns [{name, families:[{parent, threads:[...]}]}]
+  const P = [
+    { name:'activity-overview', fams:[
+      fam('sankey diagram for PRs', ['running','done','idle']),
+      fam('amplitude wave revision', ['running','idle']),
+      fam('visual-check browser driver', ['error','done']),
+    ]},
+    { name:'focus-board', fams:[
+      fam('parent-thread view', ['running','waiting']),
+      fam('card tween', ['done','idle']),
+    ]},
+    { name:'cove', fams:[
+      fam('forge CI runner notes', ['waiting','idle']),
+      fam('vault rotation cron', ['idle','idle']),
+    ]},
+  ];
+  function fam(title, statuses) {
+    const threads = statuses.map((s) => mkThread(s, pick(PROVIDERS).id, 2000 + Math.floor(rnd()*95000), s==='running' ? 40 + Math.floor(rnd()*900) : 0));
+    return { parent: title, threads };
+  }
+  if (kind === 'small') return [P[0]];
+  if (kind === 'medium') return P;
+  if (kind === 'large') {
+    const out = [];
+    const names = ['activity-overview','focus-board','cove','dotfiles','homelab','houseops','infra','clinic'];
+    names.forEach((nm, i) => {
+      const fams = [];
+      const count = 3 + (i % 3);
+      for (let f = 0; f < count; f++) {
+        const sts = [ 'running','idle', 'done','waiting', 'error','running', 'idle' ].slice(0, 2 + (f % 3));
+        fams.push(fam(pick(TITLES), sts));
+      }
+      out.push({ name:nm, fams });
+    });
+    return out;
+  }
+  return P;
+}
+
+/* ============================ geometry ============================ */
+const CELL_W = 300, GUT = 20, PITCH = CELL_W + GUT;
+const PAD = 8, HDR_H = 30, STATUS_H = 22, ROW_H = 26;
+const FOLDED_CELL_H = HDR_H + 4*STATUS_H + 2*PAD;      // = 134
+const SPINE_X = 26, SPINE_W = 86, SEAM_X = 150;
+const BAND_X = 150, BAND_W = 150;                      // project header band left block
+const GRID_X = 340;                                    // first cell column
+
+const nf = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'k' : String(Math.round(n));
+const clamp = (n,a,b) => Math.min(b, Math.max(a,n));
+const clip = (s,n) => s.length > n ? s.slice(0,n-1)+'…' : s;
+
+/* Precompute per-thread/per-family/per-project aggregates. */
+function prep(projects, scaleTot) {
+  const proj = projects.map((p) => {
+    const fams = p.fams.map((f) => {
+      const threads = f.threads.map((t) => ({
+        ...t, group: GROUP_OF[t.status],
+      }));
+      const total = threads.reduce((s,t)=>s+t.tot,0);
+      const byGroup = {};
+      for (const g of GROUPS) byGroup[g.id] = threads.filter((t)=>t.group===g.id);
+      const prov = PROVIDERS.map((pr)=>({ id:pr.id, tot: threads.filter((t)=>t.provider===pr.id).reduce((s,t)=>s+t.tot,0) })).filter((x)=>x.tot>0);
+      return { parent:f.parent, threads, total, byGroup, prov };
+    });
+    const total = fams.reduce((s,f)=>s+f.total,0);
+    const prov = PROVIDERS.map((pr)=>({ id:pr.id, tot: fams.reduce((s,f)=>s+f.prov.filter(x=>x.id===pr.id).reduce((a,x)=>a+x.tot,0),0) })).filter((x)=>x.tot>0);
+    return { name:p.name, fams, total, prov };
+  });
+  const total = proj.reduce((s,p)=>s+p.total,0);
+  const maxThread = Math.max(1, ...proj.flatMap(p=>p.fams.flatMap(f=>f.threads.map(t=>t.tot))));
+  return { proj, total, maxThread };
+}
+
+/* ============================ svg helpers ============================ */
+const NS = 'http://www.w3.org/2000/svg';
+function el(name, attrs, parent) {
+  const n = document.createElementNS(NS, name);
+  for (const k in attrs) { if (attrs[k] !== null && attrs[k] !== undefined) n.setAttribute(k, attrs[k]); }
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function txt(x, y, s, o = {}) {
+  const t = el('text', { x, y, 'font-size': o.size ?? 11, 'font-weight': o.weight ?? 400,
+    fill: o.fill ?? '#cdd8e2', 'text-anchor': o.anchor ?? 'start', 'font-family': 'inherit' }, o.parent);
+  t.textContent = s;
+  return t;
+}
+function roundRect(x,y,w,h,r,fill,parent,extra={}) {
+  return el('rect', { x, y, width:w, height:h, rx:r, fill, ...extra }, parent);
+}
+
+/* ============================ cell rendering ============================ */
+function cellHeight(fam, expanded) {
+  const extra = expanded ? fam.byGroup[expanded].length * ROW_H : 0;
+  return FOLDED_CELL_H + extra;
+}
+function drawCell(g, x, y, w, fam, opts) {
+  const expanded = opts.expanded || null;
+  const h = cellHeight(fam, expanded);
+  const sel = !!opts.selected;
+  // zone (neutral fill; status NEVER paints a fill)
+  if (sel) roundRect(x-4, y-4, w+8, h+8, 13, 'none', g, { stroke:'#4a6b8c','stroke-width':4,'stroke-opacity':0.5 });
+  roundRect(x, y, w, h, 10, '#17222d', g, { stroke: sel ? '#3f5a75' : '#2f3f50', 'stroke-opacity': sel ? 0.95 : 0.7 });
+
+  // family header: parent dot, title, total bar, provider mini-strip
+  const pdot = fam.threads.find((t)=>t.group==='attention') ? '#d9a53f'
+    : fam.threads.find((t)=>t.group==='working') ? '#3d84e0'
+    : fam.threads.find((t)=>t.group==='unread') ? '#2e9e45'
+    : GREY_RAMP[2];
+  el('circle', { cx:x+13, cy:y+15, r:3.6, fill:pdot }, g);
+  txt(x+22, y+19, clip(fam.parent, 24), { size: 11, weight: 700, fill:'#eef4f9', parent:g });
+  txt(x+w-10, y+19, nf(fam.total)+' tok', { size: 10, anchor:'end', fill:'#8b98a6', parent:g });
+  // provider mini-strip (family provider mix), width ∝ family tokens over its project
+  let sx = x + 10, sw = w - 20;
+  const ptot = fam.prov.reduce((s,p)=>s+p.tot,0) || 1;
+  fam.prov.forEach((p) => {
+    const seg = sw * (p.tot/ptot);
+    el('rect', { x:sx, y:y+24, width:Math.max(1,seg), height:3, rx:1.5, fill:PROVIDERS[PIDX[p.id]].color }, g);
+    sx += seg;
+  });
+
+  // status group headers — folded by default
+  let cy = y + HDR_H;
+  for (const grp of GROUPS) {
+    const list = fam.byGroup[grp.id] || [];
+    const isExp = expanded === grp.id;
+    txt(x+10, cy+15, isExp ? '▾' : '▸', { size: 10, fill:'#7d8b99', parent:g });
+    // two-tone dot for Needs Attention (amber = needs-you, red = error)
+    if (grp.id === 'attention') {
+      el('circle', { cx:x+26, cy:cy+11, r:3.4, fill:grp.color }, g);
+      el('path', { d:`M ${x+26} ${cy+7.6} A 3.4 3.4 0 0 1 ${x+26} ${cy+14.4} Z`, fill:grp.color2 }, g);
+    } else {
+      el('circle', { cx:x+26, cy:cy+11, r:3.4, fill:grp.id==='idle' ? GREY_RAMP[2] : grp.color }, g);
+    }
+    txt(x+34, cy+15, grp.label, { size:10.5, fill:'#cdd8e2', weight:500, parent:g });
+    txt(x+w-10, cy+15, String(list.length), { size:10.5, anchor:'end', fill:'#7d8b99', parent:g });
+    if (isExp) {
+      let ry = cy + STATUS_H;
+      list.forEach((t) => {
+        // thread row: dot, title, horizontal total bar, tok/min
+        const dc = t.group==='idle' ? GREY_RAMP[2] : GROUPS.find(gg=>gg.id===t.group).color;
+        el('circle', { cx:x+30, cy:ry+13, r:3, fill:dc }, g);
+        txt(x+38, ry+17, clip(t.title, 22), { size:10, fill:'#a9b6c2', parent:g });
+        const barX = x + 168, barMax = w - 168 - 66;
+        el('rect', { x:barX, y:ry+9, width:Math.max(2, barMax * (t.tot/opts.maxThread)), height:8, rx:4,
+          fill:PROVIDERS[PIDX[t.provider]].color, opacity:0.85 }, g);
+        if (t.rate > 0) txt(x+w-8, ry+17, nf(t.rate*60)+' tok/min', { size:9.5, anchor:'end', fill:GROUPS.find(gg=>gg.id===t.group).color, parent:g });
+        ry += ROW_H;
+      });
+      cy = ry;
+    } else {
+      cy += STATUS_H;
+    }
+  }
+  return h;
+}
+
+/* Grid packer: fills `cols` columns left→right, top→bottom; a cell may span
+   `span` columns (used to keep an expanded cell landscape). Returns rows of
+   placements plus the section height. */
+function packSection(fams, x0, y0, cols, opts) {
+  const placements = [];
+  let col = 0, rowY = y0, rowH = 0, maxBottom = y0;
+  for (const f of fams) {
+    const span = opts.spanOf ? opts.spanOf(f) : 1;
+    if (col + span > cols) { rowY += rowH + GUT; col = 0; rowH = 0; }
+    const w = span*CELL_W + (span-1)*GUT;
+    const h = cellHeight(f, opts.expandedOf ? opts.expandedOf(f) : null);
+    placements.push({ f, x:x0 + col*PITCH, y:rowY, w, h, span, expanded: opts.expandedOf ? opts.expandedOf(f) : null });
+    rowH = Math.max(rowH, h);
+    col += span;
+    maxBottom = Math.max(maxBottom, rowY + h);
+    if (col >= cols) { rowY += rowH + GUT; col = 0; rowH = 0; }
+  }
+  return { placements, bottom: maxBottom };
+}
+
+/* Variant (i): keep provider + project columns, tile ONLY the card rail.
+   Shows the invariant damage: rivers elongate and cross as card rows scatter. */
+function renderThreeColumn(host, projects, opt) {
+  const cols = opt.cols;
+  const prepd = prep(projects);
+  const PX = 40, PW = 16, JX = 150, JW = 14, RAIL_X = 300;
+  const cellW = 250, gutter = 16, pitch = cellW + gutter;
+  const railW = cols*cellW + (cols-1)*gutter;
+  const W = RAIL_X + railW + 30;
+
+  let y = 60;
+  const projBoxes = prepd.proj.map((p) => {
+    const rows = [];
+    let col = 0, rowY = y, rowH = 0;
+    p.fams.forEach((f) => {
+      const h = FOLDED_CELL_H;
+      if (col >= cols) { rowY += rowH + gutter; col = 0; rowH = 0; }
+      rows.push({ f, x: RAIL_X + col*pitch, y: rowY, w: cellW, h });
+      rowH = Math.max(rowH, h); col++;
+    });
+    const bottom = rowY + rowH;
+    const box = { p, top: y - 14, bottom: bottom + 10, rows };
+    y = bottom + 40;
+    return box;
+  });
+  const H = y + 10;
+  const svg = el('svg', { viewBox:`0 0 ${W} ${H}`, preserveAspectRatio:'xMidYMid meet' }, host);
+
+  // provider column
+  const provTot = PROVIDERS.map((pr)=>({ id:pr.id, tot: prepd.proj.reduce((s,p)=>s+(p.prov.find(x=>x.id===pr.id)?.tot||0),0) })).filter(x=>x.tot>0);
+  const pTotal = provTot.reduce((s,p)=>s+p.tot,0) || 1;
+  let sy = 60; const spineH = Math.min(680, H - 140);
+  provTot.forEach((pv)=>{ const bh = Math.max(40, spineH*(pv.tot/pTotal)); const c=PROVIDERS[PIDX[pv.id]].color;
+    roundRect(PX, sy, PW, bh, 4, c, svg, { opacity:0.92 });
+    txt(PX-8, sy+bh/2, PROVIDERS[PIDX[pv.id]].label, { size:11, anchor:'end', weight:700, fill:'#cdd8e2', parent:svg });
+    pv._y=sy; pv._h=bh; sy+=bh+14; });
+
+  // project boxes (middle), height = the token core (normalized) — the "run" is gone
+  const maxCore = Math.max(1, ...prepd.proj.map(p=>p.total));
+  projBoxes.forEach((bx)=>{
+    const core = 40 + 300*(bx.p.total/maxCore);
+    const boxTop = bx.top + 16;
+    roundRect(JX, boxTop, JW, core, 3, '#2b3948', svg, { stroke:'#3a4b5d' });
+    let cc = boxTop;
+    bx.p.prov.forEach((pv)=>{ const seg = core*(pv.tot/(bx.p.prov.reduce((s,x)=>s+x.tot,0)||1));
+      el('rect',{x:JX+1,y:cc,width:JW-2,height:Math.max(1,seg),fill:PROVIDERS[PIDX[pv.id]].color,opacity:0.55},svg); cc+=seg; });
+    txt(JX+JW+8, boxTop+12, clip(bx.p.name,22), { size:11, weight:700, fill:'#eef4f9', parent:svg });
+    txt(JX+JW+8, boxTop+25, nf(bx.p.total)+' tok', { size:9.5, fill:'#8b98a6', parent:svg });
+    // rivers: one per (provider, family) — from the provider slot, through the
+    // project box, to the family's FIRST row. Long and crossy once tiled.
+    bx.rows.forEach((r)=>{
+      r.f.prov.forEach((pv)=>{
+        const spine = provTot.find(x=>x.id===pv.id); if(!spine) return;
+        const c = PROVIDERS[PIDX[pv.id]].color;
+        const fromY = spine._y + spine._h/2;
+        const midY = boxTop + core/2;
+        const toX = r.x + 12, toY = r.y + 16;
+        const d = `M ${PX+PW} ${fromY} C ${(PX+PW+JX)/2} ${fromY}, ${(PX+PW+JX)/2} ${midY}, ${JX} ${midY} L ${JX+JW} ${midY} C ${(JX+JW+toX)/2} ${midY}, ${(JX+JW+toX)/2} ${toY}, ${toX} ${toY}`;
+        el('path', { d, stroke:c, 'stroke-width':Math.max(1.4, Math.min(10, 10*(pv.tot/maxCore))), fill:'none', opacity:0.2, 'stroke-linecap':'round' }, svg);
+      });
+    });
+    // cells
+    bx.rows.forEach((r)=>drawCell(svg, r.x, r.y, r.w, r.f, { expanded:null, maxThread: prepd.maxThread }));
+  });
+  txt(PX, H-8, opt.footnote || `variant (i) three-column · world ${Math.round(W)}×${Math.round(H)}`, { size:10, fill:'#5f6b76', parent:svg });
+  return { W, H, svg };
+}
+
+/* Draw a full artboard: spine (providers) → project bands → tiled grid. */
+function renderArtboard(host, projects, opt) {
+  const cols = opt.cols;
+  const prepd = prep(projects);
+  const gridX = GRID_X;
+  const gridW = cols*CELL_W + (cols-1)*GUT;
+  const W = gridX + gridW + 40;
+
+  // vertical stack of project sections
+  let y = 48;
+  const sections = prepd.proj.map((p) => {
+    const pack = packSection(p.fams, gridX, y + 30, cols, opt);
+    const secH = pack.bottom - y + 14;
+    const sec = { p, pack, y, secH };
+    y += secH + 22;
+    return sec;
+  });
+  const H = y + 10;
+
+  const svg = el('svg', { viewBox:`0 0 ${W} ${H}`, preserveAspectRatio:'xMidYMid meet' }, host);
+
+  // ---- provider spine (level 1)
+  const spineTop = 48, spineH = Math.min(560, H - 120);
+  let sy = spineTop;
+  const provTot = PROVIDERS.map((pr)=>({ id:pr.id, tot: prepd.proj.reduce((s,p)=>s+(p.prov.find(x=>x.id===pr.id)?.tot||0),0) })).filter(x=>x.tot>0);
+  const pTotal = provTot.reduce((s,p)=>s+p.tot,0) || 1;
+  provTot.forEach((pv) => {
+    const bh = Math.max(40, spineH * (pv.tot/pTotal));
+    const color = PROVIDERS[PIDX[pv.id]].color;
+    roundRect(SPINE_X, sy, SPINE_W, bh, 6, color, svg, { opacity:0.92 });
+    txt(SPINE_X + SPINE_W/2, sy + 18, PROVIDERS[PIDX[pv.id]].label, { size:12, weight:700, anchor:'middle', fill:'#0b1015', parent:svg });
+    txt(SPINE_X + SPINE_W/2, sy + 34, nf(pv.tot), { size:10, anchor:'middle', fill:'#0b1015', parent:svg, opacity:0.8 });
+    pv._y = sy; pv._h = bh;
+    sy += bh + 12;
+  });
+  txt(SPINE_X + SPINE_W/2, spineTop - 12, 'providers', { size:10, anchor:'middle', fill:'#7d8b99', parent:svg, weight:600 });
+
+  // ---- project sections: band (level 2) + tiled family cells (levels 3–5)
+  sections.forEach((sec) => {
+    const { p, pack, y:secY } = sec;
+    // project header band
+    roundRect(BAND_X, secY, gridX + gridW - BAND_X, 22, 6, '#111a23', svg, { stroke:'#22303c','stroke-opacity':0.7 });
+    txt(BAND_X + 10, secY + 15, clip(p.name, 26), { size:12, weight:700, fill:'#eef4f9', parent:svg });
+    txt(BAND_X + 190, secY + 15, nf(p.total)+' tokens · '+p.fams.length+' famil'+(p.fams.length===1?'y':'ies'), { size:10, fill:'#8b98a6', parent:svg });
+    // project provider mix strip at the band's left edge
+    const bandStripX = BAND_X + 6, bandStripY = secY + 25, bandStripW = 250;
+    let bx = bandStripX;
+    const btot = p.prov.reduce((s,x)=>s+x.tot,0) || 1;
+    p.prov.forEach((pv) => {
+      const seg = bandStripW * (pv.tot/btot);
+      el('rect', { x:bx, y:bandStripY, width:Math.max(1,seg), height:5, rx:2.5, fill:PROVIDERS[PIDX[pv.id]].color, opacity:0.85 }, svg);
+      bx += seg;
+    });
+    // rivers: spine → project band strip, one filled band per (provider, project).
+    // Width ∝ the provider's tokens in this project over the busiest such band.
+    const maxBandTot = Math.max(1, ...prepd.proj.flatMap((pp)=>pp.prov.map((x)=>x.tot)));
+    p.prov.forEach((pv) => {
+      const spine = provTot.find(x=>x.id===pv.id);
+      const fromY = (spine?._y ?? spineTop) + (spine?._h ?? 40)/2;
+      const toY = bandStripY + 2.5;
+      const offset = p.prov.slice(0, p.prov.indexOf(pv)).reduce((s,x)=>s+x.tot,0);
+      const toX = bandStripX + bandStripW * ((offset + pv.tot/2) / btot);
+      const x1 = SPINE_X + SPINE_W, x2 = toX;
+      const d = `M ${x1} ${fromY} C ${(x1+x2)/2} ${fromY}, ${(x1+x2)/2} ${toY}, ${x2} ${toY}`;
+      el('path', { d, stroke:PROVIDERS[PIDX[pv.id]].color, 'stroke-width':Math.max(2, Math.min(26, 26*(pv.tot/maxBandTot))), fill:'none', opacity:0.22, 'stroke-linecap':'round' }, svg);
+    });
+    // tiled family cells
+    pack.placements.forEach((pl) => {
+      drawCell(svg, pl.x, pl.y, pl.w, pl.f, { expanded: pl.expanded, selected: pl.selected, maxThread: prepd.maxThread });
+    });
+  });
+
+  // footnote
+  txt(26, H-8, opt.footnote || `world ${Math.round(W)} × ${Math.round(H)} · ${prepd.proj.reduce((s,p)=>s+p.fams.length,0)} families · ${cols} columns`, { size:10, fill:'#5f6b76', parent:svg });
+  return { W, H, svg };
+}
+
+/* ============================ build the artboards ============================ */
+const stage = document.getElementById('stage');
+
+function panel(title, sub, fn) {
+  const div = document.createElement('div');
+  div.className = 'panel';
+  div.style.marginBottom = '22px';
+  div.innerHTML = `<div class="bar"><span class="dot"></span><span>${title}</span><span class="dim">${sub}</span></div>`;
+  const body = document.createElement('div');
+  div.appendChild(body);
+  stage.appendChild(div);
+  fn(body);
+}
+function colsFor(availW, cellW) { return Math.max(1, Math.floor((availW + GUT) / (cellW + GUT))); }
+
+/* 1 — landscape, folded */
+panel('Landscape panel · folded by default', '16:7 cells · 4 columns', (body) => {
+  renderArtboard(body, roster('medium'), { cols: 4, footnote: 'landscape 1680×~430 · 7 families · 4 columns · every status group folded' });
+});
+document.getElementById('note-landscape').innerHTML =
+  'Each family is a <b>16:7 landscape cell</b>: a header (parent thread, family total, provider mix) over four status-group headers with counts. ' +
+  'At rest <b>every group is folded</b>, so a family is ~134px tall instead of a tall rail. Cells tile left→right; a landscape panel fits four columns here, so seven families need only two rows.';
+
+/* 2 — one expanded group, widened to keep landscape */
+panel('One status group expanded', 'cell spans 2 columns', (body) => {
+  renderArtboard(body, roster('medium'), {
+    cols: 4,
+    expandedOf: (f) => f.parent === 'sankey diagram for PRs' ? 'working' : null,
+    spanOf: (f) => f.parent === 'sankey diagram for PRs' ? 2 : 1,
+    footnote: 'landscape 1680×~470 · “sankey diagram for PRs” Working group open, cell widened to 2 columns',
+  });
+});
+document.getElementById('note-expanded').innerHTML =
+  'Folds are per-family: here only <b>sankey diagram for PRs → Working</b> is open. Thread rows show a dot, title, a horizontal total-spend bar, and tok/min. ' +
+  'An expanded cell <b>claims a second column</b> so it grows sideways, not downward — it stays landscape. Neighbouring families are untouched.';
+
+/* 1b — variant (i): three columns, only the rail tiled (for comparison) */
+panel('Variant (i) · three columns, rail-only tiling', 'the invariant damage, drawn', (body) => {
+  renderThreeColumn(body, roster('medium'), { cols: 4, footnote: 'variant (i) 1680×~760 · providers → project bars → tiled card rail' });
+});
+document.getElementById('note-variant-i').innerHTML =
+  'For comparison, variant (i) keeps the shipped three columns and tiles <b>only the card rail</b>. Two problems are visible: ' +
+  'the project bar loses its honest height (its members now spread across columns, so “the run they span” is not a single vertical extent), ' +
+  'and every river grows two extra bends and <b>crosses</b> its neighbours as rows scatter. This is why I do not recommend it.';
+
+/* 3 — roster sizes */
+panel('Small roster · 1 project, 3 families', '1 column used', (body) => {
+  renderArtboard(body, roster('small'), { cols: 4, footnote: 'small · 3 families · 4 columns available, 3 used' });
+});
+panel('Large roster · 8 projects, 27 families', 'wraps into rows', (body) => {
+  renderArtboard(body, roster('large'), { cols: 6, footnote: 'large · 27 families · 6 columns · wraps into rows per project' });
+});
+document.getElementById('note-sizes').innerHTML =
+  'Column count is set by the panel width (<b>cols = floor((availW + gutter) / (cellW + gutter))</b>), so a wider panel shows more families side by side. ' +
+  'A large roster wraps into more rows within each project section; the camera fits the whole world, and the operator pans and zooms as before.';
+
+/* 4 — narrow panel */
+panel('Narrow panel · fewer columns', '2 columns', (body) => {
+  renderArtboard(body, roster('medium'), { cols: 2, footnote: 'narrow 880×~1180 · 7 families · 2 columns → taller world' });
+});
+document.getElementById('note-narrow').innerHTML =
+  'On a narrow panel the same roster drops to two columns and the world grows taller — the honest consequence of a fixed cell size. ' +
+  'This is why the operator’s landscape preference matters: <b>width is the growth axis</b>, and a landscape panel spends its width on columns instead of height.';
+
+/* legend */
+document.getElementById('legend').innerHTML =
+  PROVIDERS.map((p)=>`<span><span class="sw" style="background:${p.color}"></span>${p.label}</span>`).join('') +
+  GROUPS.map((g)=>{
+    const dot = g.id==='attention'
+      ? `<span class="sdot" style="background:linear-gradient(90deg,${g.color} 50%,${g.color2} 50%)"></span>`
+      : `<span class="sdot" style="background:${g.id==='idle'?'#8f9ba8':g.color}"></span>`;
+    return `<span>${dot}${g.label}${g.members.length>1?' ('+g.members.join('+')+')':''}</span>`;
+  }).join('');
+</script>
+</body>
+</html>
