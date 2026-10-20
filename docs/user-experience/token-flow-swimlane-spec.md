@@ -52,7 +52,7 @@ A row (~full width × 94px) carries the project name, total tokens, live **tok/m
 Expanding a row reveals the four lanes across the width.
 
 - Each lane stacks its thread cards (dot, title, subtree bar, tok/min).
-- **The left-tree is drawn as sankey rivers.** All rivers fan from **one mouth** at the lane's top-left (fed by the project header) and land on each thread card: **a filled, provider-colored band whose thickness is that thread's own flow**, with white beads for live activity. Because the lane is sorted by flow, the runaway thread's river is the widest at the top. This is the primary read.
+- **Rivers recurse to grandchildren.** All rivers fan from **one mouth** at the lane's top-left (fed by the project header) and land on each thread card: **a filled, provider-colored band whose thickness is that thread's own flow**, with white beads for live activity. Because the lane is sorted by flow, the runaway thread's river is the widest at the top. Inside an open card a vertical trunk runs down its inner-left and **each child peels a river off that trunk**; a child with children repeats the pattern, so **parent, child and grandchild each receive a river**. This is the primary read.
 - **Row height is capped at the Working lane's height.** Needs You / Unread / Idle get the same height.
 - **Each lane scrolls independently** (its own scroll rail); scrolling one lane never moves another.
 - Needs You / Unread / Idle carry **no rivers** (they are not burning); they show their cards and counts only.
@@ -62,7 +62,7 @@ Expanding a row reveals the four lanes across the width.
 
 A thread with children shows a `▸ N sub` / `▾ N nested` chip. Opened, its children are **contained inside the parent's card** (indented, not laid out as siblings), and the containment **recurses one further level**: parent → child → **grandchild**. **Hard cap at grandchild** (operator's call, `MAX_DEPTH = 2`): a grandchild does not open its own children. At each level:
 
-- The **rivers split again** — a thin elbow inside the card drops to each child's own river — the same way threads branch from projects.
+- The **rivers split again at every open level** — a vertical trunk runs down the open card's inner-left and each child peels its own river off that trunk; a child with children repeats it, so parent, child and grandchild each receive a river — the same way threads branch from projects.
 - **The river into a thread carries just that thread's OWN flow.** The **card's bar and total number show the whole-subtree sum** (own + every descendant shown). So a parent reads "own 15.8k tok/min · 46.5k total": the river that feeds it is its own, while its total includes its children. The two are deliberately different reads.
 - Children stay inside the card; nesting is never a project-level tier.
 
