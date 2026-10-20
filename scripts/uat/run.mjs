@@ -36,6 +36,9 @@ const suiteFiles =
         .sort()
         .map((name) => `${repo}/tests/manual/${name}`);
 
+/** The hover card's authored width (mirrors CARD_W in views/HoverCard.tsx). */
+const CARD_W = 300;
+
 if (suiteFiles.length === 0) {
   console.error("uat: no suites found under tests/manual/");
   process.exit(2);
@@ -144,7 +147,7 @@ async function hoverCard(page, evidenceDir, slug, selector) {
   await handle.hover();
   // The card fetches its snippet on hover, so give it a beat to land.
   await sleep(400);
-  const probe = await page.evaluate(() => {
+  const probe = await page.evaluate((cardW) => {
     const card = document.querySelector("[data-attn-hover-card]");
     if (card === null) return { present: false };
     const rect = card.getBoundingClientRect();
@@ -152,6 +155,11 @@ async function hoverCard(page, evidenceDir, slug, selector) {
     const panelRect = panel.getBoundingClientRect();
     const title = card.querySelector("[data-attn-hover-title]");
     const snippet = card.querySelector("[data-attn-hover-snippet]");
+    // The card is portalled onto the panel root, outside the camera-scaled
+    // world layer, so a camera zoom must not scale it. `offsetWidth` is the
+    // unscaled layout width and `getBoundingClientRect().width` is the painted
+    // width: any inherited scale would make them diverge.
+    const authored = card.offsetWidth;
     // Occlusion: the card is deliberately pointer-events:none (it must never
     // eat a hover), so elementFromPoint is blind to it by design and cannot be
     // used. Paint order is the real question: does any other visible element
@@ -175,6 +183,8 @@ async function hoverCard(page, evidenceDir, slug, selector) {
       present: true,
       width: rect.width,
       height: rect.height,
+      authored,
+      centerX: cx,
       title: title?.textContent?.trim() ?? "",
       snippetState: snippet?.getAttribute("data-attn-hover-snippet") ?? "missing",
       snippetText: snippet?.textContent?.trim() ?? "",
@@ -185,8 +195,20 @@ async function hoverCard(page, evidenceDir, slug, selector) {
         rect.bottom <= panelRect.bottom + 1,
       blockerCount: blockers.length,
       blockers: blockers.slice(0, 3).map((el) => el.getAttribute("class") ?? el.tagName),
+      // The camera lives in a transform on the world layer. The card must have
+      // no transformed ancestor between itself and the panel root; otherwise
+      // a zoom would scale it and drag it off its dot. This is the assertion
+      // that the portal really escapes the camera.
+      transformedAncestors: (() => {
+        const found = [];
+        for (let el = card.parentElement; el !== null && el !== panel; el = el.parentElement) {
+          const t = getComputedStyle(el).transform;
+          if (t !== "none" && t !== "") found.push(el.className || el.tagName);
+        }
+        return found;
+      })(),
     };
-  });
+  }, CARD_W);
   const shot = `${evidenceDir}/${slug}.png`;
   await page.screenshot({ path: shot });
   if (!probe.present) {
@@ -202,6 +224,16 @@ async function hoverCard(page, evidenceDir, slug, selector) {
     { name: "full title present", ok: probe.title.length > 0, detail: probe.title },
     { name: "snippet resolved", ok: probe.snippetState !== "loading" && probe.snippetState !== "missing", detail: probe.snippetState },
     { name: "card inside panel", ok: probe.insidePanel },
+    {
+      name: "card escapes the camera",
+      ok: probe.transformedAncestors.length === 0,
+      detail: probe.transformedAncestors.length === 0 ? "no transformed ancestor" : probe.transformedAncestors.join(", "),
+    },
+    {
+      name: "card keeps its authored width",
+      ok: probe.authored > 0 && Math.abs(probe.width - probe.authored) < 1,
+      detail: `painted ${probe.width}px, laid out ${probe.authored}px`,
+    },
     { name: "card not occluded", ok: probe.blockerCount === 0, detail: probe.blockers.join(", ") },
   ];
   const pass = checks.every((c) => c.ok);

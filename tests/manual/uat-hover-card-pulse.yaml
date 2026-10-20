@@ -103,3 +103,33 @@ test_cases:
         action: pointerAway
         instruction: Move the pointer off the dot.
         expected: The card unmounts; no stale card is left floating.
+
+  - id: TC-05
+    title: The card does not follow the camera — zooming in leaves it the same size
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view.
+      - order: 3
+        action: click
+        params:
+          selector: '[data-attn-control="+"]'
+        instruction: Zoom in past the fitted view, so the world layer carries a real camera transform.
+        expected: The camera scale rises past 1.2.
+      - order: 4
+        action: hover
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_running"]'
+        instruction: Hover a dot while zoomed in.
+        expected: The card is still 300px wide with no transformed ancestor between it and the panel root, so the camera can neither scale nor move it.
