@@ -341,14 +341,14 @@ function drawLane(svg, x, y, w, lane, list, prepd, opts, source){
     // one mouth at the lane's top-left (fed by the project header); every
     // card's river fans out of it, colored by that card's provider
     const mouthX = x + LANE_PAD + 4, mouthY = bodyTop + 14;
-    mk('circle',{cx:mouthX, cy:mouthY, r:3, fill:'#4d6f95', opacity:0.8},g);
     const cards=[];
     positions.forEach(p=>{ collectCard(p.t, cardX, p.y, cardW, 0, mouthX, mouthY, cards, prepd, opts); });
-    // Z-order: grandchildren furthest back, each higher level more front-most.
-    // Pass 1 — rivers, deepest first (backmost). Pass 2 — cards, parent first
-    // (a contained child sits on top of its parent's rect).
-    [...cards].sort((a,b)=>b.depth-a.depth).forEach(c=>drawCardRiver(g, c, prepd));
+    // Z-order: cards first — parent-first, so a contained child sits atop its
+    // parent's rect — then ALL rivers in front of every card. Among rivers,
+    // deepest is furthest back and each higher level is more front-most.
     [...cards].sort((a,b)=>a.depth-b.depth).forEach(c=>drawCardRect(g, c, prepd));
+    mk('circle',{cx:mouthX, cy:mouthY, r:3, fill:'#4d6f95', opacity:0.8},g);
+    [...cards].sort((a,b)=>b.depth-a.depth).forEach(c=>drawCardRiver(g, c, prepd));
   } else {
     positions.forEach(p=>{ threadCard(g, cardX, p.y, cardW, p.t, prepd, opts, 0); });
   }
