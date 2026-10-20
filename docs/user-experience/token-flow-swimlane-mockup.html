@@ -259,53 +259,58 @@ function drawRiver(svg, x1, y1, x2, y2, w, color, rate, maxRate){
   if(rate>0) mk('path',{d:`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`, stroke:'#fff','stroke-width':Math.max(1,Math.min(2.2,w*0.22)), opacity:0.55,'stroke-dasharray':'0.5 11','stroke-linecap':'round', fill:'none'},svg);
 }
 
-/* a contained thread card: its incoming river comes from the SAME project-level
-   mouth as every other card (never inherited through ancestry); then its own
-   rectangle; then — when open — its children recursively, each also fed from
-   that same mouth. A card whose group is COLLAPSED shows the whole subtree's
-   flow; expanding it drops the card to its own flow (the set has split up).
-   Capped at MAX_DEPTH (grandchild). */
-function threadCard(svg, x, y, w, t, prepd, opts, depth, mouthX, mouthY){
-  depth = depth||0;
-  const by = y + 16;
+/* Gather a card and its contained descendants (parent first) with the geometry
+   each needs. A card whose group is COLLAPSED shows the whole subtree's flow;
+   expanding it drops the card to its own flow (the set has split up). Every
+   card's incoming river comes from the SAME project-level mouth as every other
+   card, never inherited through ancestry. Capped at MAX_DEPTH (grandchild). */
+function collectCard(t, x, y, w, depth, mouthX, mouthY, out, prepd, opts){
   const kids = allKids(t);
   const canOpen = depth<MAX_DEPTH && kids.length>0;
   const open = isOpen(t,opts) && canOpen;
   const openKids = open ? kids : [];
   const hasGroup = kids.length>0;
-  /* the flow this card shows: a collapsed group head carries its whole subtree;
-     an expanded head (or a leaf) carries only its own flow */
   const shownRate = (hasGroup && !open) ? subtreeRate(t) : t.rate;
-  if(mouthX!==undefined){
-    drawRiver(svg, mouthX, mouthY, x, by, bandW(shownRate, prepd.maxShownRate), pc(t.provider), shownRate, prepd.maxShownRate);
-  }
-  const lane=laneById(laneOf(t.status)), dc=laneOf(t.status)==='idle'?GREYS[3]:lane.color;
   const h = cardHeight(t, opts, depth);
-  RR(x,y,w,h,7,'#18222d',svg,{stroke: openKids.length ? '#33506e' : '#2b3d4e','stroke-opacity':0.9});
-  RR(x,y,3,h,1.5,pc(t.provider),svg,{opacity:0.9});
-  mk('circle',{cx:x+14,cy:y+16,r:3,fill:dc},svg);
-  T(x+22,y+19,CLIP(t.title,24-depth*3),{size:10,fill:'#dbe4ec',parent:svg});
-  const flow = subtreeFlow(t);
-  const barW=Math.max(2,(w-20)*(flow/prepd.maxFlow));
-  mk('rect',{x:x+10,y:y+31,width:barW,height:6,rx:3,fill:pc(t.provider),opacity:0.9},svg);
-  if(hasGroup){
-    T(x+22,y+47,(open?'own ':'Σ ')+NF(shownRate*60)+' tok/min · '+NF(flow)+' total',{size:8.5,fill:lane.color,parent:svg});
-  } else if(t.rate>0){
-    T(x+22,y+47,NF(t.rate*60)+' tok/min',{size:9,fill:lane.color,parent:svg});
-  } else {
-    T(x+22,y+47,NF(flow)+' tok',{size:9,fill:'#5f6b76',parent:svg});
-  }
-  if(canOpen){
-    RR(x+w-72,y+8,64,18,9,'#22303c',svg,{opacity:0.95});
-    T(x+w-40,y+21,(open?'▾ ':'▸ ')+kids.length+(depth? ' nested':' sub'),{size:9,anchor:'middle',fill:'#c4cfd9',parent:svg});
-  }
+  out.push({ t, x, y, w, h, depth, shownRate, hasGroup, open, canOpen, hasOpenKids: openKids.length>0, kidCount: kids.length, mouthX, mouthY });
   if(openKids.length){
     const kidX = x + INDENT;
     let cy = y + THREAD_H;
-    const cs = openKids.map(k=>{ cy += SUB_GAP; const p={ k, y:cy }; cy += cardHeight(k,opts,depth+1); return p; });
-    cs.forEach(c=>{ threadCard(svg, kidX, c.y, w-INDENT-8, c.k, prepd, opts, depth+1, mouthX, mouthY); });
+    for(const k of openKids){ cy += SUB_GAP; const ky = cy; cy += cardHeight(k, opts, depth+1); collectCard(k, kidX, ky, w-INDENT-8, depth+1, mouthX, mouthY, out, prepd, opts); }
   }
-  return h;
+}
+/* a card's incoming river (one band + bead ridge), from the shared mouth */
+function drawCardRiver(g, c, prepd){
+  if(c.mouthX===undefined) return;
+  drawRiver(g, c.mouthX, c.mouthY, c.x, c.y+16, bandW(c.shownRate, prepd.maxShownRate), pc(c.t.provider), c.shownRate, prepd.maxShownRate);
+}
+/* the card rectangle + contents */
+function drawCardRect(g, c, prepd){
+  const { t, x, y, w, h, depth, shownRate, hasGroup, open, canOpen, hasOpenKids, kidCount } = c;
+  const lane=laneById(laneOf(t.status)), dc=laneOf(t.status)==='idle'?GREYS[3]:lane.color;
+  RR(x,y,w,h,7,'#18222d',g,{stroke: hasOpenKids ? '#33506e' : '#2b3d4e','stroke-opacity':0.9});
+  RR(x,y,3,h,1.5,pc(t.provider),g,{opacity:0.9});
+  mk('circle',{cx:x+14,cy:y+16,r:3,fill:dc},g);
+  T(x+22,y+19,CLIP(t.title,24-depth*3),{size:10,fill:'#dbe4ec',parent:g});
+  const flow = subtreeFlow(t);
+  const barW=Math.max(2,(w-20)*(flow/prepd.maxFlow));
+  mk('rect',{x:x+10,y:y+31,width:barW,height:6,rx:3,fill:pc(t.provider),opacity:0.9},g);
+  if(hasGroup){
+    T(x+22,y+47,(open?'own ':'Σ ')+NF(shownRate*60)+' tok/min · '+NF(flow)+' total',{size:8.5,fill:lane.color,parent:g});
+  } else if(t.rate>0){
+    T(x+22,y+47,NF(t.rate*60)+' tok/min',{size:9,fill:lane.color,parent:g});
+  } else {
+    T(x+22,y+47,NF(flow)+' tok',{size:9,fill:'#5f6b76',parent:g});
+  }
+  if(canOpen){
+    RR(x+w-72,y+8,64,18,9,'#22303c',g,{opacity:0.95});
+    T(x+w-40,y+21,(open?'▾ ':'▸ ')+kidCount+(depth? ' nested':' sub'),{size:9,anchor:'middle',fill:'#c4cfd9',parent:g});
+  }
+}
+/* backward-compatible single call used by the non-working lanes (no rivers) */
+function threadCard(svg, x, y, w, t, prepd, opts, depth){
+  const out=[]; collectCard(t, x, y, w, depth||0, undefined, undefined, out, prepd, opts);
+  out.forEach(c=>drawCardRect(svg, c, prepd));
 }
 
 /* a lane (tiled tier) */
@@ -337,7 +342,13 @@ function drawLane(svg, x, y, w, lane, list, prepd, opts, source){
     // card's river fans out of it, colored by that card's provider
     const mouthX = x + LANE_PAD + 4, mouthY = bodyTop + 14;
     mk('circle',{cx:mouthX, cy:mouthY, r:3, fill:'#4d6f95', opacity:0.8},g);
-    positions.forEach(p=>{ threadCard(g, cardX, p.y, cardW, p.t, prepd, opts, 0, mouthX, mouthY); });
+    const cards=[];
+    positions.forEach(p=>{ collectCard(p.t, cardX, p.y, cardW, 0, mouthX, mouthY, cards, prepd, opts); });
+    // Z-order: grandchildren furthest back, each higher level more front-most.
+    // Pass 1 — rivers, deepest first (backmost). Pass 2 — cards, parent first
+    // (a contained child sits on top of its parent's rect).
+    [...cards].sort((a,b)=>b.depth-a.depth).forEach(c=>drawCardRiver(g, c, prepd));
+    [...cards].sort((a,b)=>a.depth-b.depth).forEach(c=>drawCardRect(g, c, prepd));
   } else {
     positions.forEach(p=>{ threadCard(g, cardX, p.y, cardW, p.t, prepd, opts, 0); });
   }
