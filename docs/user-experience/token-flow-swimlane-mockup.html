@@ -169,6 +169,8 @@ const COLLAPSED_H=94, EXP_HDR=80, ROW_GAP=24, LANE_GAP=16, LANE_PAD=11,
       THREAD_H=54, THREAD_GAP=10, SUB_GAP=8, INDENT=20, HDR_PAD=16;
 const WORLD_W = 1780;
 const LANE_H = 370;
+const MAX_DEPTH = 2;          // parent(0) → child(1) → grandchild(2); hard cap, no deeper
+const TRUNK_W = 46;           // px the working trunk's rivers span in the gutter
 
 const NS='http://www.w3.org/2000/svg';
 let UID=0;
@@ -183,10 +185,12 @@ function allKids(t){ return t.children||[]; }
 /* a whole subtree's consumption (own + every descendant) */
 function subtreeFlow(t){ return t.tot + allKids(t).reduce((s,c)=>s+subtreeFlow(c),0); }
 function isOpen(t, opts){ return !!(opts.open && opts.open.has(t.title)); }
-/* the height a card occupies: its header plus (when open) each child's block */
-function cardHeight(t, opts){
-  const kids = (isOpen(t,opts) && allKids(t).length) ? allKids(t) : [];
-  return THREAD_H + kids.reduce((s,k)=>s+SUB_GAP+cardHeight(k,opts), 0);
+/* the height a card occupies: its header plus (when open) each child's block.
+   Children only render above the grandchild cap (MAX_DEPTH). */
+function cardHeight(t, opts, depth){
+  depth = depth||0;
+  const kids = (isOpen(t,opts) && depth<MAX_DEPTH && allKids(t).length) ? allKids(t) : [];
+  return THREAD_H + kids.reduce((s,k)=>s+SUB_GAP+cardHeight(k,opts,depth+1), 0);
 }
 
 /* ============================== prep ============================== */
@@ -230,53 +234,59 @@ function drawSpine(svg, prepd, y0){
   return y;
 }
 
-/* provider → project line */
+/* provider → project river (same sankey treatment as the card rivers) */
 function flowLine(svg, x1, y1, x2, y2, color, width, rate, maxRate){
-  const mid=(x1+x2)/2;
-  const d=`M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
-  mk('path',{d,stroke:color,'stroke-width':Math.max(1.6,width),fill:'none',opacity:op(rate,maxRate),'stroke-linecap':'round'},svg);
-  if(rate>0) mk('path',{d,stroke:'#ffffff','stroke-width':Math.max(1,width*0.3),fill:'none',opacity:0.5,'stroke-dasharray':'0.5 11','stroke-linecap':'round'},svg);
+  drawRiver(svg, x1, y1, x2, y2, Math.max(2.4, width), color, rate, maxRate);
 }
 
-/* one branch, width = the branch's OWN rate (a parent's branch never carries
-   its children's flow) */
-function branch(svg, x1, y, x2, t, prepd){
-  const r = t.rate;
-  const bw = Math.max(1.6, rateW(r, prepd.maxThreadRate));
-  mk('path',{d:`M ${x1} ${y} L ${x2} ${y}`,stroke:pc(t.provider),'stroke-width':bw,opacity:op(r,prepd.maxThreadRate),'stroke-linecap':'round'},svg);
-  if(r>0) mk('path',{d:`M ${x1} ${y} L ${x2} ${y}`,stroke:'#fff','stroke-width':Math.max(1,bw*0.3),opacity:0.6,'stroke-dasharray':'0.5 10','stroke-linecap':'round'},svg);
+/* a card's own river thickness (px), from its live rate */
+function bandW(rate, maxRate){ return rate<=0 ? 2.6 : 2.6 + 13*Math.sqrt(Math.max(0,rate)/maxRate); }
+/* a filled sankey river: a band of thickness w leaving a mouth at (x1,y1) and
+   landing at (x2,y2); the white beads ride its centerline. */
+function riverPath(x1,y1,w,x2,y2){
+  const mx=(x1+x2)/2;
+  const a1=y1-w/2, b1=y1+w/2, a2=y2-w/2, b2=y2+w/2;
+  return `M ${x1} ${a1} C ${mx} ${a1}, ${mx} ${a2}, ${x2} ${a2}`+
+         ` L ${x2} ${b2} C ${mx} ${b2}, ${mx} ${b1}, ${x1} ${b1} Z`;
+}
+function drawRiver(svg, x1, y1, x2, y2, w, color, rate, maxRate){
+  const mx=(x1+x2)/2;
+  mk('path',{d:riverPath(x1,y1,w,x2,y2), fill:color, opacity:0.32+0.5*op(rate,maxRate), stroke:'none'},svg);
+  mk('path',{d:`M ${x1} ${y1-w/2} C ${mx} ${y1-w/2}, ${mx} ${y2-w/2}, ${x2} ${y2-w/2}`, stroke:'#ffffff','stroke-width':0.9, opacity:0.22, fill:'none'},svg);
+  if(rate>0) mk('path',{d:`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`, stroke:'#fff','stroke-width':Math.max(1,Math.min(2.2,w*0.22)), opacity:0.55,'stroke-dasharray':'0.5 11','stroke-linecap':'round'},svg);
 }
 
-/* the recursive left-tree: a branch into each card (own flow), plus — when a
-   card is open — a sub-trunk inside it that splits to each child. */
-function drawTree(svg, fromX, cardX, cardY, t, cardW, prepd, opts){
-  const branchY = cardY + 16;
-  branch(svg, fromX, branchY, cardX, t, prepd);
-  if(!(isOpen(t,opts) && allKids(t).length)) return;
+/* the recursive left-tree as sankey rivers: a colored river into each card
+   (own flow), plus — when a card is open — a thin elbow inside it that drops
+   to each child's colored river. Capped at MAX_DEPTH (grandchild). */
+function drawTree(svg, mouthX, mouthY, cardX, t, cardY, cardW, prepd, opts, depth){
+  depth = depth||0;
+  const by = cardY + 16;
+  drawRiver(svg, mouthX, mouthY, cardX, by, bandW(t.rate, prepd.maxThreadRate), pc(t.provider), t.rate, prepd.maxThreadRate);
+  if(!(isOpen(t,opts) && depth<MAX_DEPTH && allKids(t).length)) return;
   const kids = allKids(t);
-  const subX = cardX + 9, kidX = cardX + INDENT;
+  const innerX = cardX + 12, kidX = cardX + INDENT;
   let cy = cardY + THREAD_H;
-  const cps = kids.map(k=>{ cy += SUB_GAP; const p={ k, y:cy, by:cy+16 }; cy += cardHeight(k,opts); return p; });
-  const trunkRate = kids.reduce((s,k)=>s+k.rate,0);
-  const trunkW = Math.max(2, rateW(trunkRate, prepd.maxThreadRate));
-  mk('path',{d:`M ${cardX} ${branchY} L ${subX} ${branchY} L ${subX} ${cps[cps.length-1].by}`,
-    stroke:'#4d6f95','stroke-width':trunkW,fill:'none',opacity:0.5,'stroke-linecap':'round'},svg);
-  cps.forEach(cp=>{ drawTree(svg, subX, kidX, cp.y, cp.k, cardW-INDENT-8, prepd, opts); });
+  const cs = kids.map(k=>{ cy += SUB_GAP; const p={ k, y:cy }; cy += cardHeight(k,opts,depth+1); return p; });
+  const yBot = cs[cs.length-1].y + 16;
+  // the elbow inside the parent: from its own entry across, then down to the last child
+  mk('path',{d:`M ${cardX} ${by} L ${innerX} ${by} L ${innerX} ${yBot}`, stroke:'#4d6f95','stroke-width':2.4, fill:'none', opacity:0.5,'stroke-linecap':'round'},svg);
+  cs.forEach(c=>{ const my=c.y+16; drawTree(svg, innerX, my, kidX, c.k, c.y, cardW-INDENT-8, prepd, opts, depth+1); });
 }
 
 /* a contained thread card. Its children (when open) are drawn INSIDE its own
-   rectangle, indented; the recursion continues to grandchildren. The bar shows
-   the subtree total; the incoming branch (drawn by drawTree) shows own flow. */
+   rectangle, indented, capped at MAX_DEPTH. The bar shows the subtree total;
+   the incoming river (drawn by drawTree) shows own flow. */
 function threadCard(svg, x, y, w, t, prepd, opts, depth){
   depth = depth||0;
   const lane=laneById(laneOf(t.status)), dc=laneOf(t.status)==='idle'?GREYS[3]:lane.color;
-  const openKids = (isOpen(t,opts) && allKids(t).length) ? allKids(t) : [];
-  const h = cardHeight(t, opts);
+  const canOpen = depth<MAX_DEPTH && allKids(t).length;
+  const openKids = (isOpen(t,opts) && canOpen) ? allKids(t) : [];
+  const h = cardHeight(t, opts, depth);
   RR(x,y,w,h,7,'#18222d',svg,{stroke: openKids.length ? '#33506e' : '#2b3d4e','stroke-opacity':0.9});
   RR(x,y,3,h,1.5,pc(t.provider),svg,{opacity:0.9});
   mk('circle',{cx:x+14,cy:y+16,r:3,fill:dc},svg);
-  T(x+22,y+19,CLIP(t.title,24-depth*2),{size:10,fill:'#dbe4ec',parent:svg});
-  // the card's TOTAL = own + descendants (only when children are shown)
+  T(x+22,y+19,CLIP(t.title,24-depth*3),{size:10,fill:'#dbe4ec',parent:svg});
   const flow = openKids.length ? subtreeFlow(t) : t.tot;
   const barW=Math.max(2,(w-20)*(flow/prepd.maxFlow));
   mk('rect',{x:x+10,y:y+31,width:barW,height:6,rx:3,fill:pc(t.provider),opacity:0.9},svg);
@@ -287,14 +297,13 @@ function threadCard(svg, x, y, w, t, prepd, opts, depth){
   } else {
     T(x+22,y+47,NF(flow)+' tok',{size:9,fill:'#5f6b76',parent:svg});
   }
-  if(allKids(t).length){
+  if(canOpen){
     const open = isOpen(t,opts);
     RR(x+w-72,y+8,64,18,9,'#22303c',svg,{opacity:0.95});
     T(x+w-40,y+21,(open?'▾ ':'▸ ')+allKids(t).length+(depth? ' nested':' sub'),{size:9,anchor:'middle',fill:'#c4cfd9',parent:svg});
   }
-  // children inside, indented — recursion continues
   let cy = y + THREAD_H;
-  openKids.forEach(k=>{ cy += SUB_GAP; threadCard(svg, x+INDENT, cy, w-INDENT-8, k, prepd, opts, depth+1); cy += cardHeight(k,opts); });
+  openKids.forEach(k=>{ cy += SUB_GAP; threadCard(svg, x+INDENT, cy, w-INDENT-8, k, prepd, opts, depth+1); cy += cardHeight(k,opts,depth+1); });
   return h;
 }
 
@@ -311,21 +320,21 @@ function drawLane(svg, x, y, w, lane, list, prepd, opts, source){
   const bodyTop=y+28, visibleH=LANE_H-38;
 
   const positions=[]; let cy=bodyTop+LANE_PAD;
-  sorted.forEach(t=>{ const h=cardHeight(t,opts); positions.push({ t, y:cy, h }); cy+=h+THREAD_GAP; });
+  sorted.forEach(t=>{ const h=cardHeight(t,opts,0); positions.push({ t, y:cy, h }); cy+=h+THREAD_GAP; });
   const contentH = cy - bodyTop;
   const overflow = contentH > visibleH;
   const clipId='clip-'+(++UID);
   const cg=mk('clipPath',{id:clipId},svg); mk('rect',{x:x+1,y:bodyTop,width:w-2,height:visibleH},cg);
 
   // the left-tree lives in the Working lane (the flow story); other lanes stack.
-  const GW = lane.id==='working' ? 30 : 0;
+  const GW = lane.id==='working' ? TRUNK_W + 10 : 0;
   const cardX = x + LANE_PAD + GW, cardW = w - 2*LANE_PAD - GW;
   if(lane.id==='working'){
-    const gutterX = source.x + 14;
-    const last = positions[positions.length-1];
-    mk('path',{d:`M ${source.x} ${source.y} C ${source.x} ${source.y+18}, ${gutterX} ${source.y+18}, ${gutterX} ${source.y+34} L ${gutterX} ${last? last.y+16 : source.y+34}`,
-      stroke:'#4d6f95','stroke-width':3.4,fill:'none',opacity:0.6,'stroke-linecap':'round'},svg);
-    positions.forEach(p=>{ drawTree(svg, gutterX, cardX, p.y, p.t, cardW, prepd, opts); });
+    // one mouth at the lane's top-left (fed by the project header); every
+    // card's river fans out of it, colored by that card's provider
+    const mouthX = x + LANE_PAD + 4, mouthY = bodyTop + 14;
+    mk('circle',{cx:mouthX, cy:mouthY, r:3, fill:'#4d6f95', opacity:0.8},svg);
+    positions.forEach(p=>{ drawTree(svg, mouthX, mouthY, cardX, p.t, p.y, cardW, prepd, opts, 0); });
   }
 
   const g=mk('g',{'clip-path':`url(#${clipId})`},svg);
