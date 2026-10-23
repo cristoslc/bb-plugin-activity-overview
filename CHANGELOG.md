@@ -23,6 +23,7 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 
 ### Fixed
 
+- **A running thread under a non-running parent now shows up in the Working lane.** Threads were only ever drawn inside their parent's card, so a running child of an idle or waiting thread never reached the Working lane: the row reported working threads while the lane looked empty and nothing animated. A child now stays nested only when it shares its parent's lane; otherwise it is promoted to its own lane's top level, and each lane's header count matches the cards it draws.
 - **A camera saved while the roster was a different shape no longer hides the fitted opening.** The store now stamps each camera with the world dimensions it was captured on, and a restore whose world no longer matches is discarded, so the Board opens at the treemap's size again after the world changes.
 - **The Board no longer opens off-centre on a first load.** The panel's first world was its pre-measurement placeholder, so the opening fit was computed before the panel was measured and the roster sat pushed to one side until a tab switch; the opening now waits for the measured panel and re-fits as the world settles, and a stale stored camera can no longer win over it.
 - **The Board no longer re-reports its world every render.** Its model rebuilds against a fresh clock on each pass, so equal-but-new bounds kept re-entering the page and re-rendering it; the report is now deduped by value, ending the update loop the zoomed-in camera work exposed.

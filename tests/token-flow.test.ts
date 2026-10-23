@@ -308,6 +308,81 @@ test("nesting: a contained child sits below its parent and stays inside its box"
   assert.ok(child.y + child.h >= grand.y + grand.h - 0.001, "the grandchild fits inside the child's block");
 });
 
+test("promotion: a running child under a non-working parent shows up in the Working lane", () => {
+  const threads = [
+    fThread({ id: "p", status: "done", usedTokens: 1000 }),
+    fThread({ id: "c", status: "running", usedTokens: 5000, rate: 30, parentThreadId: "p", createdAt: 2000 }),
+  ];
+  const l = swimlaneLayout(threads, { width: 1860, openProjects: new Set(["proj_1"]) });
+  const row = l.rows[0]!;
+  assert.equal(row.working, 1, "the collapsed-row count sees the running child");
+  const working = row.lanes.find((ln) => ln.id === "working")!;
+  assert.equal(working.count, 1, "the lane header count matches the row count");
+  const top = working.cards.filter((c) => c.depth === 0);
+  assert.equal(top.length, 1, "the running child is a top-level card in Working");
+  assert.equal(top[0]!.id, "c");
+  assert.equal(top[0]!.lane, "working");
+  assert.ok(
+    working.rivers.some((r) => r.cardId === "c" && r.rate > 0),
+    "and it draws a river that can animate",
+  );
+  // The non-running parent must not claim it: one thread is one card.
+  const parentCard = row.lanes.find((ln) => ln.id === "unread")!.cards.find((c) => c.id === "p")!;
+  assert.equal(parentCard.kidCount, 0, "the parent does not contain the promoted child");
+  assert.equal(parentCard.canOpen, false);
+});
+
+test("promotion: a same-lane child still stays nested inside its parent", () => {
+  const threads = [
+    fThread({ id: "p", status: "running", usedTokens: 1000, rate: 10 }),
+    fThread({ id: "c", status: "running", usedTokens: 5000, rate: 30, parentThreadId: "p", createdAt: 2000 }),
+  ];
+  const l = swimlaneLayout(threads, { width: 1860, openProjects: new Set(["proj_1"]) });
+  const working = l.rows[0]!.lanes.find((ln) => ln.id === "working")!;
+  assert.equal(working.cards.filter((c) => c.depth === 0).length, 1, "one top-level card");
+  assert.equal(working.cards[0]!.id, "p");
+  assert.equal(working.cards[0]!.kidCount, 1, "the child is contained, not promoted");
+  assert.equal(working.cards[0]!.flow, 6000, "the parent's total covers its contained child");
+  // Open the parent: the child is drawn nested, at depth 1, with its own river.
+  const opened = swimlaneLayout(threads, {
+    width: 1860,
+    openProjects: new Set(["proj_1"]),
+    openThreads: new Set(["p"]),
+  });
+  const w2 = opened.rows[0]!.lanes.find((ln) => ln.id === "working")!;
+  assert.equal(w2.cards.find((c) => c.id === "c")!.depth, 1);
+  assert.equal(w2.rivers.filter((r) => r.cardId === "c").length, 1);
+});
+
+test("invariant: every running thread is drawn in the Working lane, each with a river", () => {
+  // The real-world shape that broke it: a workstation orchestrator that is
+  // waiting on the operator, with several running threads beneath it.
+  const threads = [
+    fThread({ id: "orchestrator", status: "waiting", usedTokens: 900 }),
+    fThread({ id: "w1", status: "running", usedTokens: 4000, rate: 50, parentThreadId: "orchestrator", createdAt: 1 }),
+    fThread({ id: "w2", status: "running", usedTokens: 3000, rate: 40, parentThreadId: "orchestrator", createdAt: 2 }),
+    fThread({ id: "w3", status: "running", usedTokens: 2000, rate: 30, parentThreadId: "w1", createdAt: 3 }),
+    fThread({ id: "idle1", status: "idle", usedTokens: 100 }),
+  ];
+  const l = swimlaneLayout(threads, {
+    width: 1860,
+    openProjects: new Set(["proj_1"]),
+    openThreads: new Set(["orchestrator", "w1"]),
+  });
+  const row = l.rows[0]!;
+  const working = row.lanes.find((ln) => ln.id === "working")!;
+  const drawn = new Set(working.cards.map((c) => c.id));
+  for (const id of ["w1", "w2", "w3"]) assert.ok(drawn.has(id), `${id} must be drawn in Working`);
+  assert.equal(working.count, 3, "the lane reports three threads");
+  assert.equal(row.working, 3, "the row agrees with the lane — no phantom count");
+  const riveted = working.rivers.filter((r) => drawn.has(r.cardId) && r.rate > 0);
+  assert.equal(riveted.length, 3, "each running thread has an animating river");
+  // The waiting orchestrator holds nothing: its children were promoted.
+  const orchestrator = row.lanes.find((ln) => ln.id === "needs-you")!.cards.find((c) => c.id === "orchestrator")!;
+  assert.equal(orchestrator.kidCount, 0);
+  assert.equal(orchestrator.shownRate, 0, "and it carries no subtree rate");
+});
+
 test("lane order: the highest-consuming thread leads its lane", () => {
   const l = swimlaneLayout(roster(), { width: 1860, openProjects: new Set(["pa"]) });
   const working = l.rows.find((r) => r.id === "pa")!.lanes.find((ln) => ln.id === "working")!;

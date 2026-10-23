@@ -29,6 +29,10 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
+    "text": "**A running thread under a non-running parent now shows up in the Working lane.** Threads were only ever drawn inside their parent's card, so a running child of an idle or waiting thread never reached the Working lane: the row reported working threads while the lane looked empty and nothing animated. A child now stays nested only when it shares its parent's lane; otherwise it is promoted to its own lane's top level, and each lane's header count matches the cards it draws.",
+    "children": []
+  },
+  {
     "text": "**A camera saved while the roster was a different shape no longer hides the fitted opening.** The store now stamps each camera with the world dimensions it was captured on, and a restore whose world no longer matches is discarded, so the Board opens at the treemap's size again after the world changes.",
     "children": []
   },

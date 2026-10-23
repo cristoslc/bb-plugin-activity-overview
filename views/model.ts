@@ -1115,6 +1115,34 @@ export function subtreeRate(n: FlowNode): number {
   return Math.max(0, n.thread.rate ?? 0) + n.kids.reduce((s, k) => s + subtreeRate(k), 0);
 }
 
+/**
+ * Prune the full forest down to what a lane actually shows. A child is kept
+ * inside its parent's card only when it shares the parent's lane; a child in a
+ * DIFFERENT lane is promoted to a top-level card in its own lane. Without this,
+ * a running thread whose parent is not running is hidden inside the parent's
+ * card — invisible in the Working lane, so it draws no river and an
+ * out-of-control thread can hide behind a quiet parent.
+ *
+ * Returns every lane-root (a forest root, or a promoted child) carrying only
+ * its contained children, so subtree sums, card heights and card counts all
+ * describe exactly what is drawn inside the card.
+ */
+export function containedForest(roots: FlowNode[]): FlowNode[] {
+  const out: FlowNode[] = [];
+  const walk = (n: FlowNode): FlowNode => {
+    const lane = laneOf(n.thread.status);
+    const node: FlowNode = { thread: n.thread, kids: [] };
+    for (const k of n.kids) {
+      const kid = walk(k);
+      if (laneOf(k.thread.status) === lane) node.kids.push(kid);
+      else out.push(kid); // a different lane: promoted to its own lane's top
+    }
+    return node;
+  };
+  for (const r of roots) out.push(walk(r));
+  return out;
+}
+
 /** True when a node is open AND below the nesting cap AND actually has kids. */
 function openKidsOf(n: FlowNode, openThreads: ReadonlySet<string>, depth: number, maxDepth: number): FlowNode[] {
   if (depth >= maxDepth || n.kids.length === 0) return [];
@@ -1318,17 +1346,19 @@ export function riverPaintOrder(rivers: readonly SwimlaneRiver[]): SwimlaneRiver
   return [...rivers].sort((a, b) => b.depth - a.depth || a.cardY - b.cardY || a.id.localeCompare(b.id));
 }
 
-const totalFlowOf = (nodes: readonly FlowNode[]): number => nodes.reduce((s, n) => s + subtreeFlow(n), 0);
-const totalRateOf = (nodes: readonly FlowNode[]): number => nodes.reduce((s, n) => s + subtreeRate(n), 0);
 const flatNodes = (nodes: readonly FlowNode[]): FlowNode[] =>
   nodes.flatMap((n) => [n, ...flatNodes(n.kids)]);
 
 /**
  * The full swimlane layout for a roster (already window-filtered by the view).
- * Deterministic. Projects pile in one vertical stack, ordered by subtree flow
+ * Deterministic. Projects pile in one vertical stack, ordered by total tokens
  * (the hottest project first) so the out-of-control project is at the top;
  * inside an expanded row the four lanes tile across the width, each sorted by
- * subtree flow (highest-consuming at the top).
+ * subtree flow (highest-consuming at the top). A thread's card lives in the
+ * lane of its own status — a child that shares its parent's lane is nested
+ * inside the parent's card, and a child in another lane is promoted to its own
+ * lane's top level (`containedForest`), so a running thread is never hidden
+ * behind a non-running parent.
  */
 export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): SwimlaneLayout {
   const C = SWIMLANE;
@@ -1337,11 +1367,15 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   const openProjects = opts.openProjects ?? new Set<string>();
   const openThreads = opts.openThreads ?? new Set<string>();
   const roots = buildForest(threads);
+  // What the lanes actually draw: a child that shares its parent's lane stays
+  // nested inside the parent's card; a child in another lane is promoted to its
+  // own lane's top level.
+  const placed = containedForest(roots);
 
   let maxThreadRate = 0;
   let maxShownRate = 0;
   let maxFlow = 0;
-  for (const n of flatNodes(roots)) {
+  for (const n of flatNodes(placed)) {
     maxThreadRate = Math.max(maxThreadRate, Math.max(0, n.thread.rate ?? 0));
     maxShownRate = Math.max(maxShownRate, subtreeRate(n));
     maxFlow = Math.max(maxFlow, subtreeFlow(n));
@@ -1371,21 +1405,21 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   }
   const spineById = new Map(spine.map((b) => [b.id, b] as const));
 
-  // Tier 2 — group roots into projects, hottest first.
-  const projectMap = new Map<string, { id: string; name: string; roots: FlowNode[] }>();
-  for (const r of roots) {
-    const p = projectMap.get(r.thread.projectId);
+  // Tier 2 — one row per project, hottest first. A project owns the threads
+  // whose own projectId is its own, so a promoted child reports in its own
+  // project's row rather than its parent's.
+  const projectMap = new Map<string, { id: string; name: string; threads: FlowThread[] }>();
+  const tokensOfThread = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
+  for (const t of threads) {
+    const p = projectMap.get(t.projectId);
     if (p === undefined) {
-      projectMap.set(r.thread.projectId, {
-        id: r.thread.projectId,
-        name: r.thread.projectName,
-        roots: [r],
-      });
-    } else p.roots.push(r);
+      projectMap.set(t.projectId, { id: t.projectId, name: t.projectName, threads: [t] });
+    } else p.threads.push(t);
   }
   const projects = [...projectMap.values()].sort(
     (a, b) =>
-      totalFlowOf(b.roots) - totalFlowOf(a.roots) ||
+      b.threads.reduce((s, t) => s + tokensOfThread(t), 0) -
+        a.threads.reduce((s, t) => s + tokensOfThread(t), 0) ||
       a.name.localeCompare(b.name) ||
       a.id.localeCompare(b.id),
   );
@@ -1400,9 +1434,11 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   let y = C.TOP;
 
   for (const p of projects) {
-    const present = p.roots.some((r) => r.thread.projectId === p.id);
-    const nodes = flatNodes(p.roots);
-    const threadsAll = nodes.map((n) => n.thread);
+    // Every thread whose own projectId is this project's — promoted children
+    // included, so the counts match what the lanes draw.
+    const threadsAll = p.threads;
+    const nodes = placed.filter((n) => n.thread.projectId === p.id);
+    const allNodes = flatNodes(nodes);
     const total = threadsAll.reduce((s, t) => s + Math.max(0, t.usedTokens ?? 0), 0);
     const rate = threadsAll.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0);
     const working = threadsAll.filter((t) => laneOf(t.status) === "working").length;
@@ -1418,7 +1454,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
       total: provMap.get(id) ?? 0,
     }));
     // The burn sparkline follows the hottest thread in the project.
-    const busiest = [...nodes].sort(
+    const busiest = [...allNodes].sort(
       (a, b) =>
         Math.max(0, b.thread.rate ?? 0) - Math.max(0, a.thread.rate ?? 0) ||
         subtreeFlow(b) - subtreeFlow(a) ||
@@ -1426,7 +1462,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
     )[0];
     const spark = busiest !== undefined && busiest.thread.series.length > 0 ? busiest.thread.series : new Array<number>(FLOW_BUCKETS).fill(0);
 
-    const expanded = present && openProjects.has(p.id);
+    const expanded = openProjects.has(p.id);
     const h = expanded ? C.EXP_HDR + 12 + C.LANE_H + 16 : C.COLLAPSED_H;
     const row: SwimlaneRow = {
       id: p.id,
@@ -1451,8 +1487,8 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
       for (let i = 0; i < lanes.length; i++) {
         const def = lanes[i]!;
         const lx = rowX + C.HDR_PAD + i * (laneW + C.LANE_GAP);
-        const inLane = p.roots
-          .filter((r) => laneOf(r.thread.status) === def.id)
+        const inLane = nodes
+          .filter((n) => laneOf(n.thread.status) === def.id)
           .sort(
             (a, b) =>
               subtreeFlow(b) - subtreeFlow(a) ||
@@ -1540,7 +1576,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
           h: C.LANE_H,
           bodyTop,
           visibleH,
-          count: inLane.length,
+          count: threadsAll.filter((t) => laneOf(t.status) === def.id).length,
           contentH,
           overflow: contentH > visibleH,
           mouth,

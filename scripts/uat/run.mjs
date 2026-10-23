@@ -429,6 +429,30 @@ async function swimlaneCheck(page, check) {
       return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "rivers in front of cards, deepest first, all from one mouth" };
     }
 
+    if (which === "counts") {
+      // The operator's bug: a row reporting working threads while the Working
+      // lane drew none. A lane's header count may exceed the cards it draws
+      // (a collapsed same-lane parent hides its nested children), but never the
+      // other way round, the row's working count must equal the Working lane's
+      // header, and the Working lane must not be empty when the row says it has
+      // working threads.
+      const rowEl = document.querySelector('[data-attn-row][data-expanded="true"]');
+      if (rowEl === null) return { pass: false, checks, detail: "no expanded row" };
+      const laneEls = [...rowEl.querySelectorAll("[data-attn-lane]")];
+      for (const ln of laneEls) {
+        const want = Number(ln.getAttribute("data-count"));
+        const got = ln.querySelectorAll("[data-attn-card]").length;
+        add(`${ln.getAttribute("data-attn-lane")} never draws more than it counts`, got <= want, `header ${want}, drawn ${got}`);
+      }
+      const workingLane = laneEls.find((l) => l.getAttribute("data-attn-lane") === "working");
+      const rowWorking = Number(rowEl.getAttribute("data-working"));
+      const drawnWorking = workingLane === undefined ? -1 : workingLane.querySelectorAll("[data-attn-card]").length;
+      const laneWorking = workingLane === undefined ? -1 : Number(workingLane.getAttribute("data-count"));
+      add("the row's working count matches the Working lane header", rowWorking === laneWorking, `row ${rowWorking}, lane ${laneWorking}`);
+      add("the Working lane is not empty when the row reports working threads", rowWorking === 0 || drawnWorking > 0, `row ${rowWorking}, drawn ${drawnWorking}`);
+      return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "lane counts are consistent with the cards drawn" };
+    }
+
     if (which === "group-collapsed" || which === "group-expanded") {
       const heads = rects("[data-attn-card][data-has-group='true']");
       const want = which === "group-collapsed" ? "false" : "true";
@@ -489,6 +513,33 @@ async function wheelLane(page, delta) {
     },
   ];
   return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `${target.id} scrolled independently` };
+}
+
+/**
+ * Sample the Working lane's bead paths twice and require the dash offsets to
+ * move: the rivers must actually animate. A static flow view looks identical
+ * whether or not the live-activity beads work, so this is asserted directly.
+ */
+async function assertBeadsAnimate(page) {
+  const sample = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('[data-attn-lane="working"] path[stroke-dasharray]')].map((p) =>
+        Number.parseFloat(p.style.strokeDashoffset || "0"),
+      ),
+    );
+  const before = await sample();
+  await sleep(500);
+  const after = await sample();
+  const moved = before.filter((v, i) => v !== after[i]).length;
+  const checks = [
+    { name: "the Working lane carries bead paths", ok: before.length > 0, detail: `${before.length} bead paths` },
+    {
+      name: "the beads drift (the rivers animate)",
+      ok: before.length > 0 && moved > 0,
+      detail: `${moved}/${before.length} offsets changed (${before.slice(0, 3).join(",")} → ${after.slice(0, 3).join(",")})`,
+    },
+  ];
+  return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "beads are drifting" };
 }
 
 // ---------- execution ----------
@@ -652,6 +703,13 @@ async function runCase(page, evidenceDir, kase) {
         }
         case "swimlane": {
           const outcome = await swimlaneCheck(page, step.params?.check ?? "lanes");
+          entry.pass = outcome.pass;
+          entry.detail = outcome.detail;
+          entry.checks = outcome.checks;
+          break;
+        }
+        case "assertBeads": {
+          const outcome = await assertBeadsAnimate(page);
           entry.pass = outcome.pass;
           entry.detail = outcome.detail;
           entry.checks = outcome.checks;
