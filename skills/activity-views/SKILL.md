@@ -35,50 +35,53 @@ tabs: three aggregate tabs rendered live from the host's sidebar thread data, pl
 - **Strip tiles** — one small tile per project: name over a strip, one 4px
   unit per thread (4px + 1px gap), hottest statuses at the left edge. Tiles
   flow-wrap to fill the panel width.
-- **Token flow** — the amplitude wave (below), ported from
-  `docs/user-experience/sankey-amplitude-wave-mockup.html`.
+- **Token flow** — the swimlane flow-control stack (below), ported from
+  `docs/user-experience/token-flow-swimlane-mockup.html`.
 
-## Token flow (the amplitude wave)
+## Token flow (the swimlane stack)
 
-A provider → project → family sankey where one thread is one river that leaves
-its provider block, passes through its project's stacked bar, and lands on the
-thread's own card row in the family column. Painted with hand-rolled SVG (no
-libraries), colors from `views/theme.ts`; the layout math is pure
-(`tokenFlowLayout` and the river path helpers in views/model.ts).
+A flow-control display, not an aggregate: projects pile vertically, one wide
+landscape row each, and an expanded row tiles its status tiers across the width
+as four lanes — Working, Needs You, Unread, Idle, left to right. Painted with
+hand-rolled SVG (no libraries), colors from `views/theme.ts`; the layout math is
+pure (`swimlaneLayout`, `buildForest`, `subtreeFlow`/`subtreeRate`, `bandW`,
+`riverOpacity`, and the river path builders in views/model.ts) and the view
+paints it, owns the open sets, scrolls the lanes, and animates the beads.
 
-- **Candles = total spend.** Each card row carries its thread's total tokens
-  (context-window usage) as a left-edge bar, provider-colored, bottom-aligned
-  in the row; the row is sized tall enough to hold the whole candle, so a
-  project's candle run equals its middle bar's height exactly. Zero-spend rows
-  carry a full-slot grey no-data bar. The totals px-per-token is a design
-  constant (the biggest spender gets 200px), shrunk only when the rail would
-  otherwise overflow the artboard.
-- **Three encodings**, switched from the floating chrome:
-  - **A · ribbon wave** — each river's width is its thread's burn per
-    interval, all the way back to the provider face; the busiest bucket sets a
-    fixed interval scale (56px). This is the default.
-  - **B · trace lane** — totals bands plus a per-member share bar (each
-    member's share of its family's window total).
-  - **C · burn envelope** — totals bands with an inner per-interval crest at
-    its own mini-scale.
-- **Cards cluster by project** (alphabetical, matching the middle column, so
-  rivers never cross needlessly) with a large gutter between clusters and a
-  small gap between cards inside one; a faint project caption sits over each
-  cluster.
-- **Selection lighting**: clicking a family enlarges its cards with a ~250ms
-  ease-out tween and lights *only that family's members* — the selected
-  threads' rivers, candles, and project slices stay lit while everything else
-  dims; re-clicking the same family (or empty space) releases it. Hover
-  lifts a provider's, project's, or family's rivers.
-- **Beads** stream along running threads at their sampled burn rate; a quiet
-  thread is a flat stream with its tok/min label. A 15 min / last hour window,
-  pause, and a speed slider ride the floating chrome, and wheel zooms, drag
-  pans, double-click resets (viewBox camera, not MapCanvas).
-- **Data**: the `flow` RPC reads each thread's persisted `usedTokens` (the
-  totals) and resamples the plugin's local sample ring of positive context
-  growth into equal wall-clock buckets (the burn profile). The host persists
-  no lifetime consumption, so totals are context usage and the sampler tracks
-  only since the plugin started; unrecognized providers ride the "other" row
+The goal, quoted from the commissioning thread: *"to see what the current token
+flow distribution looks like, in order to spot out-of-control threads … primarily
+a flow control display, with secondary benefits of seeing threads the operator
+may need to act on."*
+
+- **Status lanes fold five statuses into four.** Working ← `running`; Needs You
+  ← `waiting`/`error`/`queued` (an error card carries a red ring); Unread ←
+  `done`/`interrupted`; Idle ← `idle` (its dot fades on the age grey ramp).
+  Every lane sorts its threads by whole-subtree flow, highest at the top, so the
+  runaway thread is the first row of the Working lane.
+- **Three tiers, two axes.** Tier 1 Provider is a vertical spine of colored
+  blocks on the left (`TIER 1 · providers`). Tier 2 Project is the vertical
+  stack of wide rows, hottest project first — never tiled. Tier 3 Thread tiles
+  *inside* an expanded row: four lanes across its width.
+- **Every card's river fans from the one project-level mouth** — the single dot
+  at the Working lane's top-left, fed by the project header. Rivers are never
+  inherited through ancestry; a filled provider-colored band, thickness = the
+  card's shown flow, white beads = live activity. Needs You / Unread / Idle carry
+  no rivers. Rivers paint in front of every card, deepest first.
+- **Collapsed shows the subtree sum; expanded drops to own flow.** A thread that
+  heads a group reports `Σ … tok/min` while collapsed (its whole subtree's flow,
+  so the set reads as one river); open, it drops to `own … tok/min` because the
+  descendants now report theirs. Its bar and total always show the subtree sum.
+- **Threads nest inside their parent's card**, recursing parent → child →
+  grandchild and hard-capping there (`MAX_DEPTH = 2`); a `▸ N sub` / `▾ N nested`
+  chip toggles it, and clicking a row header opens its lanes.
+- **Each lane scrolls independently** (its own rail) and is capped at the Working
+  lane's height, so a crowded lane overflows into its own scroll rather than
+  growing the row. Collapsed rows show tokens, live tok/min, thread/working
+  counts, the provider-mix strip, and the hottest thread's burn sparkline.
+- **Data**: the `flow` RPC (server.ts) reads each thread's persisted
+  `usedTokens` (the totals) and resamples the plugin's local sample ring of
+  positive context growth into equal wall-clock buckets (the burn profile) —
+  unchanged by this view. Unrecognized providers ride the "other" row
   (`providerOfModel` in views/model.ts — the server imports it).
 
 ## Map-style interface
@@ -123,10 +126,11 @@ the content block, no baked-in padding).
   #2e9e45, idle grey fading with age (#a8b3bf toward #2a3038).
 - Dominance is always read from the dot color pattern; no region is ever
   painted with a status override.
-- The Token flow tab is a structural sankey, not an aggregate: its ribbons
-  and card bars are line/area work (like the removed Activity flow's dashed
-  connectors were), and its region fills come from the `--attn-prov-*` tokens,
-  never from status.
+- The Token flow tab is a structural flow display, not an aggregate: its
+  rivers and card bars are line/area work (like the removed Activity flow's
+  dashed connectors were), their fills come from the `--attn-prov-*` tokens,
+  and its neutral lane/row fills are never status-derived — status shows only
+  as dots and lane headers.
 - Hover any dot for a card with the full thread title, status, age, and the end
   of its conversation. The card portals into the panel root, so it never
   scales with the camera; a thread whose rate is not measurable yet keeps the
