@@ -442,7 +442,7 @@ function RowLayer({ row, nowMs, maxFlow, scroll, onToggleProject, onToggleThread
   const quiet = row.rate <= 0;
   const first = row.prov[0];
   return (
-    <g opacity={quiet ? 0.82 : 1} data-attn-row={row.id} data-expanded={row.expanded}>
+    <g opacity={quiet ? 0.82 : 1} data-attn-row={row.id} data-expanded={row.expanded} data-working={row.working}>
       {/* the row's own landscape rectangle */}
       <rect
         x={SWIMLANE.ROW_X}
@@ -590,7 +590,7 @@ function LaneLayer({ rowId, lane, maxFlow, nowMs, scroll, onToggleThread, beadRe
   const max = Math.max(0, lane.contentH - lane.visibleH);
   const clamped = Math.min(max, Math.max(0, scroll));
   return (
-    <g data-attn-lane={lane.id} data-attn-lane-row={rowId} data-overflow={lane.overflow}>
+    <g data-attn-lane={lane.id} data-attn-lane-row={rowId} data-overflow={lane.overflow} data-count={lane.count}>
       <defs>
         <clipPath id={clipId}>
           <rect x={lane.x + 1} y={lane.bodyTop} width={lane.w - 2} height={lane.visibleH} />

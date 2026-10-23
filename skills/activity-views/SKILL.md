@@ -71,9 +71,16 @@ may need to act on."*
   heads a group reports `Σ … tok/min` while collapsed (its whole subtree's flow,
   so the set reads as one river); open, it drops to `own … tok/min` because the
   descendants now report theirs. Its bar and total always show the subtree sum.
-- **Threads nest inside their parent's card**, recursing parent → child →
-  grandchild and hard-capping there (`MAX_DEPTH = 2`); a `▸ N sub` / `▾ N nested`
-  chip toggles it, and clicking a row header opens its lanes.
+- **Threads nest inside their parent's card only when they share its lane.**
+  A child in the same lane nests inside the parent's card (indented, recursing
+  parent → child → grandchild, hard-capped at the grandchild, `MAX_DEPTH = 2`,
+  toggled by the `▸ N sub` / `▾ N nested` chip); a child in a *different* lane
+  is **promoted to its own lane's top level** (`containedForest` in
+  views/model.ts). That promotion is what keeps the display honest: a running
+  thread under an idle or waiting parent would otherwise hide inside the
+  parent's card, leaving the Working lane empty of the very threads the view
+  exists to surface. A lane's header count is therefore always the number of
+  cards it draws, and clicking a row header opens its lanes.
 - **Each lane scrolls independently** (its own rail) and is capped at the Working
   lane's height, so a crowded lane overflows into its own scroll rather than
   growing the row. Collapsed rows show tokens, live tok/min, thread/working

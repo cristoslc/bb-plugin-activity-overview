@@ -89,6 +89,11 @@ test_cases:
         instruction: Read the DOM order and geometry of the Working lane's cards and rivers.
         expected: Every river paints after every card (in front), deepest first, and every river's band leaves the same single mouth; the other lanes carry no rivers.
       - order: 4
+        action: assertBeads
+        params: {}
+        instruction: Sample the Working lane's bead paths' stroke offsets twice.
+        expected: The beads drift — the rivers animate, so live activity is visible without re-rendering.
+      - order: 5
         action: profile
         params: {}
         instruction: Capture the rivers.
@@ -196,3 +201,34 @@ test_cases:
         params: { selector: '[data-attn-lane]', equals: 8 }
         instruction: Count the lanes with two projects open.
         expected: Eight lanes — four per expanded project.
+
+  - id: TC-07
+    title: A running child under a waiting parent surfaces in the Working lane, not nested inside the parent
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-card="thr_supervisor_child"]' }
+        instruction: Wait for the running child of the waiting supervisor.
+        expected: The running child is drawn at all.
+      - order: 3
+        action: assertCount
+        params: { selector: '[data-attn-lane="working"] [data-attn-card="thr_supervisor_child"]', equals: 1 }
+        instruction: Look for the running child in the Working lane.
+        expected: The running child is a top-level card in the Working lane, so its river animates.
+      - order: 4
+        action: assertCount
+        params: { selector: '[data-attn-lane="needs-you"] [data-attn-card="thr_supervisor_child"]', equals: 0 }
+        instruction: Confirm it is not drawn inside the waiting parent's card.
+        expected: Zero — one thread is one card, in its own lane.
+      - order: 5
+        action: swimlane
+        params: { check: counts }
+        instruction: Compare every lane's header count with the cards it draws.
+        expected: Each lane's count equals its drawn cards, and the row's working count equals the Working lane's cards — no phantom count, no empty lane.

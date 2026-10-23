@@ -196,6 +196,12 @@ export const SIM_FLOW = {
     flowThread({ id: "thr_error", title: "Fix flaky importer test", status: "error", usedTokens: 31_500, provider: "google", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
     flowThread({ id: "thr_done", title: "treemap label layer", status: "done", usedTokens: 12_400, rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
     flowThread({ id: "thr_idle", title: "legend chips", status: "idle", usedTokens: 3_100, provider: "openai", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    // A waiting supervisor whose running child must surface in the Working lane
+    // rather than hiding nested inside the parent's card — the real-world shape
+    // (an orchestrator waiting on the operator, with running threads beneath it)
+    // that first broke the view.
+    flowThread({ id: "thr_supervisor", title: "Workstation orchestrator", status: "waiting", usedTokens: 20_000, provider: "anthropic", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    flowThread({ id: "thr_supervisor_child", title: "Sashay: agents charter readability", status: "running", usedTokens: 9_000, rate: 120, parentThreadId: "thr_supervisor", provider: "openai" }),
     // Beta infra — stays collapsed by default.
     flowThread({ id: "thr_running_slow", projectId: "proj_beta", projectName: "Beta infra", title: "Audit the migration notes", usedTokens: 38_200, rate: 60, provider: "openai" }),
     flowThread({ id: "thr_wait", projectId: "proj_beta", projectName: "Beta infra", title: "card tween", status: "waiting", usedTokens: 9_600, provider: "anthropic", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
