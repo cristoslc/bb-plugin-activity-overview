@@ -62,11 +62,15 @@ may need to act on."*
   blocks on the left (`TIER 1 · providers`). Tier 2 Project is the vertical
   stack of wide rows, hottest project first — never tiled. Tier 3 Thread tiles
   *inside* an expanded row: four lanes across its width.
-- **Every card's river fans from the one project-level mouth** — the single dot
-  at the Working lane's top-left, fed by the project header. Rivers are never
-  inherited through ancestry; a filled provider-colored band, thickness = the
-  card's shown flow, white beads = live activity. Needs You / Unread / Idle carry
-  no rivers. Rivers paint in front of every card, deepest first.
+- **A flow path is two rivers, and both are drawn the same way.** The provider
+  spine feeds each project row with a filled provider-colored band in the gutter
+  between spine and row, sized by that provider's flow in that project; then the
+  card's own river fans from the one project-level mouth — the single dot at the
+  Working lane's top-left, fed by the project header. Both segments are
+  translucent bands with white beads for live activity, and rivers are never
+  inherited through ancestry: every card draws from the one mouth. Needs You /
+  Unread / Idle carry no rivers; rivers paint in front of every card, deepest
+  first.
 - **Collapsed shows the subtree sum; expanded drops to own flow.** A thread that
   heads a group reports `Σ … tok/min` while collapsed (its whole subtree's flow,
   so the set reads as one river); open, it drops to `own … tok/min` because the

@@ -453,6 +453,45 @@ async function swimlaneCheck(page, check) {
       return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "lane counts are consistent with the cards drawn" };
     }
 
+    if (which === "links") {
+      // Provider → project is a river like any other: a filled band sized by
+      // the flow, translucent, with a bead ridge when the segment is live.
+      const links = rects("[data-attn-link]");
+      add("provider→project rivers exist", links.length > 0, `${links.length} links`);
+      if (links.length === 0) return { pass: false, checks, detail: "no provider→project rivers" };
+      const widths = links.map((el) => Number(el.getAttribute("data-w")));
+      add(
+        "the widest provider→project river is a band, not a hairline",
+        Math.max(...widths) > 10,
+        `widths ${widths.map((w) => w.toFixed(1)).join(",")}`,
+      );
+      add(
+        "every provider→project river is a filled band",
+        links.every((el) => {
+          const fill = el.querySelector("path")?.getAttribute("fill");
+          return fill !== null && fill !== "none";
+        }),
+        "band fill present",
+      );
+      const live = links.filter((el) => Number(el.getAttribute("data-rate")) > 0);
+      const quiet = links.filter((el) => Number(el.getAttribute("data-rate")) <= 0);
+      add(
+        "live provider→project rivers carry a bead ridge",
+        live.length > 0 && live.every((el) => el.querySelector("path[stroke-dasharray]") !== null),
+        `${live.length} live, ${quiet.length} quiet`,
+      );
+      add(
+        "quiet provider→project rivers stay bead-free",
+        quiet.every((el) => el.querySelector("path[stroke-dasharray]") === null),
+        `${quiet.length} quiet links`,
+      );
+      return {
+        pass: checks.every((c) => c.ok),
+        checks,
+        detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "provider→project rivers are bands with beads when live",
+      };
+    }
+
     if (which === "group-collapsed" || which === "group-expanded") {
       const heads = rects("[data-attn-card][data-has-group='true']");
       const want = which === "group-collapsed" ? "false" : "true";
@@ -516,30 +555,38 @@ async function wheelLane(page, delta) {
 }
 
 /**
- * Sample the Working lane's bead paths twice and require the dash offsets to
- * move: the rivers must actually animate. A static flow view looks identical
- * whether or not the live-activity beads work, so this is asserted directly.
+ * Sample one segment's bead paths twice and require the dash offsets to move:
+ * the rivers must actually animate. `segment` picks which half of the path to
+ * watch — "links" is provider→project, anything else is project→card. A static
+ * flow view looks identical whether or not the live-activity beads work, so
+ * each segment is asserted directly.
  */
-async function assertBeadsAnimate(page) {
+async function assertBeadsAnimate(page, segment) {
+  const isLinks = segment === "links";
+  const selector = isLinks ? "[data-attn-link] path[stroke-dasharray]" : '[data-attn-lane="working"] path[stroke-dasharray]';
+  const label = isLinks ? "provider→project" : "project→card";
   const sample = () =>
-    page.evaluate(() =>
-      [...document.querySelectorAll('[data-attn-lane="working"] path[stroke-dasharray]')].map((p) =>
-        Number.parseFloat(p.style.strokeDashoffset || "0"),
-      ),
+    page.evaluate(
+      (sel) => [...document.querySelectorAll(sel)].map((p) => Number.parseFloat(p.style.strokeDashoffset || "0")),
+      selector,
     );
   const before = await sample();
   await sleep(500);
   const after = await sample();
   const moved = before.filter((v, i) => v !== after[i]).length;
   const checks = [
-    { name: "the Working lane carries bead paths", ok: before.length > 0, detail: `${before.length} bead paths` },
+    { name: `the ${label} rivers carry bead paths`, ok: before.length > 0, detail: `${before.length} bead paths` },
     {
-      name: "the beads drift (the rivers animate)",
+      name: `the ${label} beads drift (the rivers animate)`,
       ok: before.length > 0 && moved > 0,
       detail: `${moved}/${before.length} offsets changed (${before.slice(0, 3).join(",")} → ${after.slice(0, 3).join(",")})`,
     },
   ];
-  return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "beads are drifting" };
+  return {
+    pass: checks.every((c) => c.ok),
+    checks,
+    detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `${label} beads are drifting`,
+  };
 }
 
 // ---------- execution ----------
@@ -709,7 +756,7 @@ async function runCase(page, evidenceDir, kase) {
           break;
         }
         case "assertBeads": {
-          const outcome = await assertBeadsAnimate(page);
+          const outcome = await assertBeadsAnimate(page, step.params?.segment);
           entry.pass = outcome.pass;
           entry.detail = outcome.detail;
           entry.checks = outcome.checks;

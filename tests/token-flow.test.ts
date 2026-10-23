@@ -12,7 +12,6 @@ import {
   cardHeight,
   cardPaintOrder,
   laneOf,
-  linkW,
   providerOfModel,
   resampleWindow,
   riverBeadPath,
@@ -160,10 +159,41 @@ test("cardHeight: grows with open children and hard-caps at the grandchild", () 
 test("rarity-independent: bandW and riverOpacity stay in the approved ranges", () => {
   assert.ok(bandW(0, 1000) >= 2 && bandW(0, 1000) <= 3);
   assert.ok(bandW(1000, 1000) > bandW(10, 1000), "a hotter river is a wider band");
-  assert.ok(linkW(0, 1000) >= 1 && linkW(1000, 1000) <= 9);
+  assert.ok(bandW(1000, 1000) > 10, "the busiest river is a band, not a hairline cap");
   for (const [rate, max] of [[0, 0], [0, 100], [50, 100], [100, 100], [5000, 100]] as const) {
     const o = riverOpacity(rate, max);
     assert.ok(o >= 0.3 - 1e-9 && o <= 0.8 + 1e-9, `opacity ${o} for rate=${rate}/${max}`);
+  }
+});
+
+test("links: the provider→project rivers are bands sized by each provider's flow", () => {
+  const threads = [
+    fThread({ id: "a1", projectId: "pa", projectName: "Alpha", status: "running", usedTokens: 100_000, rate: 500, provider: "anthropic" }),
+    fThread({ id: "a2", projectId: "pa", projectName: "Alpha", status: "running", usedTokens: 60_000, rate: 300, provider: "openai" }),
+    fThread({ id: "b1", projectId: "pb", projectName: "Beta", status: "idle", usedTokens: 400, rate: 0, provider: "anthropic" }),
+  ];
+  const l = swimlaneLayout(threads, { width: 1860 });
+  assert.equal(l.links.length, 3, "one river per provider per project");
+  const anthropicAlpha = l.links.find((k) => k.id === "link:pa:anthropic")!;
+  const openaiAlpha = l.links.find((k) => k.id === "link:pa:openai")!;
+  const beta = l.links.find((k) => k.id === "link:pb:anthropic")!;
+  // The band carries that provider's flow in that project, same rule as a card
+  // river — so the provider segment and the card segment read as one river.
+  assert.equal(anthropicAlpha.flow, 100_000);
+  assert.equal(openaiAlpha.flow, 60_000);
+  assert.equal(anthropicAlpha.w, bandW(100_000, 100_000));
+  assert.ok(anthropicAlpha.w > 10, `the busiest provider river is a band (${anthropicAlpha.w})`);
+  assert.ok(anthropicAlpha.w > openaiAlpha.w, "a bigger flow is a wider band");
+  assert.ok(anthropicAlpha.w > beta.w, "the hot project's river beats the quiet one");
+  // Both ends of the segment are the spine's edge and the row's left edge.
+  assert.equal(anthropicAlpha.x1, SWIMLANE.SPINE_X + SWIMLANE.SPINE_W);
+  assert.equal(anthropicAlpha.x2, SWIMLANE.ROW_X + 4);
+  // Live providers carry activity for the beads; a quiet one stays dim.
+  assert.ok(anthropicAlpha.rate > 0 && openaiAlpha.rate > 0);
+  assert.equal(beta.rate, 0);
+  assert.ok(beta.opacity < anthropicAlpha.opacity, "a quiet project's river is dimmer");
+  for (const k of l.links) {
+    assert.ok(k.opacity >= 0.3 - 1e-9 && k.opacity <= 0.8 + 1e-9, `link opacity ${k.opacity}`);
   }
 });
 

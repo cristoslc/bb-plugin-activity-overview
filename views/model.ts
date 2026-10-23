@@ -1173,12 +1173,6 @@ export function riverOpacity(rate: number, maxRate: number): number {
   return clampN(0.32 + 0.5 * base, 0.3, 0.8);
 }
 
-/** The provider -> row link thickness (px); the mockup's rateW, capped at 9. */
-export function linkW(rate: number, maxRate: number): number {
-  if (rate <= 0 || maxRate <= 0) return 1.6;
-  return Math.min(9, 2 + 15 * Math.sqrt(Math.min(1, rate / maxRate)));
-}
-
 /** A card's shown flow: subtree sum while collapsed, own flow once expanded. */
 export function shownRateOf(n: FlowNode, open: boolean): number {
   const own = Math.max(0, n.thread.rate ?? 0);
@@ -1238,7 +1232,7 @@ export type SwimlaneLane = {
   rivers: SwimlaneRiver[];
 };
 
-export type SwimlaneProviderMix = { id: ProviderId; label: string; color: string; total: number };
+export type SwimlaneProviderMix = { id: ProviderId; label: string; color: string; total: number; rate: number };
 
 export type SwimlaneRow = {
   id: string;
@@ -1274,15 +1268,18 @@ export type SwimlaneLink = {
   y1: number;
   x2: number;
   y2: number;
+  /** Band width (px) — sized by the flow, like a card's river. */
   w: number;
   opacity: number;
+  /** The provider's live rate in this project (beads drift when > 0). */
   rate: number;
+  /** The provider's tokens in this project (the band's size). */
+  flow: number;
 };
 
 export type SwimlaneLayout = {
   W: number;
   H: number;
-  maxThreadRate: number;
   maxShownRate: number;
   maxFlow: number;
   totalRate: number;
@@ -1372,11 +1369,9 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   // own lane's top level.
   const placed = containedForest(roots);
 
-  let maxThreadRate = 0;
   let maxShownRate = 0;
   let maxFlow = 0;
   for (const n of flatNodes(placed)) {
-    maxThreadRate = Math.max(maxThreadRate, Math.max(0, n.thread.rate ?? 0));
     maxShownRate = Math.max(maxShownRate, subtreeRate(n));
     maxFlow = Math.max(maxFlow, subtreeFlow(n));
   }
@@ -1424,6 +1419,33 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
       a.id.localeCompare(b.id),
   );
 
+  // Provider -> project maxima: the band scale for the provider segment, per
+  // provider within a project (so each provider's river is sized by its own
+  // contribution, not the project total).
+  let maxLinkFlow = 1;
+  let maxLinkRate = 0;
+  {
+    const byProject = new Map<string, Map<ProviderId, { total: number; rate: number }>>();
+    for (const t of threads) {
+      let m = byProject.get(t.projectId);
+      if (m === undefined) {
+        m = new Map();
+        byProject.set(t.projectId, m);
+      }
+      const id = providerOf(t);
+      const cur = m.get(id) ?? { total: 0, rate: 0 };
+      cur.total += Math.max(0, t.usedTokens ?? 0);
+      cur.rate += Math.max(0, t.rate ?? 0);
+      m.set(id, cur);
+    }
+    for (const m of byProject.values()) {
+      for (const v of m.values()) {
+        maxLinkFlow = Math.max(maxLinkFlow, v.total);
+        maxLinkRate = Math.max(maxLinkRate, v.rate);
+      }
+    }
+  }
+
   const rowX = C.ROW_X;
   const rowW = W - C.ROW_X - C.ROW_R;
   const lanes = SWIMLANES;
@@ -1442,17 +1464,18 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
     const total = threadsAll.reduce((s, t) => s + Math.max(0, t.usedTokens ?? 0), 0);
     const rate = threadsAll.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0);
     const working = threadsAll.filter((t) => laneOf(t.status) === "working").length;
-    const provMap = new Map<ProviderId, number>();
+    const provMap = new Map<ProviderId, { total: number; rate: number }>();
     for (const t of threadsAll) {
       const id = providerOf(t);
-      provMap.set(id, (provMap.get(id) ?? 0) + Math.max(0, t.usedTokens ?? 0));
+      const cur = provMap.get(id) ?? { total: 0, rate: 0 };
+      cur.total += Math.max(0, t.usedTokens ?? 0);
+      cur.rate += Math.max(0, t.rate ?? 0);
+      provMap.set(id, cur);
     }
-    const prov: SwimlaneProviderMix[] = PROVIDER_ORDER.filter((id) => (provMap.get(id) ?? 0) > 0).map((id) => ({
-      id,
-      label: PROVIDER_LABELS[id],
-      color: PROVIDER_TOKENS[id],
-      total: provMap.get(id) ?? 0,
-    }));
+    const prov: SwimlaneProviderMix[] = PROVIDER_ORDER.filter((id) => (provMap.get(id)?.total ?? 0) > 0).map((id) => {
+      const v = provMap.get(id)!;
+      return { id, label: PROVIDER_LABELS[id], color: PROVIDER_TOKENS[id], total: v.total, rate: v.rate };
+    });
     // The burn sparkline follows the hottest thread in the project.
     const busiest = [...allNodes].sort(
       (a, b) =>
@@ -1584,43 +1607,30 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
           rivers,
         });
       }
+    }
 
-      // Provider -> row links.
-      const cyMid = y + C.EXP_HDR / 2;
-      for (const mix of prov) {
-        const block = spineById.get(mix.id);
-        if (block === undefined) continue;
-        links.push({
-          id: `link:${p.id}:${mix.id}`,
-          provider: mix.id,
-          color: mix.color,
-          x1: C.SPINE_X + C.SPINE_W,
-          y1: block.y + block.h / 2,
-          x2: rowX + 4,
-          y2: cyMid,
-          w: linkW(rate, maxThreadRate),
-          opacity: riverOpacity(rate, maxThreadRate),
-          rate,
-        });
-      }
-    } else {
-      const cyMid = y + C.COLLAPSED_H / 2;
-      for (const mix of prov) {
-        const block = spineById.get(mix.id);
-        if (block === undefined) continue;
-        links.push({
-          id: `link:${p.id}:${mix.id}`,
-          provider: mix.id,
-          color: mix.color,
-          x1: C.SPINE_X + C.SPINE_W,
-          y1: block.y + block.h / 2,
-          x2: rowX + 4,
-          y2: cyMid,
-          w: linkW(rate, maxThreadRate),
-          opacity: riverOpacity(rate, maxThreadRate),
-          rate,
-        });
-      }
+    // Provider -> row rivers (Tier 1 -> Tier 2): the same river treatment the
+    // card segment gets — a filled, provider-colored band sized by that
+    // provider's flow in THIS project, translucent, with a bead ridge for live
+    // activity. Painting them as thin hairlines made the first half of the
+    // path read as chrome instead of flow.
+    const cyMid = y + (expanded ? C.EXP_HDR / 2 : C.COLLAPSED_H / 2);
+    for (const mix of prov) {
+      const block = spineById.get(mix.id);
+      if (block === undefined) continue;
+      links.push({
+        id: `link:${p.id}:${mix.id}`,
+        provider: mix.id,
+        color: mix.color,
+        x1: C.SPINE_X + C.SPINE_W,
+        y1: block.y + block.h / 2,
+        x2: rowX + 4,
+        y2: cyMid,
+        w: bandW(mix.total, maxLinkFlow),
+        opacity: riverOpacity(mix.rate, maxLinkRate),
+        rate: mix.rate,
+        flow: mix.total,
+      });
     }
 
     rows.push(row);
@@ -1631,7 +1641,6 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   return {
     W,
     H,
-    maxThreadRate,
     maxShownRate,
     maxFlow,
     totalRate: threads.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0),

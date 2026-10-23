@@ -232,3 +232,34 @@ test_cases:
         params: { check: counts }
         instruction: Compare every lane's header count with the cards it draws.
         expected: Each lane's count equals its drawn cards, and the row's working count equals the Working lane's cards — no phantom count, no empty lane.
+
+  - id: TC-08
+    title: The provider→project segment is a river too, with its own drifting beads
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-link]' }
+        instruction: Wait for the provider→project rivers.
+        expected: The spine feeds each project row with a river.
+      - order: 3
+        action: swimlane
+        params: { check: links }
+        instruction: Read the provider→project segments.
+        expected: Each is a filled provider-colored band sized by that provider's flow in the project (the widest well above a hairline), live ones carry a bead ridge, and quiet ones stay bead-free.
+      - order: 4
+        action: assertBeads
+        params: { segment: links }
+        instruction: Sample the provider→project bead offsets twice.
+        expected: Those beads drift, so the provider segment animates and not only the card segment.
+      - order: 5
+        action: profile
+        params: {}
+        instruction: Capture the full path.
+        expected: A screenshot showing provider→project and project→card reading as one river.
