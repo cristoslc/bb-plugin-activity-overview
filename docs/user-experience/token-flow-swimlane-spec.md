@@ -1,6 +1,6 @@
 ---
 title: Token flow — project stack + flow-river spec
-status: proposed
+status: implemented
 owner: thr_e92b7ef398
 mockup: docs/user-experience/token-flow-swimlane-mockup.html
 supersedes: token-flow-tiled-spec.md (declined)
@@ -8,8 +8,8 @@ supersedes: token-flow-tiled-spec.md (declined)
 
 # Token flow — project stack + flow-river spec
 
-> [!IMPORTANT] Proposal, not implemented.
-> Doc-only. `views/` and `server.ts` are untouched; `npm test` is 102 pass and `npx tsc --noEmit` is clean.
+> [!NOTE] Implemented.
+> Ported into the live plugin: `swimlaneLayout` and the river helpers in `views/model.ts`, painted by `views/TokenFlowView.tsx`. The `flow` RPC is unchanged. See `tests/token-flow.test.ts` and `tests/manual/uat-token-flow-swimlanes.yaml`.
 
 ## The goal (north star)
 
@@ -84,7 +84,7 @@ A thread with children shows a `▸ N sub` / `▾ N nested` chip. Opened, its ch
 
 ## 7. Open questions for the operator
 
-1. **Stack order:** order project rows by hotness (busiest at top) rather than alphabetically?
+1. **Stack order:** order project rows by hotness (busiest at top) rather than alphabetically? — *implemented as hotness: rows sort by subtree flow, so the out-of-control project leads the stack.*
 2. **Lane sort:** every lane sorts by consumption (proposed) — or should Needs You sort error-first/most-urgent?
 3. **Best-case confirm:** should an all-folded project with no live burn collapse to a single thin line instead of a full row?
 4. **Nesting depth cap:** hard cap at grandchild (operator's call; `MAX_DEPTH = 2`) — confirmed. Anything deeper would be shown collapsed at the grandchild.

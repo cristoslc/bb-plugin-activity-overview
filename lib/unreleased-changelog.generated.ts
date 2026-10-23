@@ -13,10 +13,11 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
-    "text": "**The Token flow tab returns, redrawn as an amplitude wave.** A provider → project → family sankey whose rivers are each thread's burn per interval (encoding A), with totals bands (B) and a burn crest (C) as alternates: every thread's card row carries its total-spend candle, project bars stack their members' tokens, and the `flow` RPC resamples each thread's sampled context growth into one-minute buckets so the wave moves as threads stream.",
+    "text": "**The Token flow tab is now a swimlane flow-control stack.** Projects pile vertically, one wide row each; expanding a row tiles its status tiers across the width (Working, Needs You, Unread, Idle, left to right, hottest threads first), so the runaway thread is always the top row of the Working lane, and every card's river fans out of that project's single mouth.",
     "children": [
-      "Three encodings via the floating chrome: A · ribbon wave (burn per interval all the way back to the provider), B · trace lane (totals with per-member share bars), C · burn envelope (totals band with an inner per-interval crest).",
-      "Clicking a family enlarges its cards with a tween (~250ms) and lights only that family's members; beads stream on running threads at their sampled rate; a 15 min / last hour window, pause, and speed controls ride the floating chrome."
+      "Threads nest inside their parent's card, recursing to a grandchild and stopping there; a collapsed parent's river carries its whole subtree's flow, marked `Σ … tok/min`, and drops to its own flow once expanded (its bar and total keep the subtree sum), so a set that disaggregates stops reading as one wide river.",
+      "Each lane scrolls on its own; a collapsed row shows tokens, live tok/min, thread/working counts, the provider-mix strip, and the hottest thread's burn sparkline; rivers paint in front of the cards, translucent, with white beads for live activity.",
+      "The `flow` RPC is unchanged — same totals, same sampled burn buckets, same live `FLOW_CHANGED` push."
     ]
   },
   {
