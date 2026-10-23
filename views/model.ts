@@ -870,6 +870,11 @@ export function placeRegionLabels(
 /** Buckets of burn history a thread series carries (the burn profile). */
 export const FLOW_BUCKETS = 20;
 
+/** The view's burn window: `.series` resamples the newest hour into
+ *  `FLOW_BUCKETS` equal wall-clock intervals. Single source of truth — the
+ *  server imports it for the flow RPC. */
+export const FLOW_WINDOW_MS = 3_600_000;
+
 /** A thread as the token flow view consumes it (from the plugin's flow RPC). */
 export type FlowThread = {
   id: string;
@@ -884,7 +889,11 @@ export type FlowThread = {
   usedTokens: number | null;
   modelContextWindow: number | null;
   model: string | null;
+  /** The model-provider family of `model` (anthropic/openai/…/other). */
   provider: string | null;
+  /** The thread's bb provider id — its ACP agent (e.g. `acp-opencode`,
+   *  `codex`, `claude-code`). The Tier-1 axis in provider mode. */
+  agentProvider: string | null;
   /** Sampled burn rate, tokens per second (null: no sample history yet). */
   rate: number | null;
   /** Σ positive context growth the sampler has seen since the plugin started. */
@@ -970,6 +979,311 @@ const providerOf = (t: FlowThread): ProviderId =>
     ? (t.provider as ProviderId)
     : providerOfModel(t.model);
 
+/** The model-provider family of a thread (the spine's dominant-family color). */
+export const providerFamilyOf = (t: FlowThread): ProviderId => providerOf(t);
+
+/* ======================= two-tier provider/model boxes ======================= */
+// The operator's rework of the Tier-1 spine (thr_h3id3kyfaf). Instead of one
+// flat block per provider family, the left tier is a stack of NESTED boxes:
+// the outer box (Tier 1) is one ACP provider — the thread's bb `providerId`,
+// e.g. `acp-opencode` — in "provider" mode, or one subscription (the model
+// string's `subscription/` prefix) in "subscription" mode; the inner boxes
+// (Tier 2) are the subscription+model pairs (provider mode) or the models
+// (subscription mode). Every box's HEIGHT encodes active token flow: taller =
+// more tokens per minute, summed over the newest `FLOW_INTERVALS` intervals of
+// the sampled window. The grouping is pure and deterministic; the view paints
+// it.
+
+/** Which axis the outer Tier-1 box groups by (the view-chrome toggle). */
+export type FlowMode = "provider" | "subscription";
+
+/** The operator's "last 10 intervals" of the sampled window. */
+export const FLOW_INTERVALS = 10;
+
+/** bb provider id -> the label the operator reads. Unknown ids fall through
+ *  verbatim, never invented. */
+export const AGENT_LABELS: Record<string, string> = {
+  "acp-opencode": "opencode",
+  "opencode-go": "opencode go",
+  "acp-omp": "omp",
+  "acp-gh-copilot": "Copilot",
+  "acp-github-copilot-cli": "Copilot",
+  codex: "Codex",
+  "claude-code": "Claude Code",
+  pi: "Pi",
+};
+
+/** The display label for a thread's ACP provider id. */
+export function agentLabel(id: string | null | undefined): string {
+  if (id === null || id === undefined || id.trim() === "") return "Unknown";
+  return AGENT_LABELS[id] ?? id;
+}
+
+/**
+ * Split a model string into its subscription and model parts. The model id
+ * carries its own `subscription/model` shape: `synthetic/hf:zai-org/GLM-5.3-Flash`
+ * -> subscription `synthetic`, model `hf:zai-org/GLM-5.3-Flash`; a bare id like
+ * `claude-sonnet-5.5` has no subscription. Blank/absent models yield
+ * `{ subscription: null, model: "unknown" }` — never an empty label.
+ */
+export function modelParts(model: string | null): { subscription: string | null; model: string } {
+  const raw = (model ?? "").trim();
+  if (raw === "") return { subscription: null, model: "unknown" };
+  const slash = raw.indexOf("/");
+  if (slash <= 0 || slash >= raw.length - 1) return { subscription: null, model: raw };
+  return { subscription: raw.slice(0, slash), model: raw.slice(slash + 1) };
+}
+
+/** The subscription a thread rides: the model string's `subscription/` prefix,
+ *  else null. */
+export function subscriptionOf(model: string | null): string | null {
+  return modelParts(model).subscription;
+}
+
+/**
+ * The Tier-1 key a thread groups under for a mode: its ACP provider (the bb
+ * `providerId`, "unknown" when absent) in provider mode, or its subscription in
+ * subscription mode. A model with no subscription falls back to the ACP
+ * provider's label — for the CLI providers whose bare model ids exist only on a
+ * subscription (Claude Code, Codex, Pi), the provider *is* the subscription, so
+ * the box reads honestly instead of inventing a "none" bucket.
+ */
+export function tierOuterKey(t: FlowThread, mode: FlowMode): string {
+  if (mode === "provider") return t.agentProvider ?? "unknown";
+  return subscriptionOf(t.model) ?? agentLabel(t.agentProvider);
+}
+
+/** The Tier-2 label a thread groups under for a mode: `subscription / model`
+ *  (provider mode) or the model id (subscription mode). */
+export function tierInnerLabel(model: string | null, mode: FlowMode): string {
+  const { subscription, model: m } = modelParts(model);
+  if (mode === "subscription" || subscription === null) return m;
+  return `${subscription} / ${m}`;
+}
+
+/**
+ * The active token flow of one thread, in tokens per minute, summed over the
+ * newest `intervals` of its `series` (the operator's "last 10 intervals"). Each
+ * interval spans `windowMs / buckets`; the sum is divided by that span in
+ * minutes, so a 20-bucket hour read over the last 10 intervals is `Σ / 30`
+ * tok/min. Negative entries cannot occur (the sampler records only positive
+ * growth) but are clamped to zero anyway. An empty series is a measured zero,
+ * not NaN.
+ */
+export function recentFlowTokMin(
+  series: readonly number[],
+  windowMs: number,
+  buckets: number,
+  intervals = FLOW_INTERVALS,
+): number {
+  if (series.length === 0 || buckets <= 0 || windowMs <= 0 || intervals <= 0) return 0;
+  const n = Math.min(intervals, series.length);
+  let sum = 0;
+  for (let i = series.length - n; i < series.length; i++) sum += Math.max(0, series[i] ?? 0);
+  const minutes = (n * (windowMs / buckets)) / 60_000;
+  return minutes > 0 ? sum / minutes : 0;
+}
+
+/** Geometry of the Tier-1 nested-box stack (px). */
+export const TIER_BOX = {
+  /** Artboard width of the Tier-1 column (the outer box's width). */
+  W: 196,
+  /** The outer box's header strip. */
+  HDR_H: 34,
+  /** The smallest a Tier-2 box may be drawn — a truncatable label still fits. */
+  MIN_H: 24,
+  /** The tallest a Tier-2 box is drawn, so one runaway model cannot push the
+   *  whole stack off the artboard. */
+  MAX_H: 128,
+  /** Gap between the Tier-2 boxes inside one outer box. */
+  GAP: 5,
+  /** Padding inside the outer box, on every side. */
+  PAD: 7,
+  /** Gap between the outer boxes (the stack's rhythm). */
+  VGAP: 14,
+} as const;
+
+/**
+ * Map an active flow onto a Tier-2 box height. Deterministic and monotone: a
+ * hotter box is always at least as tall (`sqrt`, so a 100× burn draws as a
+ * legible 10× height, not a 100× slab), a zero or unmeasured flow still draws
+ * at the floor, and the busiest box clamps at the ceiling. `maxFlow` is the
+ * roster's hottest Tier-2 box, so the tallest box fills the band.
+ */
+export function boxHeight(
+  flow: number,
+  maxFlow: number,
+  opts: { min?: number; max?: number } = {},
+): number {
+  if (!Number.isFinite(flow)) throw new RangeError(`boxHeight: flow must be finite, got ${flow}`);
+  const min = opts.min ?? TIER_BOX.MIN_H;
+  const max = opts.max ?? TIER_BOX.MAX_H;
+  const f = maxFlow > 0 ? Math.min(1, Math.max(0, flow) / maxFlow) : 0;
+  return min + (max - min) * Math.sqrt(f);
+}
+
+/** The dominant model-family token of a box's threads (ties resolve to the
+ *  earlier family in PROVIDER_ORDER, so the color is deterministic). */
+function dominantFamilyColor(members: readonly FlowThread[]): string {
+  const counts = new Map<ProviderId, number>();
+  for (const t of members) {
+    const id = providerOf(t);
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  let best: ProviderId = "other";
+  let bestN = -1;
+  for (const id of PROVIDER_ORDER) {
+    const n = counts.get(id) ?? 0;
+    if (n > bestN) {
+      bestN = n;
+      best = id;
+    }
+  }
+  return PROVIDER_TOKENS[best];
+}
+
+export type SwimlaneInnerBox = {
+  /** The Tier-2 key: `subscription / model` (provider mode) or the model. */
+  id: string;
+  label: string;
+  /** The dominant model-family token of this box's threads. */
+  color: string;
+  /** Absolute artboard geometry. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Active flow (tok/min over the last FLOW_INTERVALS intervals). */
+  flow: number;
+  /** Σ context tokens of the box's threads (the total, not the flow). */
+  total: number;
+  threads: number;
+};
+
+/**
+ * Build the Tier-1 nested-box stack for a roster. Deterministic: outer boxes
+ * sort by active flow (hottest first), then label, then key; the Tier-2 boxes
+ * inside each do the same. The outer box's height is its header plus its
+ * Tier-2 boxes (each height = `boxHeight` of that box's active flow) and their
+ * gaps, so both tiers read "taller = more tokens/min". Returns one block per
+ * present outer key, positioned down the left column.
+ */
+export function tierGroups(
+  threads: readonly FlowThread[],
+  mode: FlowMode,
+  opts: { windowMs?: number; buckets?: number; intervals?: number; top?: number } = {},
+): SwimlaneSpineBlock[] {
+  const windowMs = opts.windowMs ?? FLOW_WINDOW_MS;
+  const buckets = opts.buckets ?? FLOW_BUCKETS;
+  const intervals = opts.intervals ?? FLOW_INTERVALS;
+  const top = opts.top ?? SWIMLANE.SPINE_TOP;
+
+  const flowOf = (t: FlowThread) => recentFlowTokMin(t.series, windowMs, buckets, intervals);
+  const tokensOf = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
+
+  type Inner = {
+    id: string;
+    label: string;
+    flow: number;
+    total: number;
+    threads: number;
+    members: FlowThread[];
+  };
+  type Outer = {
+    key: string;
+    label: string;
+    flow: number;
+    total: number;
+    threads: number;
+    members: FlowThread[];
+    inner: Map<string, Inner>;
+  };
+
+  const outers = new Map<string, Outer>();
+  for (const t of threads) {
+    const key = tierOuterKey(t, mode);
+    let o = outers.get(key);
+    if (o === undefined) {
+      o = {
+        key,
+        label: mode === "provider" ? agentLabel(t.agentProvider) : key,
+        flow: 0,
+        total: 0,
+        threads: 0,
+        members: [],
+        inner: new Map(),
+      };
+      outers.set(key, o);
+    }
+    o.flow += flowOf(t);
+    o.total += tokensOf(t);
+    o.threads += 1;
+    o.members.push(t);
+    const innerId = tierInnerLabel(t.model, mode);
+    let inr = o.inner.get(innerId);
+    if (inr === undefined) {
+      inr = { id: innerId, label: innerId, flow: 0, total: 0, threads: 0, members: [] };
+      o.inner.set(innerId, inr);
+    }
+    inr.flow += flowOf(t);
+    inr.total += tokensOf(t);
+    inr.threads += 1;
+    inr.members.push(t);
+  }
+
+  const byFlow = (a: { flow: number; label: string; id: string }, b: { flow: number; label: string; id: string }): number =>
+    b.flow - a.flow || a.label.localeCompare(b.label) || a.id.localeCompare(b.id);
+
+  const maxInnerFlow = Math.max(
+    0,
+    ...[...outers.values()].flatMap((o) => [...o.inner.values()].map((i) => i.flow)),
+  );
+
+  const blocks: SwimlaneSpineBlock[] = [];
+  const outerW = TIER_BOX.W;
+  const innerW = outerW - 2 * TIER_BOX.PAD;
+  let y = top;
+  for (const o of [...outers.values()].sort((a, b) => b.flow - a.flow || a.label.localeCompare(b.label) || a.key.localeCompare(b.key))) {
+    const inners = [...o.inner.values()].sort(byFlow);
+    const bodyH =
+      inners.reduce((s, i) => s + boxHeight(i.flow, maxInnerFlow), 0) +
+      Math.max(0, inners.length - 1) * TIER_BOX.GAP;
+    const h = TIER_BOX.HDR_H + TIER_BOX.PAD * 2 + bodyH;
+    let iy = y + TIER_BOX.HDR_H + TIER_BOX.PAD;
+    const inner: SwimlaneInnerBox[] = inners.map((i) => {
+      const ih = boxHeight(i.flow, maxInnerFlow);
+      const box: SwimlaneInnerBox = {
+        id: i.id,
+        label: i.label,
+        color: dominantFamilyColor(i.members),
+        x: SWIMLANE.SPINE_X + TIER_BOX.PAD,
+        y: iy,
+        w: innerW,
+        h: ih,
+        flow: i.flow,
+        total: i.total,
+        threads: i.threads,
+      };
+      iy += ih + TIER_BOX.GAP;
+      return box;
+    });
+    blocks.push({
+      id: o.key,
+      label: o.label,
+      color: dominantFamilyColor(o.members),
+      y,
+      h,
+      total: o.total,
+      rate: o.members.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0),
+      flow: o.flow,
+      threads: o.threads,
+      inner,
+    });
+    y += h + TIER_BOX.VGAP;
+  }
+  return blocks;
+}
+
 /** Fold the shape statuses into the five token-flow states. */
 export type TokenFlowStatus = "running" | "waiting" | "done" | "error" | "idle";
 export function tokenFlowStatus(status: string): TokenFlowStatus {
@@ -1020,12 +1334,12 @@ export const SWIMLANE = {
   W: 1860,
   TOP: 60,
   BOTTOM: 30,
-  /** Provider spine (Tier 1): a vertical column of colored blocks. */
+  /** Tier-1 column: the nested provider/model boxes (TIER_BOX.W wide). */
   SPINE_X: 40,
-  SPINE_W: 104,
+  SPINE_W: TIER_BOX.W,
   SPINE_TOP: 90,
   /** Tier 2: the project stack. Rows span [ROW_X, W - ROW_R]. */
-  ROW_X: 200,
+  ROW_X: 40 + TIER_BOX.W + 56,
   ROW_R: 44,
   COLLAPSED_H: 94,
   EXP_HDR: 80,
@@ -1251,18 +1565,25 @@ export type SwimlaneRow = {
 };
 
 export type SwimlaneSpineBlock = {
-  id: ProviderId;
+  /** The Tier-1 group key: the ACP provider id, or the subscription. */
+  id: string;
   label: string;
   color: string;
   y: number;
   h: number;
   total: number;
   rate: number;
+  /** Active flow (tok/min over the last FLOW_INTERVALS intervals). */
+  flow: number;
+  threads: number;
+  /** The Tier-2 boxes nested inside this one. */
+  inner: SwimlaneInnerBox[];
 };
 
 export type SwimlaneLink = {
   id: string;
-  provider: ProviderId;
+  /** The Tier-1 group this river leaves (the outer box's `id`). */
+  tier1: string;
   color: string;
   x1: number;
   y1: number;
@@ -1271,9 +1592,9 @@ export type SwimlaneLink = {
   /** Band width (px) — sized by the flow, like a card's river. */
   w: number;
   opacity: number;
-  /** The provider's live rate in this project (beads drift when > 0). */
+  /** The Tier-1 group's live rate in this project (beads drift when > 0). */
   rate: number;
-  /** The provider's tokens in this project (the band's size). */
+  /** The Tier-1 group's tokens in this project (the band's size). */
   flow: number;
 };
 
@@ -1283,6 +1604,8 @@ export type SwimlaneLayout = {
   maxShownRate: number;
   maxFlow: number;
   totalRate: number;
+  /** Which axis Tier 1 groups by (echoes the view's toggle). */
+  mode: FlowMode;
   spine: SwimlaneSpineBlock[];
   links: SwimlaneLink[];
   rows: SwimlaneRow[];
@@ -1296,6 +1619,12 @@ export type SwimlaneOpts = {
   /** Thread ids whose children are shown (nested inside the card). */
   openThreads?: ReadonlySet<string>;
   maxDepth?: number;
+  /** The Tier-1 grouping axis: ACP provider (default) or subscription. */
+  mode?: FlowMode;
+  /** The sampled burn window behind `.series` (defaults to FLOW_WINDOW_MS). */
+  windowMs?: number;
+  /** The bucket count behind `.series` (defaults to FLOW_BUCKETS). */
+  buckets?: number;
 };
 
 const clampN = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
@@ -1361,6 +1690,9 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   const C = SWIMLANE;
   const W = opts.width ?? C.W;
   const maxDepth = opts.maxDepth ?? C.MAX_DEPTH;
+  const mode = opts.mode ?? "provider";
+  const windowMs = opts.windowMs ?? FLOW_WINDOW_MS;
+  const buckets = opts.buckets ?? FLOW_BUCKETS;
   const openProjects = opts.openProjects ?? new Set<string>();
   const openThreads = opts.openThreads ?? new Set<string>();
   const roots = buildForest(threads);
@@ -1376,29 +1708,13 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
     maxFlow = Math.max(maxFlow, subtreeFlow(n));
   }
 
-  // Tier 1 — provider spine (across the whole roster).
-  const provTotals = new Map<ProviderId, { total: number; rate: number }>();
-  for (const t of threads) {
-    const id = providerOf(t);
-    const cur = provTotals.get(id) ?? { total: 0, rate: 0 };
-    cur.total += Math.max(0, t.usedTokens ?? 0);
-    cur.rate += Math.max(0, t.rate ?? 0);
-    provTotals.set(id, cur);
-  }
-  const grandTotal = [...provTotals.values()].reduce((s, v) => s + v.total, 0);
-  const presentProviders = PROVIDER_ORDER.filter((id) => (provTotals.get(id)?.total ?? 0) > 0);
-  const spine: SwimlaneSpineBlock[] = [];
-  {
-    let y = C.SPINE_TOP;
-    for (const id of presentProviders) {
-      const v = provTotals.get(id)!;
-      const frac = grandTotal > 0 ? v.total / grandTotal : 1 / Math.max(1, presentProviders.length);
-      const h = Math.max(56, 420 * frac);
-      spine.push({ id, label: PROVIDER_LABELS[id], color: PROVIDER_TOKENS[id], y, h, total: v.total, rate: v.rate });
-      y += h + 14;
-    }
-  }
-  const spineById = new Map(spine.map((b) => [b.id, b] as const));
+  // Tier 1 — the nested provider/model boxes (the operator's rework,
+  // thr_h3id3kyfaf). The outer box is the ACP provider in provider mode (the
+  // subscription in the toggle's mode); the inner boxes are the
+  // subscription+model pairs (the models). Every box's height encodes active
+  // flow. Replaces the old flat provider-family spine.
+  const spine = tierGroups(threads, mode, { windowMs, buckets });
+  const spineByKey = new Map(spine.map((b) => [b.id, b] as const));
 
   // Tier 2 — one row per project, hottest first. A project owns the threads
   // whose own projectId is its own, so a promoted child reports in its own
@@ -1419,20 +1735,20 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
       a.id.localeCompare(b.id),
   );
 
-  // Provider -> project maxima: the band scale for the provider segment, per
-  // provider within a project (so each provider's river is sized by its own
+  // Tier-1 -> project maxima: the band scale for the provider segment, per
+  // Tier-1 group within a project (so each group's river is sized by its own
   // contribution, not the project total).
   let maxLinkFlow = 1;
   let maxLinkRate = 0;
   {
-    const byProject = new Map<string, Map<ProviderId, { total: number; rate: number }>>();
+    const byProject = new Map<string, Map<string, { total: number; rate: number }>>();
     for (const t of threads) {
       let m = byProject.get(t.projectId);
       if (m === undefined) {
         m = new Map();
         byProject.set(t.projectId, m);
       }
-      const id = providerOf(t);
+      const id = tierOuterKey(t, mode);
       const cur = m.get(id) ?? { total: 0, rate: 0 };
       cur.total += Math.max(0, t.usedTokens ?? 0);
       cur.rate += Math.max(0, t.rate ?? 0);
@@ -1476,6 +1792,15 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
       const v = provMap.get(id)!;
       return { id, label: PROVIDER_LABELS[id], color: PROVIDER_TOKENS[id], total: v.total, rate: v.rate };
     });
+    // The Tier-1 groups this project's threads ride, for the spine→row rivers.
+    const outerMap = new Map<string, { total: number; rate: number }>();
+    for (const t of threadsAll) {
+      const key = tierOuterKey(t, mode);
+      const cur = outerMap.get(key) ?? { total: 0, rate: 0 };
+      cur.total += Math.max(0, t.usedTokens ?? 0);
+      cur.rate += Math.max(0, t.rate ?? 0);
+      outerMap.set(key, cur);
+    }
     // The burn sparkline follows the hottest thread in the project.
     const busiest = [...allNodes].sort(
       (a, b) =>
@@ -1609,19 +1934,17 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
       }
     }
 
-    // Provider -> row rivers (Tier 1 -> Tier 2): the same river treatment the
-    // card segment gets — a filled, provider-colored band sized by that
-    // provider's flow in THIS project, translucent, with a bead ridge for live
-    // activity. Painting them as thin hairlines made the first half of the
-    // path read as chrome instead of flow.
+    // Tier-1 -> row rivers: the same river treatment the card segment gets — a
+    // filled band sized by that group's flow in THIS project, translucent, with
+    // a bead ridge for live activity. The river leaves the group's outer box.
     const cyMid = y + (expanded ? C.EXP_HDR / 2 : C.COLLAPSED_H / 2);
-    for (const mix of prov) {
-      const block = spineById.get(mix.id);
+    for (const [key, mix] of outerMap) {
+      const block = spineByKey.get(key);
       if (block === undefined) continue;
       links.push({
-        id: `link:${p.id}:${mix.id}`,
-        provider: mix.id,
-        color: mix.color,
+        id: `link:${p.id}:${key}`,
+        tier1: key,
+        color: block.color,
         x1: C.SPINE_X + C.SPINE_W,
         y1: block.y + block.h / 2,
         x2: rowX + 4,
@@ -1644,6 +1967,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
     maxShownRate,
     maxFlow,
     totalRate: threads.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0),
+    mode,
     spine,
     links,
     rows,

@@ -334,7 +334,7 @@ async function assertPulse(page) {
  * what actually rendered, not a re-derivation of the model.
  */
 async function swimlaneCheck(page, check) {
-  const outcome = await page.evaluate((which) => {
+  const outcome = await page.evaluate(async (which) => {
     const checks = [];
     const add = (name, ok, detail) => checks.push({ name, ok, detail });
     const svg = document.querySelector('svg[aria-label="token flow swimlanes"]');
@@ -503,6 +503,74 @@ async function swimlaneCheck(page, check) {
         else add("expanded head shows own flow", /own \d/.test(text) && !text.includes("Σ"), text.trim());
       }
       return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `group head (${which}) reads correctly` };
+    }
+
+    if (which === "tiers") {
+      // Tier 1 (outer boxes) = ACP provider / subscription; Tier 2 (inner
+      // boxes) = subscription+model / model. Outer heights wrap their inner
+      // boxes; every box height encodes active flow (taller = more tok/min).
+      const group = document.querySelector("[data-attn-tiers]");
+      if (group === null) {
+        return { pass: false, checks: [{ name: "tiers group", ok: false, detail: "no [data-attn-tiers]" }], detail: "the tier boxes are not mounted" };
+      }
+      const mode = group.getAttribute("data-attn-tiers");
+      add("Tier-1 grouping is declared", mode === "provider" || mode === "subscription", `mode=${mode}`);
+      const t1 = [...group.querySelectorAll("[data-attn-tier1]")];
+      const t2 = [...group.querySelectorAll("[data-attn-tier2]")];
+      add("hottest-first nested Tier-1 boxes exist", t1.length >= 2, `${t1.length} outer boxes`);
+      add("Tier-2 boxes nest inside the Tier-1 boxes", t2.length >= t1.length, `${t2.length} inner boxes`);
+      let wrapped = 0;
+      const flat = [];
+      for (const g of t1) {
+        const h1 = Number(g.getAttribute("data-tier1-h"));
+        const inner = [...g.querySelectorAll("[data-attn-tier2]")];
+        add(`${g.getAttribute("data-attn-tier1")} nests at least one box`, inner.length >= 1, `${inner.length} inner`);
+        const sum = inner.reduce((s, el) => s + Number(el.getAttribute("data-tier2-h")), 0);
+        if (h1 >= sum - 1) wrapped++;
+        for (const el of inner) {
+          flat.push({ id: el.getAttribute("data-attn-tier2"), f: Number(el.getAttribute("data-tier2-flow")), h: Number(el.getAttribute("data-tier2-h")) });
+        }
+      }
+      add("every outer box wraps its inner boxes", wrapped === t1.length, `${wrapped}/${t1.length}`);
+      const byFlow = [...flat].sort((a, b) => a.f - b.f);
+      let monotone = true;
+      for (let i = 1; i < byFlow.length; i++) if (byFlow[i].h < byFlow[i - 1].h - 0.5) monotone = false;
+      add(
+        "taller = more tokens/min (height monotone in flow)",
+        monotone,
+        byFlow.map((x) => `${Math.round(x.f)}→${x.h}`).join(", ") || "no inner boxes",
+      );
+      const minH = flat.length > 0 ? Math.min(...flat.map((x) => x.h)) : 0;
+      add("inner box heights keep a legibility floor", flat.length > 0 && minH >= 20, `min ${minH}px`);
+      return {
+        pass: checks.every((c) => c.ok),
+        checks,
+        detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `nested tier boxes read correctly (${mode})`,
+      };
+    }
+
+    if (which === "toggle") {
+      // The view-chrome toggle swaps Tier 1 from the ACP provider to the
+      // subscription (and Tier 2 from subscription+model to model).
+      const before = document.querySelector("[data-attn-tiers]")?.getAttribute("data-attn-tiers") ?? null;
+      const keysBefore = [...document.querySelectorAll("[data-attn-tier1]")].map((el) => el.getAttribute("data-attn-tier1")).join(",");
+      const target = before === "provider" ? "subscription" : "provider";
+      const btn = document.querySelector(`[data-attn-tier-mode="${target}"]`);
+      add("the Tier-1 toggle is present", btn !== null, before === null ? "no tiers group" : `mode=${before}`);
+      if (btn === null) return { pass: false, checks, detail: "no toggle button" };
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const after = document.querySelector("[data-attn-tiers]")?.getAttribute("data-attn-tiers") ?? null;
+      const keysAfter = [...document.querySelectorAll("[data-attn-tier1]")].map((el) => el.getAttribute("data-attn-tier1")).join(",");
+      add("clicking the toggle swaps the Tier-1 axis", after === target, `${before} → ${after}`);
+      add("the Tier-1 keys change with the axis", keysAfter !== keysBefore, `${keysBefore || "(none)"} → ${keysAfter || "(none)"}`);
+      const inner = [...document.querySelectorAll("[data-attn-tier2]")].map((el) => el.getAttribute("data-attn-tier2"));
+      add("Tier-2 boxes are re-keyed too", inner.length > 0, `${inner.length} inner boxes`);
+      return {
+        pass: checks.every((c) => c.ok),
+        checks,
+        detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `Tier-1 swapped ${before} → ${after}`,
+      };
     }
 
     return { pass: false, checks, detail: `unknown swimlane check "${which}"` };

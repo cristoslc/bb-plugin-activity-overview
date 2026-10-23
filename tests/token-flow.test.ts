@@ -5,14 +5,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   FLOW_BUCKETS,
+  FLOW_INTERVALS,
+  FLOW_WINDOW_MS,
   SWIMLANE,
   SWIMLANES,
+  TIER_BOX,
+  agentLabel,
   bandW,
+  boxHeight,
   buildForest,
   cardHeight,
   cardPaintOrder,
   laneOf,
+  modelParts,
   providerOfModel,
+  recentFlowTokMin,
   resampleWindow,
   riverBeadPath,
   riverEdgePath,
@@ -21,7 +28,11 @@ import {
   riverPath,
   subtreeFlow,
   subtreeRate,
+  subscriptionOf,
   swimlaneLayout,
+  tierGroups,
+  tierInnerLabel,
+  tierOuterKey,
   tokenFlowStatus,
   type FlowNode,
   type FlowThread,
@@ -41,6 +52,7 @@ function fThread(over: Partial<FlowThread> = {}): FlowThread {
     modelContextWindow: over.modelContextWindow ?? 200_000,
     model: over.model ?? "anthropic/claude-sonnet",
     provider: over.provider ?? "anthropic",
+    agentProvider: over.agentProvider === undefined ? "acp-opencode" : over.agentProvider,
     rate: over.rate ?? 0,
     tracked: over.tracked ?? 0,
     series: over.series ?? new Array<number>(FLOW_BUCKETS).fill(0),
@@ -166,32 +178,32 @@ test("rarity-independent: bandW and riverOpacity stay in the approved ranges", (
   }
 });
 
-test("links: the provider→project rivers are bands sized by each provider's flow", () => {
+test("links: the Tier-1→project rivers are bands sized by each group's flow", () => {
   const threads = [
-    fThread({ id: "a1", projectId: "pa", projectName: "Alpha", status: "running", usedTokens: 100_000, rate: 500, provider: "anthropic" }),
-    fThread({ id: "a2", projectId: "pa", projectName: "Alpha", status: "running", usedTokens: 60_000, rate: 300, provider: "openai" }),
-    fThread({ id: "b1", projectId: "pb", projectName: "Beta", status: "idle", usedTokens: 400, rate: 0, provider: "anthropic" }),
+    fThread({ id: "a1", projectId: "pa", projectName: "Alpha", status: "running", usedTokens: 100_000, rate: 500, provider: "anthropic", agentProvider: "acp-opencode" }),
+    fThread({ id: "a2", projectId: "pa", projectName: "Alpha", status: "running", usedTokens: 60_000, rate: 300, provider: "openai", agentProvider: "codex" }),
+    fThread({ id: "b1", projectId: "pb", projectName: "Beta", status: "idle", usedTokens: 400, rate: 0, provider: "anthropic", agentProvider: "acp-opencode" }),
   ];
   const l = swimlaneLayout(threads, { width: 1860 });
-  assert.equal(l.links.length, 3, "one river per provider per project");
-  const anthropicAlpha = l.links.find((k) => k.id === "link:pa:anthropic")!;
-  const openaiAlpha = l.links.find((k) => k.id === "link:pa:openai")!;
-  const beta = l.links.find((k) => k.id === "link:pb:anthropic")!;
-  // The band carries that provider's flow in that project, same rule as a card
-  // river — so the provider segment and the card segment read as one river.
-  assert.equal(anthropicAlpha.flow, 100_000);
-  assert.equal(openaiAlpha.flow, 60_000);
-  assert.equal(anthropicAlpha.w, bandW(100_000, 100_000));
-  assert.ok(anthropicAlpha.w > 10, `the busiest provider river is a band (${anthropicAlpha.w})`);
-  assert.ok(anthropicAlpha.w > openaiAlpha.w, "a bigger flow is a wider band");
-  assert.ok(anthropicAlpha.w > beta.w, "the hot project's river beats the quiet one");
-  // Both ends of the segment are the spine's edge and the row's left edge.
-  assert.equal(anthropicAlpha.x1, SWIMLANE.SPINE_X + SWIMLANE.SPINE_W);
-  assert.equal(anthropicAlpha.x2, SWIMLANE.ROW_X + 4);
-  // Live providers carry activity for the beads; a quiet one stays dim.
-  assert.ok(anthropicAlpha.rate > 0 && openaiAlpha.rate > 0);
+  assert.equal(l.links.length, 3, "one river per Tier-1 group per project");
+  const opencodeAlpha = l.links.find((k) => k.id === "link:pa:acp-opencode")!;
+  const codexAlpha = l.links.find((k) => k.id === "link:pa:codex")!;
+  const beta = l.links.find((k) => k.id === "link:pb:acp-opencode")!;
+  // The band carries that group's flow in that project, same rule as a card
+  // river — so the group segment and the card segment read as one river.
+  assert.equal(opencodeAlpha.flow, 100_000);
+  assert.equal(codexAlpha.flow, 60_000);
+  assert.equal(opencodeAlpha.w, bandW(100_000, 100_000));
+  assert.ok(opencodeAlpha.w > 10, `the busiest group river is a band (${opencodeAlpha.w})`);
+  assert.ok(opencodeAlpha.w > codexAlpha.w, "a bigger flow is a wider band");
+  assert.ok(opencodeAlpha.w > beta.w, "the hot project's river beats the quiet one");
+  // Both ends of the segment are the Tier-1 column's edge and the row's left edge.
+  assert.equal(opencodeAlpha.x1, SWIMLANE.SPINE_X + SWIMLANE.SPINE_W);
+  assert.equal(opencodeAlpha.x2, SWIMLANE.ROW_X + 4);
+  // Live groups carry activity for the beads; a quiet one stays dim.
+  assert.ok(opencodeAlpha.rate > 0 && codexAlpha.rate > 0);
   assert.equal(beta.rate, 0);
-  assert.ok(beta.opacity < anthropicAlpha.opacity, "a quiet project's river is dimmer");
+  assert.ok(beta.opacity < opencodeAlpha.opacity, "a quiet project's river is dimmer");
   for (const k of l.links) {
     assert.ok(k.opacity >= 0.3 - 1e-9 && k.opacity <= 0.8 + 1e-9, `link opacity ${k.opacity}`);
   }
@@ -202,15 +214,15 @@ test("links: the provider→project rivers are bands sized by each provider's fl
 /** A roster with three projects, a nested chain, and every lane populated. */
 function roster(): FlowThread[] {
   return [
-    fThread({ id: "act-parent", projectId: "pa", projectName: "activity", title: "sankey diagram for PRs", status: "running", usedTokens: 24600, rate: 264, provider: "anthropic" }),
-    fThread({ id: "act-child", projectId: "pa", projectName: "activity", title: "layout regression sweep", status: "running", usedTokens: 11400, rate: 172, parentThreadId: "act-parent", createdAt: 2000, provider: "anthropic" }),
-    fThread({ id: "act-grand", projectId: "pa", projectName: "activity", title: "pixel snapshot pass", status: "running", usedTokens: 5200, rate: 60, parentThreadId: "act-child", createdAt: 3000, provider: "google" }),
-    fThread({ id: "act-error", projectId: "pa", projectName: "activity", title: "visual-check driver", status: "error", usedTokens: 31500, provider: "google" }),
-    fThread({ id: "act-done", projectId: "pa", projectName: "activity", title: "treemap label layer", status: "done", usedTokens: 12400, provider: "anthropic" }),
-    fThread({ id: "act-idle", projectId: "pa", projectName: "activity", title: "legend chips", status: "idle", usedTokens: 3100, provider: "openai" }),
-    fThread({ id: "foc-run", projectId: "pf", projectName: "focus-board", title: "parent-thread view", status: "running", usedTokens: 38200, rate: 150, provider: "openai" }),
-    fThread({ id: "foc-wait", projectId: "pf", projectName: "focus-board", title: "card tween", status: "waiting", usedTokens: 9600, provider: "anthropic" }),
-    fThread({ id: "cov-idle", projectId: "pc", projectName: "cove", title: "vault rotation cron", status: "idle", usedTokens: 5100, provider: "google" }),
+    fThread({ id: "act-parent", projectId: "pa", projectName: "activity", title: "sankey diagram for PRs", status: "running", usedTokens: 24600, rate: 264, provider: "anthropic", agentProvider: "acp-opencode", model: "synthetic/hf:zai-org/GLM-5.3-Flash" }),
+    fThread({ id: "act-child", projectId: "pa", projectName: "activity", title: "layout regression sweep", status: "running", usedTokens: 11400, rate: 172, parentThreadId: "act-parent", createdAt: 2000, provider: "anthropic", agentProvider: "acp-opencode", model: "synthetic/hf:zai-org/GLM-5.3-Flash" }),
+    fThread({ id: "act-grand", projectId: "pa", projectName: "activity", title: "pixel snapshot pass", status: "running", usedTokens: 5200, rate: 60, parentThreadId: "act-child", createdAt: 3000, provider: "google", agentProvider: "acp-opencode", model: "ollama-cloud/glm-5.3-flash" }),
+    fThread({ id: "act-error", projectId: "pa", projectName: "activity", title: "visual-check driver", status: "error", usedTokens: 31500, provider: "google", agentProvider: "acp-opencode", model: "ollama-cloud/glm-5.3-flash" }),
+    fThread({ id: "act-done", projectId: "pa", projectName: "activity", title: "treemap label layer", status: "done", usedTokens: 12400, provider: "anthropic", agentProvider: "acp-opencode", model: "cove/text:standard" }),
+    fThread({ id: "act-idle", projectId: "pa", projectName: "activity", title: "legend chips", status: "idle", usedTokens: 3100, provider: "openai", agentProvider: "acp-opencode", model: "cove/vision:heavy" }),
+    fThread({ id: "foc-run", projectId: "pf", projectName: "focus-board", title: "parent-thread view", status: "running", usedTokens: 38200, rate: 150, provider: "openai", agentProvider: "codex", model: "gpt-6-luna" }),
+    fThread({ id: "foc-wait", projectId: "pf", projectName: "focus-board", title: "card tween", status: "waiting", usedTokens: 9600, provider: "anthropic", agentProvider: "codex", model: "gpt-6-sol" }),
+    fThread({ id: "cov-idle", projectId: "pc", projectName: "cove", title: "vault rotation cron", status: "idle", usedTokens: 5100, provider: "google", agentProvider: "claude-code", model: "claude-sonnet-5.5" }),
   ];
 }
 
@@ -441,16 +453,29 @@ test("paint order: cards parent-first; rivers in front, deepest furthest back", 
   }
 });
 
-test("spine + links: providers stack on the left; links run spine → row", () => {
+test("tier 1: the nested boxes stack on the left; links run the column → row", () => {
   const l = swimlaneLayout(roster(), { width: 1860, openProjects: new Set(["pa"]) });
-  assert.deepEqual(l.spine.map((s) => s.id), ["anthropic", "openai", "google"], "spine in provider order");
+  // One outer box per ACP provider (the default mode), not per model family.
+  assert.deepEqual(
+    l.spine.map((s) => s.id).sort(),
+    ["acp-opencode", "claude-code", "codex"],
+    "one outer box per ACP provider",
+  );
+  for (const b of l.spine) {
+    assert.ok(b.inner.length >= 1, `${b.id} nests at least one Tier-2 box`);
+    assert.ok(b.label.length > 0, `${b.id} carries a label`);
+    for (let i = 1; i < b.inner.length; i++) {
+      assert.ok(b.inner[i]!.y >= b.inner[i - 1]!.y + b.inner[i - 1]!.h - 1e-6, "Tier-2 boxes stack");
+    }
+  }
   for (let i = 1; i < l.spine.length; i++) {
-    assert.ok(l.spine[i]!.y >= l.spine[i - 1]!.y + l.spine[i - 1]!.h, "spine blocks stack");
+    assert.ok(l.spine[i]!.y >= l.spine[i - 1]!.y + l.spine[i - 1]!.h, "outer boxes stack");
   }
   assert.ok(l.links.length > 0);
   for (const k of l.links) {
     assert.equal(k.x1, SWIMLANE.SPINE_X + SWIMLANE.SPINE_W);
     assert.equal(k.x2, SWIMLANE.ROW_X + 4);
+    assert.ok(l.spine.some((b) => b.id === k.tier1), "the river leaves a real outer box");
   }
 });
 
@@ -497,4 +522,158 @@ test("layout: an all-idle roster keeps finite zero geometry and no rivers", () =
       for (const rv of ln.rivers) assert.ok(Number.isFinite(rv.w) && rv.w > 0);
     }
   }
+});
+
+// ---------- two-tier provider/model boxes (thr_h3id3kyfaf) ----------
+
+/** A series whose newest 10 buckets each carry `tokPerInterval` tokens. */
+function flowSeries(tokPerInterval: number): number[] {
+  const s = new Array<number>(FLOW_BUCKETS).fill(0);
+  for (let i = FLOW_BUCKETS - FLOW_INTERVALS; i < FLOW_BUCKETS; i++) s[i] = tokPerInterval;
+  return s;
+}
+
+test("modelParts splits the subscription prefix from the model id", () => {
+  assert.deepEqual(modelParts("synthetic/hf:zai-org/GLM-5.3-Flash"), {
+    subscription: "synthetic",
+    model: "hf:zai-org/GLM-5.3-Flash",
+  });
+  assert.deepEqual(modelParts("ollama-cloud/glm-5.3-flash:cloud"), {
+    subscription: "ollama-cloud",
+    model: "glm-5.3-flash:cloud",
+  });
+  assert.deepEqual(modelParts("claude-sonnet-5.5"), { subscription: null, model: "claude-sonnet-5.5" });
+  assert.deepEqual(modelParts(" auto "), { subscription: null, model: "auto" });
+  assert.deepEqual(modelParts(null), { subscription: null, model: "unknown" });
+  assert.deepEqual(modelParts(""), { subscription: null, model: "unknown" });
+  assert.deepEqual(modelParts("trailing/"), { subscription: null, model: "trailing/" });
+  assert.equal(subscriptionOf("cove/text:standard"), "cove");
+  assert.equal(subscriptionOf("gpt-6-luna"), null);
+});
+
+test("agentLabel maps known provider ids and falls through unknown ones", () => {
+  assert.equal(agentLabel("acp-opencode"), "opencode");
+  assert.equal(agentLabel("codex"), "Codex");
+  assert.equal(agentLabel("claude-code"), "Claude Code");
+  assert.equal(agentLabel("pi"), "Pi");
+  assert.equal(agentLabel("acp-something-new"), "acp-something-new");
+  assert.equal(agentLabel(null), "Unknown");
+  assert.equal(agentLabel(undefined), "Unknown");
+  assert.equal(agentLabel("  "), "Unknown");
+});
+
+test("tierOuterKey / tierInnerLabel: provider mode groups the ACP agent, the pair inside", () => {
+  const t = fThread({ agentProvider: "acp-opencode", model: "synthetic/hf:zai-org/GLM-5.3-Flash" });
+  assert.equal(tierOuterKey(t, "provider"), "acp-opencode");
+  assert.equal(tierInnerLabel(t.model, "provider"), "synthetic / hf:zai-org/GLM-5.3-Flash");
+  assert.equal(tierOuterKey(t, "subscription"), "synthetic");
+  assert.equal(tierInnerLabel(t.model, "subscription"), "hf:zai-org/GLM-5.3-Flash");
+  // A bare model has no subscription: the ACP provider stands in for it.
+  const bare = fThread({ agentProvider: "claude-code", model: "claude-sonnet-5.5" });
+  assert.equal(tierOuterKey(bare, "subscription"), "Claude Code");
+  assert.equal(tierInnerLabel(bare.model, "provider"), "claude-sonnet-5.5");
+});
+
+test("recentFlowTokMin: Σ of the newest intervals, in tokens per minute", () => {
+  const series = new Array<number>(FLOW_BUCKETS).fill(0);
+  for (let i = FLOW_BUCKETS - FLOW_INTERVALS; i < FLOW_BUCKETS; i++) series[i] = 100;
+  // 20 three-minute buckets; the newest 10 carry 100 each → 1000 tok over 30 min.
+  assert.equal(recentFlowTokMin(series, FLOW_WINDOW_MS, FLOW_BUCKETS), 1000 / 30);
+  // Older buckets sit outside the last-10 window.
+  const oldOnly = new Array<number>(FLOW_BUCKETS).fill(0);
+  oldOnly[0] = 9_000;
+  assert.equal(recentFlowTokMin(oldOnly, FLOW_WINDOW_MS, FLOW_BUCKETS), 0);
+  // Empty / degenerate inputs are a measured zero, never NaN.
+  assert.equal(recentFlowTokMin([], FLOW_WINDOW_MS, FLOW_BUCKETS), 0);
+  assert.equal(recentFlowTokMin(series, 0, FLOW_BUCKETS), 0);
+  assert.equal(recentFlowTokMin(series, FLOW_WINDOW_MS, 0), 0);
+  // The interval count is a parameter: the full 20 buckets over the whole hour.
+  assert.equal(recentFlowTokMin(series, FLOW_WINDOW_MS, FLOW_BUCKETS, 20), (10 * 100) / 60);
+});
+
+test("boxHeight: floored, capped, monotone, deterministic; NaN throws", () => {
+  assert.equal(boxHeight(0, 100), TIER_BOX.MIN_H, "a zero flow draws at the floor");
+  assert.equal(boxHeight(100, 100), TIER_BOX.MAX_H, "the hottest box clamps at the ceiling");
+  assert.equal(boxHeight(50, 100), boxHeight(50, 100), "deterministic for the same input");
+  assert.ok(boxHeight(50, 100) > boxHeight(25, 100), "taller = more tokens/min");
+  assert.ok(boxHeight(25, 100) >= TIER_BOX.MIN_H && boxHeight(25, 100) <= TIER_BOX.MAX_H);
+  // A zero max (an all-quiet roster) still lands on the floor, never NaN.
+  assert.equal(boxHeight(0, 0), TIER_BOX.MIN_H);
+  assert.equal(boxHeight(999, 0), TIER_BOX.MIN_H, "with no max there is no scale; the floor holds");
+  assert.throws(() => boxHeight(Number.NaN, 100), RangeError);
+});
+
+test("tierGroups: provider mode nests subscription+model inside each ACP provider", () => {
+  const threads = [
+    fThread({ id: "a", agentProvider: "acp-opencode", model: "synthetic/hf:zai-org/GLM-5.3-Flash", series: flowSeries(90), usedTokens: 1000, rate: 5 }),
+    fThread({ id: "b", agentProvider: "acp-opencode", model: "ollama-cloud/glm-5.3-flash", series: flowSeries(30), usedTokens: 500, rate: 2 }),
+    fThread({ id: "c", agentProvider: "codex", model: "gpt-6-luna", series: flowSeries(0), usedTokens: 100, rate: 0 }),
+  ];
+  const groups = tierGroups(threads, "provider");
+  assert.deepEqual(groups.map((g) => g.id), ["acp-opencode", "codex"], "the hottest ACP provider leads");
+  const oc = groups.find((g) => g.id === "acp-opencode")!;
+  assert.equal(oc.label, "opencode");
+  assert.deepEqual(
+    oc.inner.map((i) => i.id),
+    ["synthetic / hf:zai-org/GLM-5.3-Flash", "ollama-cloud / glm-5.3-flash"],
+    "Tier-2 boxes sort hottest-first",
+  );
+  const [hot, warm] = oc.inner;
+  assert.ok(hot!.h > warm!.h, "the hotter subscription+model box is taller");
+  assert.ok(warm!.h >= TIER_BOX.MIN_H, "the quieter box never falls below the legibility floor");
+  assert.ok(
+    oc.h >= TIER_BOX.HDR_H + 2 * TIER_BOX.PAD + hot!.h + TIER_BOX.GAP + warm!.h - 1e-6,
+    "the outer box wraps its Tier-2 boxes",
+  );
+  assert.ok(groups[1]!.y >= oc.y + oc.h, "outer boxes stack without overlap");
+  assert.equal(groups[1]!.inner[0]!.id, "gpt-6-luna");
+});
+
+test("tierGroups: subscription mode swaps Tier 1 to the subscription and Tier 2 to the model", () => {
+  const threads = [
+    fThread({ id: "a", agentProvider: "acp-opencode", model: "synthetic/hf:zai-org/GLM-5.3-Flash", series: flowSeries(60) }),
+    fThread({ id: "b", agentProvider: "codex", model: "synthetic/syn:small:vision", series: flowSeries(20) }),
+    fThread({ id: "c", agentProvider: "claude-code", model: "claude-sonnet-5.5", series: flowSeries(10) }),
+  ];
+  const groups = tierGroups(threads, "subscription");
+  assert.deepEqual(
+    groups.map((g) => g.id).sort(),
+    ["Claude Code", "synthetic"],
+    "subscriptions are the outer boxes; a bare model falls back to its ACP provider",
+  );
+  const syn = groups.find((g) => g.id === "synthetic")!;
+  assert.deepEqual(syn.inner.map((i) => i.id).sort(), ["hf:zai-org/GLM-5.3-Flash", "syn:small:vision"]);
+  assert.equal(syn.threads, 2);
+});
+
+test("tierGroups: a missing ACP provider groups under Unknown, never dropped", () => {
+  const groups = tierGroups([fThread({ id: "x", agentProvider: null, model: "mystery-model", series: flowSeries(10) })], "provider");
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]!.id, "unknown");
+  assert.equal(groups[0]!.label, "Unknown");
+  assert.equal(groups[0]!.inner[0]!.id, "mystery-model");
+});
+
+test("tierGroups is deterministic across input order", () => {
+  const threads = [
+    fThread({ id: "a", agentProvider: "acp-opencode", model: "synthetic/x", series: flowSeries(50) }),
+    fThread({ id: "b", agentProvider: "codex", model: "gpt-6-luna", series: flowSeries(50) }),
+  ];
+  assert.equal(
+    JSON.stringify(tierGroups(threads, "provider")),
+    JSON.stringify(tierGroups([...threads].reverse(), "provider")),
+  );
+});
+
+test("swimlaneLayout: the mode flows through to the Tier-1 grouping", () => {
+  const threads = [
+    fThread({ id: "a", agentProvider: "acp-opencode", model: "synthetic/x", series: flowSeries(60) }),
+    fThread({ id: "b", agentProvider: "codex", model: "gpt-6-luna", series: flowSeries(20) }),
+  ];
+  const byProvider = swimlaneLayout(threads, { width: 1860, mode: "provider" });
+  assert.equal(byProvider.mode, "provider");
+  assert.deepEqual(byProvider.spine.map((s) => s.id).sort(), ["acp-opencode", "codex"]);
+  const bySub = swimlaneLayout(threads, { width: 1860, mode: "subscription" });
+  assert.equal(bySub.mode, "subscription");
+  assert.deepEqual(bySub.spine.map((s) => s.id).sort(), ["Codex", "synthetic"]);
 });

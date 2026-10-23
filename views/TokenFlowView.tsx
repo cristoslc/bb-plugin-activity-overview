@@ -27,11 +27,13 @@ import {
   riverPaintOrder,
   riverPath,
   swimlaneLayout,
+  type FlowMode,
   type FlowThread,
   type SwimlaneCard,
   type SwimlaneLane,
   type SwimlaneLayout,
   type SwimlaneRow,
+  type SwimlaneSpineBlock,
 } from "./model";
 
 const fmtK = (n: number): string =>
@@ -131,12 +133,14 @@ export function TokenFlowView() {
   const [speedMul, setSpeedMul] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [width, setWidth] = useState<number>(SWIMLANE.W);
+  /** Tier-1 grouping: the ACP provider (default) or the subscription. */
+  const [mode, setMode] = useState<FlowMode>("provider");
 
   const threads = useMemo((): FlowThread[] => (flow === null ? [] : flow.threads), [flow]);
 
   const layout: SwimlaneLayout = useMemo(
-    () => swimlaneLayout(threads, { width, openProjects, openThreads }),
-    [threads, width, openProjects, openThreads],
+    () => swimlaneLayout(threads, { width, openProjects, openThreads, mode }),
+    [threads, width, openProjects, openThreads, mode],
   );
 
   // Seed the view: open the hottest project once, so the lanes are on screen.
@@ -298,6 +302,31 @@ export function TokenFlowView() {
           </span>
           <span>tok/min all projects</span>
         </span>
+        <span className="flex items-center gap-1 text-[11px]" data-attn-tier-toggle={mode}>
+          <span className="text-muted-foreground">Tier 1</span>
+          <span className="inline-flex overflow-hidden rounded border border-border/60">
+            <button
+              type="button"
+              data-attn-tier-mode="provider"
+              aria-pressed={mode === "provider"}
+              onClick={() => setMode("provider")}
+              className={`px-2 py-0.5 text-[11px] ${mode === "provider" ? "text-foreground" : "text-muted-foreground"}`}
+              style={mode === "provider" ? { background: "var(--attn-selected)" } : undefined}
+            >
+              provider
+            </button>
+            <button
+              type="button"
+              data-attn-tier-mode="subscription"
+              aria-pressed={mode === "subscription"}
+              onClick={() => setMode("subscription")}
+              className={`border-l border-border/60 px-2 py-0.5 text-[11px] ${mode === "subscription" ? "text-foreground" : "text-muted-foreground"}`}
+              style={mode === "subscription" ? { background: "var(--attn-selected)" } : undefined}
+            >
+              subscription
+            </button>
+          </span>
+        </span>
         <button
           type="button"
           onClick={() => toggleAll(!anyExpanded)}
@@ -362,26 +391,18 @@ export function TokenFlowView() {
           role="img"
           aria-label="token flow swimlanes"
         >
-          {/* Tier 1 — the provider spine */}
-          {layout.spine.map((b) => (
-            <g key={`spine:${b.id}`} pointerEvents="none">
-              <rect x={SWIMLANE.SPINE_X} y={b.y} width={SWIMLANE.SPINE_W} height={b.h} rx={7} fill={b.color} opacity={0.93} />
-              <text x={SWIMLANE.SPINE_X + SWIMLANE.SPINE_W / 2} y={b.y + 22} textAnchor="middle" fontSize={12} fontWeight={700} fill="var(--attn-card)">
-                {b.label}
-              </text>
-              <text x={SWIMLANE.SPINE_X + SWIMLANE.SPINE_W / 2} y={b.y + 40} textAnchor="middle" fontSize={10} fill="var(--attn-card)" opacity={0.85}>
-                {fmtK(b.total)} tok
-              </text>
-              {b.rate > 0 ? (
-                <text x={SWIMLANE.SPINE_X + SWIMLANE.SPINE_W / 2} y={b.y + 55} textAnchor="middle" fontSize={9.5} fill="var(--attn-card)" opacity={0.8}>
-                  {fmtTokMin(b.rate * 60)} tok/min
-                </text>
-              ) : null}
-            </g>
-          ))}
+          {/* Tier 1 — the nested provider/model boxes (the two-tier rework):
+              outer box = the ACP provider (or the subscription), inner boxes =
+              the subscription+model pairs (or the models). Height encodes
+              active flow. */}
+          <g data-attn-tiers={layout.mode}>
+            {layout.spine.map((b) => (
+              <Tier1BoxLayer key={`tier1:${b.id}`} block={b} />
+            ))}
+          </g>
           {layout.spine.length > 0 ? (
             <text x={SWIMLANE.SPINE_X + SWIMLANE.SPINE_W / 2} y={SWIMLANE.SPINE_TOP - 12} textAnchor="middle" fontSize={9.5} fontWeight={700} fill="var(--attn-faint)" pointerEvents="none">
-              TIER 1 · providers
+              {`TIER 1 · ${layout.mode === "provider" ? "ACP providers" : "subscriptions"}`}
             </text>
           ) : null}
 
@@ -409,7 +430,7 @@ export function TokenFlowView() {
                 key={k.id}
                 pointerEvents="none"
                 data-attn-link={k.id}
-                data-provider={k.provider}
+                data-tier1={k.tier1}
                 data-w={k.w}
                 data-rate={k.rate}
                 data-flow={k.flow}
@@ -456,10 +477,55 @@ export function TokenFlowView() {
           </span>
         ))}
         <span className="ml-auto opacity-80">
-          river = the card's shown flow (Σ subtree while collapsed, own once expanded) · bar = subtree total · beads = live activity
+          {`Tier 1 ${mode === "provider" ? "ACP provider" : "subscription"} → Tier 2 ${mode === "provider" ? "subscription / model" : "model"} · box height = tok/min over the last 10 intervals (taller = hotter) · river = the card's shown flow · beads = live activity`}
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * One Tier-1 outer box with its Tier-2 inner boxes nested inside. The outer box
+ * is the ACP provider (or the subscription); the inner boxes are the
+ * subscription+model pairs (or the models). Both tiers' HEIGHTS encode active
+ * flow (`boxHeight` in views/model.ts); the numbers read tok/min over the last
+ * 10 intervals. No status-derived fills — the accent is the model-family color.
+ */
+function Tier1BoxLayer({ block }: { block: SwimlaneSpineBlock }) {
+  return (
+    <g
+      data-attn-tier1={block.id}
+      data-tier1-flow={Math.round(block.flow)}
+      data-tier1-h={Math.round(block.h)}
+      data-tier1-inner={block.inner.length}
+      pointerEvents="none"
+    >
+      <rect x={SWIMLANE.SPINE_X} y={block.y} width={SWIMLANE.SPINE_W} height={block.h} rx={7} fill={block.color} opacity={0.16} />
+      <rect x={SWIMLANE.SPINE_X} y={block.y} width={SWIMLANE.SPINE_W} height={block.h} rx={7} fill="none" stroke={block.color} strokeWidth={1.4} strokeOpacity={0.85} />
+      <text x={SWIMLANE.SPINE_X + 9} y={block.y + 15} fontSize={11} fontWeight={700} fill="var(--attn-emph)">
+        {clip(block.label, 20)}
+      </text>
+      <text x={SWIMLANE.SPINE_X + SWIMLANE.SPINE_W - 9} y={block.y + 15} textAnchor="end" fontSize={9.5} fill="var(--attn-sub)">
+        {fmtTokMin(block.flow)} tok/min
+      </text>
+      <text x={SWIMLANE.SPINE_X + 9} y={block.y + 28} fontSize={9} fill="var(--attn-faint)">
+        {`${block.threads} thread${block.threads === 1 ? "" : "s"} · ${fmtK(block.total)} tok`}
+      </text>
+      {block.inner.map((inr) => (
+        <g key={`tier2:${block.id}:${inr.id}`} data-attn-tier2={inr.id} data-tier2-flow={Math.round(inr.flow)} data-tier2-h={Math.round(inr.h)}>
+          <rect x={inr.x} y={inr.y} width={inr.w} height={inr.h} rx={4} fill="var(--attn-card)" stroke="var(--attn-card-border)" strokeOpacity={0.9} />
+          <rect x={inr.x} y={inr.y} width={3} height={inr.h} rx={1.5} fill={inr.color} opacity={0.9} />
+          <text x={inr.x + 8} y={inr.y + Math.min(inr.h - 4, 13)} fontSize={9} fill="var(--attn-emph)">
+            {clip(inr.label, 26)}
+          </text>
+          {inr.h >= 32 ? (
+            <text x={inr.x + 8} y={inr.y + 24} fontSize={8.5} fill="var(--attn-sub)">
+              {fmtTokMin(inr.flow)} tok/min
+            </text>
+          ) : null}
+        </g>
+      ))}
+    </g>
   );
 }
 

@@ -154,6 +154,7 @@ type FlowThreadFixture = {
   modelContextWindow: number;
   model: string | null;
   provider: string;
+  agentProvider: string;
   rate: number;
   tracked: number;
   series: number[];
@@ -168,8 +169,9 @@ const flowThread = (over: Partial<FlowThreadFixture> & { id: string; usedTokens:
   createdAt: NOW - 600_000,
   updatedAt: NOW - 60_000,
   modelContextWindow: 200_000,
-  model: null,
+  model: "synthetic/hf:zai-org/GLM-5.3-Flash",
   provider: "anthropic",
+  agentProvider: "acp-opencode",
   rate: 0,
   tracked: 0,
   series: burn(Math.max(20, over.rate ?? 40), "steady"),
@@ -184,26 +186,26 @@ export const SIM_FLOW = {
   threads: [
     // Alpha work — the runaway thread with a contained child and grandchild.
     flowThread({ id: "thr_running", title: "Refactor the export path", usedTokens: 24_600, rate: 264, series: burn(320, "ramp") }),
-    flowThread({ id: "thr_running_child", title: "layout regression sweep", usedTokens: 11_400, rate: 172, parentThreadId: "thr_running", createdAt: NOW - 400_000 }),
-    flowThread({ id: "thr_running_grand", title: "pixel snapshot pass", usedTokens: 5_200, rate: 60, parentThreadId: "thr_running_child", provider: "google", createdAt: NOW - 300_000 }),
+    flowThread({ id: "thr_running_child", title: "layout regression sweep", usedTokens: 11_400, rate: 172, parentThreadId: "thr_running", createdAt: NOW - 400_000, model: "ollama-cloud/glm-5.3-flash" }),
+    flowThread({ id: "thr_running_grand", title: "pixel snapshot pass", usedTokens: 5_200, rate: 60, parentThreadId: "thr_running_child", provider: "google", createdAt: NOW - 300_000, agentProvider: "codex", model: "gpt-6-luna" }),
     // More working threads, so the lane overflows its capped height.
-    flowThread({ id: "thr_run_b", title: "backup script review", usedTokens: 8_800, rate: 90, provider: "openai" }),
-    flowThread({ id: "thr_run_c", title: "nightly sync sweep", usedTokens: 7_100, rate: 44, provider: "google" }),
-    flowThread({ id: "thr_run_d", title: "cache warm pass", usedTokens: 6_200, rate: 30, provider: "ollama" }),
-    flowThread({ id: "thr_run_e", title: "index rebuild", usedTokens: 5_400, rate: 20, provider: "openai" }),
-    flowThread({ id: "thr_run_f", title: "log tail probe", usedTokens: 4_100, rate: 12, provider: "anthropic" }),
+    flowThread({ id: "thr_run_b", title: "backup script review", usedTokens: 8_800, rate: 90, provider: "openai", agentProvider: "codex", model: "gpt-6-luna" }),
+    flowThread({ id: "thr_run_c", title: "nightly sync sweep", usedTokens: 7_100, rate: 44, provider: "google", agentProvider: "claude-code", model: "claude-sonnet-5.5" }),
+    flowThread({ id: "thr_run_d", title: "cache warm pass", usedTokens: 6_200, rate: 30, provider: "ollama", agentProvider: "pi", model: "pi" }),
+    flowThread({ id: "thr_run_e", title: "index rebuild", usedTokens: 5_400, rate: 20, provider: "openai", agentProvider: "codex", model: "gpt-6-luna" }),
+    flowThread({ id: "thr_run_f", title: "log tail probe", usedTokens: 4_100, rate: 12, provider: "anthropic", model: "synthetic/syn:small:text" }),
     // The other three lanes.
-    flowThread({ id: "thr_error", title: "Fix flaky importer test", status: "error", usedTokens: 31_500, provider: "google", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    flowThread({ id: "thr_error", title: "Fix flaky importer test", status: "error", usedTokens: 31_500, provider: "google", agentProvider: "claude-code", model: "claude-sonnet-5.5", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
     flowThread({ id: "thr_done", title: "treemap label layer", status: "done", usedTokens: 12_400, rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
-    flowThread({ id: "thr_idle", title: "legend chips", status: "idle", usedTokens: 3_100, provider: "openai", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    flowThread({ id: "thr_idle", title: "legend chips", status: "idle", usedTokens: 3_100, provider: "openai", agentProvider: "codex", model: "gpt-6-luna", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
     // A waiting supervisor whose running child must surface in the Working lane
     // rather than hiding nested inside the parent's card — the real-world shape
     // (an orchestrator waiting on the operator, with running threads beneath it)
     // that first broke the view.
     flowThread({ id: "thr_supervisor", title: "Workstation orchestrator", status: "waiting", usedTokens: 20_000, provider: "anthropic", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
-    flowThread({ id: "thr_supervisor_child", title: "Sashay: agents charter readability", status: "running", usedTokens: 9_000, rate: 120, parentThreadId: "thr_supervisor", provider: "openai" }),
+    flowThread({ id: "thr_supervisor_child", title: "Sashay: agents charter readability", status: "running", usedTokens: 9_000, rate: 120, parentThreadId: "thr_supervisor", provider: "openai", model: "cove/text:standard" }),
     // Beta infra — stays collapsed by default.
-    flowThread({ id: "thr_running_slow", projectId: "proj_beta", projectName: "Beta infra", title: "Audit the migration notes", usedTokens: 38_200, rate: 60, provider: "openai" }),
-    flowThread({ id: "thr_wait", projectId: "proj_beta", projectName: "Beta infra", title: "card tween", status: "waiting", usedTokens: 9_600, provider: "anthropic", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    flowThread({ id: "thr_running_slow", projectId: "proj_beta", projectName: "Beta infra", title: "Audit the migration notes", usedTokens: 38_200, rate: 60, provider: "openai", agentProvider: "codex", model: "gpt-6-luna" }),
+    flowThread({ id: "thr_wait", projectId: "proj_beta", projectName: "Beta infra", title: "card tween", status: "waiting", usedTokens: 9_600, provider: "anthropic", agentProvider: "claude-code", model: "claude-sonnet-5.5", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
   ],
 };
