@@ -22,6 +22,7 @@ import {
   SWIMLANE,
   SWIMLANES,
   cardPaintOrder,
+  readsQuiet,
   riverBeadPath,
   riverEdgePath,
   riverPaintOrder,
@@ -540,7 +541,7 @@ type RowProps = {
 };
 
 function RowLayer({ row, nowMs, maxFlow, scroll, onToggleProject, onToggleThread, beadRefs }: RowProps) {
-  const quiet = row.rate <= 0;
+  const quiet = row.quiet;
   const first = row.prov[0];
   return (
     <g opacity={quiet ? 0.82 : 1} data-attn-row={row.id} data-expanded={row.expanded} data-working={row.working}>
@@ -608,8 +609,8 @@ function CollapsedBody({ row }: { row: SwimlaneRow }) {
       <text x={SWIMLANE.ROW_X + row.w - 16} y={row.y + 24} textAnchor="end" fontSize={12} fill="var(--attn-sub)">
         {fmtK(row.total)} tok
       </text>
-      <text x={cx} y={row.y + 42} fontSize={10.5} fill={row.rate > 0 ? "var(--attn-working)" : "var(--attn-faint)"}>
-        {row.rate > 0 ? `${fmtTokMin(row.rate * 60)} tok/min` : "quiet"}
+      <text x={cx} y={row.y + 42} fontSize={10.5} fill={row.quiet ? "var(--attn-faint)" : "var(--attn-working)"}>
+        {row.quiet ? "quiet" : `${fmtTokMin(row.rate * 60)} tok/min`}
       </text>
       <text x={cx + 150} y={row.y + 42} fontSize={10} fill="var(--attn-faint)">
         {row.threads} threads · {row.working} working
@@ -644,7 +645,7 @@ function ExpandedHeader({ row, onToggle }: { row: SwimlaneRow; onToggle: () => v
           {clip(row.name, 40)}
         </text>
         <text x={cx} y={row.y + 46} fontSize={10.5} fill="var(--attn-sub)">
-          {fmtK(row.total)} tok · {row.rate > 0 ? `${fmtTokMin(row.rate * 60)} tok/min` : "quiet"} · {row.threads} threads
+          {fmtK(row.total)} tok · {row.quiet ? "quiet" : `${fmtTokMin(row.rate * 60)} tok/min`} · {row.threads} threads
         </text>
         <text x={cx} y={row.y + 62} fontSize={8.5} fill="var(--attn-faint)">
           flow splits by status ↓
@@ -793,10 +794,12 @@ function CardLayer({
   const dot = card.error ? "var(--attn-error)" : dotColor(card, lane, nowMs);
   const value =
     card.hasGroup
-      ? `${card.open ? "own" : "Σ"} ${fmtTokMin(card.shownRate * 60)} tok/min · ${fmtK(card.flow)} total`
-      : card.shownRate > 0
-        ? `${fmtTokMin(card.shownRate * 60)} tok/min`
-        : `${fmtK(card.flow)} tok`;
+      ? card.quiet
+        ? `quiet · ${fmtK(card.flow)} total`
+        : `${card.open ? "own" : "Σ"} ${fmtTokMin(card.shownRate * 60)} tok/min · ${fmtK(card.flow)} total`
+      : card.quiet
+        ? `${fmtK(card.flow)} tok`
+        : `${fmtTokMin(card.shownRate * 60)} tok/min`;
   return (
     <g data-attn-card={card.id} data-depth={card.depth} data-has-group={card.hasGroup} data-open={card.open}>
       <rect
@@ -821,7 +824,7 @@ function CardLayer({
         {clip(card.thread.title, Math.max(10, 24 - card.depth * 3))}
       </text>
       <rect x={card.x + 10} y={card.y + 31} width={barW} height={6} rx={3} fill={card.color} opacity={0.9} pointerEvents="none" />
-      <text x={card.x + 22} y={card.y + 47} fontSize={card.hasGroup ? 8.5 : 9} fill={card.hasGroup ? laneColor : card.shownRate > 0 ? laneColor : "var(--attn-faint)"} pointerEvents="none">
+      <text x={card.x + 22} y={card.y + 47} fontSize={card.hasGroup ? 8.5 : 9} fill={card.hasGroup ? laneColor : card.quiet ? "var(--attn-faint)" : laneColor} pointerEvents="none">
         {value}
       </text>
       {card.canOpen ? (
