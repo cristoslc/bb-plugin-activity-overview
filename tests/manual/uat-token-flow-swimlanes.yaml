@@ -10,8 +10,11 @@ test_suite:
     head reads its subtree sum (Σ) and drops to its own flow once expanded; and
     each lane scrolls on its own without moving a neighbour. The mock SDK serves
     a fixed flow fixture (Alpha work opens by default, its Working lane holds
-    more cards than the capped lane height holds).
-  tags: [interaction, tokenflow, swimlane, uat, headless]
+    more cards than the capped lane height holds). The left Tier-1 column is a
+    stack of nested boxes — outer = the ACP provider (or the subscription, via
+    the view-chrome toggle), inner = the subscription+model pair (or the model)
+    — with every box's height encoding active token flow.
+  tags: [interaction, tokenflow, swimlane, tiers, uat, headless]
 
 test_cases:
   - id: TC-01
@@ -263,3 +266,55 @@ test_cases:
         params: {}
         instruction: Capture the full path.
         expected: A screenshot showing provider→project and project→card reading as one river.
+
+  - id: TC-09
+    title: Tier 1 is a stack of nested provider/model boxes whose heights encode active flow
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the token-flow stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-tier1]' }
+        instruction: Wait for the Tier-1 outer boxes to paint.
+        expected: The provider boxes are on screen.
+      - order: 3
+        action: swimlane
+        params: { check: tiers }
+        instruction: Read every outer box and the inner boxes nested inside it.
+        expected: Two or more outer boxes (ACP providers), each wrapping its inner subscription+model boxes; every outer box's height covers its inner boxes, and box height is monotone in active flow (taller = more tok/min, floored so a quiet box stays legible).
+      - order: 4
+        action: profile
+        params: {}
+        instruction: Capture the nested boxes.
+        expected: A screenshot of the nested provider/model stack.
+
+  - id: TC-10
+    title: The view-chrome toggle swaps Tier 1 from ACP provider to subscription
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the token-flow stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-tier1]' }
+        instruction: Wait for the Tier-1 boxes in the default (provider) mode.
+        expected: The provider boxes are on screen.
+      - order: 3
+        action: swimlane
+        params: { check: toggle }
+        instruction: Click the "subscription" half of the Tier-1 toggle and re-read the boxes.
+        expected: The grouping axis flips to subscription, the outer keys change, and the inner boxes re-key to models.
+      - order: 4
+        action: profile
+        params: {}
+        instruction: Capture the subscription-mode boxes.
+        expected: A screenshot of the subscription→model boxes.

@@ -9,7 +9,7 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { executionModel, type Row } from "./views/timeline";
-import { FLOW_BUCKETS, burnRate, endSnippet, providerOfModel, resampleWindow } from "./views/model";
+import { FLOW_BUCKETS, FLOW_WINDOW_MS, burnRate, endSnippet, providerOfModel, resampleWindow } from "./views/model";
 import { FLOW_CHANGED, type FlowChangedPayload } from "./shared";
 
 type FlowStatus = z.infer<typeof flowStatusSchema>;
@@ -40,6 +40,10 @@ export const flowThreadSchema = z.object({
   usedTokens: z.number().nullable(),
   modelContextWindow: z.number().nullable(),
   provider: z.string().nullable(),
+  /** The thread's bb provider id — its ACP agent (e.g. `acp-opencode`,
+   *  `codex`, `claude-code`). The Tier-1 axis of the two-tier token flow
+   *  boxes in provider mode. */
+  agentProvider: z.string().nullable(),
   model: z.string().nullable(),
   /** Sampled context growth, tokens per second (null: no sample history yet). */
   rate: z.number().nullable(),
@@ -103,6 +107,8 @@ type ThreadDto = {
   titleFallback: string | null;
   status: string;
   parentThreadId: string | null;
+  /** The thread's bb provider id (its ACP agent); absent on older hosts. */
+  providerId?: string | null;
   environmentBranchName?: string | null;
   updatedAt: number;
   createdAt: number;
@@ -126,7 +132,6 @@ const CARD_SNIPPET_CAP = 160;
 // wall-clock buckets. `thread/tokenUsage/updated` /
 // `thread/contextWindowUsage/updated` deltas drive extra samples, so a
 // streaming thread's newest bucket grows between builds.
-const FLOW_WINDOW_MS = 60 * 60_000; // the view's burn window (last hour)
 const SAMPLE_MIN_GAP_MS = 3_000;
 const SAMPLE_SPAN_MS = FLOW_WINDOW_MS;
 const SAMPLE_RING_CAP = 600; // ~30 min at the min gap; oldest evicted
@@ -284,6 +289,7 @@ export default async function plugin(bb: BbPluginApi) {
         modelContextWindow,
         model,
         provider: providerOfModel(model),
+        agentProvider: thread.providerId ?? null,
         // The schema keeps a number here (0 = no measurable rate yet); the
         // dot pulse reads `pulse`, where absence means "unknown".
         rate: rate ?? 0,

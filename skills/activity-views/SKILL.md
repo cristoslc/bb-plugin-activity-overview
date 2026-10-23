@@ -58,13 +58,21 @@ may need to act on."*
   `done`/`interrupted`; Idle ← `idle` (its dot fades on the age grey ramp).
   Every lane sorts its threads by whole-subtree flow, highest at the top, so the
   runaway thread is the first row of the Working lane.
-- **Three tiers, two axes.** Tier 1 Provider is a vertical spine of colored
-  blocks on the left (`TIER 1 · providers`). Tier 2 Project is the vertical
-  stack of wide rows, hottest project first — never tiled. Tier 3 Thread tiles
-  *inside* an expanded row: four lanes across its width.
-- **A flow path is two rivers, and both are drawn the same way.** The provider
-  spine feeds each project row with a filled provider-colored band in the gutter
-  between spine and row, sized by that provider's flow in that project; then the
+- **Nested left column, two axes.** The left column's Tier 1 is a stack of
+  nested boxes: the outer box is the ACP provider (the thread's bb `providerId`,
+  labelled "opencode"/"Codex"/…) and the Tier-2 inner boxes are the
+  subscription-and-model pairs that provider rode (say
+  `synthetic / hf:zai-org/GLM-5.3-Flash`). Every box's height encodes active
+  flow — tokens per minute summed over the last 10 intervals of the sampled
+  window (`recentFlowTokMin`, `boxHeight`, `tierGroups` in views/model.ts) — so
+  the hottest model is the tallest box and a quiet one keeps a legibility floor;
+  outer boxes sort hottest-first and wrap their inner boxes. A view-chrome
+  toggle swaps Tier 1 to the subscription with Tier 2 as the model. The projects
+  remain a vertical stack of wide rows, hottest project first — never tiled —
+  and an expanded row tiles its four status lanes across its width.
+- **A flow path is two rivers, and both are drawn the same way.** A Tier-1
+  outer box feeds each project row with a filled band in the gutter between the
+  column and the row, sized by that group's flow in that project; then the
   card's own river fans from the one project-level mouth — the single dot at the
   Working lane's top-left, fed by the project header. Both segments are
   translucent bands with white beads for live activity, and rivers are never
@@ -91,9 +99,12 @@ may need to act on."*
   counts, the provider-mix strip, and the hottest thread's burn sparkline.
 - **Data**: the `flow` RPC (server.ts) reads each thread's persisted
   `usedTokens` (the totals) and resamples the plugin's local sample ring of
-  positive context growth into equal wall-clock buckets (the burn profile) —
-  unchanged by this view. Unrecognized providers ride the "other" row
-  (`providerOfModel` in views/model.ts — the server imports it).
+  positive context growth into equal wall-clock buckets (the burn profile), and
+  carries each thread's ACP provider id (`agentProvider`, from `threads.list`'s
+  `providerId`) — the Tier-1 key in provider mode; the subscription and model
+  are split client-side (`modelParts`). Unrecognized model families ride the
+  "other" row (`providerOfModel` in views/model.ts — the server imports it), and
+  a thread with no ACP provider groups under "Unknown".
 
 ## Map-style interface
 

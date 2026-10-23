@@ -14,7 +14,10 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
 - **The Token flow tab is now a swimlane flow-control stack.** Projects pile vertically, one wide row each; expanding a row tiles its status tiers across the width (Working, Needs You, Unread, Idle, left to right, hottest threads first), so the runaway thread is always the top row of the Working lane, and every card's river fans out of that project's single mouth.
   - Threads nest inside their parent's card, recursing to a grandchild and stopping there; a collapsed parent's river carries its whole subtree's flow, marked `Σ … tok/min`, and drops to its own flow once expanded (its bar and total keep the subtree sum), so a set that disaggregates stops reading as one wide river.
   - Each lane scrolls on its own; a collapsed row shows tokens, live tok/min, thread/working counts, the provider-mix strip, and the hottest thread's burn sparkline; rivers paint in front of the cards, translucent, with white beads for live activity.
-  - The `flow` RPC is unchanged — same totals, same sampled burn buckets, same live `FLOW_CHANGED` push.
+  - The `flow` RPC was unchanged by that port — same totals, same sampled burn buckets, same live `FLOW_CHANGED` push.
+- **The Token flow tab's left tier is now a stack of nested provider/model boxes.** The ACP provider is the outer box and each subscription-and-model pair (say `synthetic / hf:zai-org/GLM-5.3-Flash`) is an inner box, with every box's height encoding active token flow — tokens per minute over the last 10 intervals, so the hottest model is the tallest box and a quiet one never shrinks below a legible floor.
+  - A toggle in the view chrome swaps Tier 1 to the subscription with Tier 2 as the model, re-cutting the same roster by who it is subscribed to.
+  - The `flow` RPC now carries each thread's ACP provider id (`agentProvider`), the Tier-1 key in provider mode; the server reads it from `threads.list`'s `providerId`.
 
 ### Changed
 
