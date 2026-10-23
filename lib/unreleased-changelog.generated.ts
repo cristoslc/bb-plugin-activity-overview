@@ -29,6 +29,10 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
+    "text": "**The provider-to-project rivers now read as rivers, not hairlines.** The spine fed each project row with a thin stub capped at a few pixels, so only the project-to-card half of a path animated; the provider segment now gets the same treatment as the card segment, a filled provider-colored band sized by that provider's flow in the project, translucent, with beads drifting whenever that segment is live.",
+    "children": []
+  },
+  {
     "text": "**A running thread under a non-running parent now shows up in the Working lane.** Threads were only ever drawn inside their parent's card, so a running child of an idle or waiting thread never reached the Working lane: the row reported working threads while the lane looked empty and nothing animated. A child now stays nested only when it shares its parent's lane; otherwise it is promoted to its own lane's top level, and each lane's header count matches the cards it draws.",
     "children": []
   },

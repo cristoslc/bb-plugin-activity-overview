@@ -232,6 +232,17 @@ export function TokenFlowView() {
   pausedRef.current = paused;
   const speedRef = useRef(speedMul);
   speedRef.current = speedMul;
+  // Both segments of a path carry beads — provider→project and project→card —
+  // so the loop drifts every segment that reports live activity.
+  const beadSpecs = useMemo(
+    () => [
+      ...layout.links.map((k) => ({ id: k.id, rate: k.rate })),
+      ...layout.rows.flatMap((row) => row.lanes.flatMap((lane) => lane.rivers.map((r) => ({ id: r.id, rate: r.rate })))),
+    ],
+    [layout],
+  );
+  const beadSpecsRef = useRef(beadSpecs);
+  beadSpecsRef.current = beadSpecs;
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
@@ -239,17 +250,13 @@ export function TokenFlowView() {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       if (!pausedRef.current) {
-        for (const row of layoutRef.current.rows) {
-          for (const lane of row.lanes) {
-            for (const r of lane.rivers) {
-              if (r.rate <= 0) continue;
-              const speed = Math.max(5, 20 + 85 * Math.min(1, r.rate / 1400));
-              const off = (offsets.current.get(r.id) ?? 0) - speed * speedRef.current * dt;
-              offsets.current.set(r.id, off);
-              const el = beadRefs.current.get(r.id);
-              if (el !== undefined) el.style.strokeDashoffset = String(off);
-            }
-          }
+        for (const spec of beadSpecsRef.current) {
+          if (spec.rate <= 0) continue;
+          const speed = Math.max(5, 20 + 85 * Math.min(1, spec.rate / 1400));
+          const off = (offsets.current.get(spec.id) ?? 0) - speed * speedRef.current * dt;
+          offsets.current.set(spec.id, off);
+          const el = beadRefs.current.get(spec.id);
+          if (el !== undefined) el.style.strokeDashoffset = String(off);
         }
       }
       raf = requestAnimationFrame(step);
@@ -355,14 +362,6 @@ export function TokenFlowView() {
           role="img"
           aria-label="token flow swimlanes"
         >
-          {/* background: provider→row links (in the spine gutter) */}
-          {layout.links.map((k) => (
-            <g key={k.id} pointerEvents="none">
-              <path d={riverPath({ mouthX: k.x1, mouthY: k.y1, cardX: k.x2, cardY: k.y2, w: k.w })} fill={k.color} opacity={k.opacity} />
-              <path d={riverEdgePath({ mouthX: k.x1, mouthY: k.y1, cardX: k.x2, cardY: k.y2, w: k.w })} stroke="#fff" strokeWidth={0.8} opacity={0.18} fill="none" />
-            </g>
-          ))}
-
           {/* Tier 1 — the provider spine */}
           {layout.spine.map((b) => (
             <g key={`spine:${b.id}`} pointerEvents="none">
@@ -399,6 +398,42 @@ export function TokenFlowView() {
               beadRefs={beadRefs}
             />
           ))}
+
+          {/* Tier 1 → Tier 2: provider → project rivers. Painted after every
+              card so both segments of a path sit in front, and sized as bands
+              (not hairlines) with beads for live activity. */}
+          {layout.links.map((k) => {
+            const geo = { mouthX: k.x1, mouthY: k.y1, cardX: k.x2, cardY: k.y2, w: k.w };
+            return (
+              <g
+                key={k.id}
+                pointerEvents="none"
+                data-attn-link={k.id}
+                data-provider={k.provider}
+                data-w={k.w}
+                data-rate={k.rate}
+                data-flow={k.flow}
+              >
+                <path d={riverPath(geo)} fill={k.color} opacity={k.opacity} stroke="none" />
+                <path d={riverEdgePath(geo)} stroke="#fff" strokeWidth={0.9} opacity={0.22} fill="none" />
+                {k.rate > 0 ? (
+                  <path
+                    ref={(el) => {
+                      if (el === null) beadRefs.current.delete(k.id);
+                      else beadRefs.current.set(k.id, el);
+                    }}
+                    d={riverBeadPath({ mouthX: k.x1, mouthY: k.y1, cardX: k.x2, cardY: k.y2 })}
+                    stroke="#fff"
+                    strokeWidth={Math.max(1, Math.min(2.2, k.w * 0.22))}
+                    opacity={0.55}
+                    strokeDasharray="0.5 11"
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                ) : null}
+              </g>
+            );
+          })}
         </svg>
       </div>
 
