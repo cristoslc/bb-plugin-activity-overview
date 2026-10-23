@@ -573,6 +573,27 @@ async function swimlaneCheck(page, check) {
       };
     }
 
+    if (which === "quiet") {
+      // A thread's rate that rounds below one whole token per minute must read
+      // as "quiet", never the misleading "0 tok/min" (the operator's report).
+      const texts = [...document.querySelectorAll("[data-attn-card] text, [data-attn-row] text")].map(
+        (el) => el.textContent ?? "",
+      );
+      const zeros = [...new Set(texts.filter((t) => /(?:^|[^\d.])0 tok\/min/.test(t)))];
+      add('no card or row reads "0 tok/min"', zeros.length === 0, zeros.length ? zeros.slice(0, 3).join(" | ") : "none");
+      const quietCards = [...document.querySelectorAll("[data-attn-card]")].filter((el) =>
+        /(?:^|[^\d.])quiet\b/.test(el.textContent ?? ""),
+      );
+      add("a barely-burning thread reads as quiet", quietCards.length > 0, `${quietCards.length} quiet card(s)`);
+      const live = texts.filter((t) => /tok\/min/.test(t));
+      add("a genuinely burning thread still shows tok/min", live.length > 0, `${live.length} live label(s)`);
+      return {
+        pass: checks.every((c) => c.ok),
+        checks,
+        detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "a sub-token rate reads as quiet, never 0 tok/min",
+      };
+    }
+
     return { pass: false, checks, detail: `unknown swimlane check "${which}"` };
   }, check);
   return outcome;
@@ -629,10 +650,11 @@ async function wheelLane(page, delta) {
  * flow view looks identical whether or not the live-activity beads work, so
  * each segment is asserted directly.
  */
-async function assertBeadsAnimate(page, segment) {
+async function assertBeadsAnimate(page, segment, selectorOverride) {
   const isLinks = segment === "links";
-  const selector = isLinks ? "[data-attn-link] path[stroke-dasharray]" : '[data-attn-lane="working"] path[stroke-dasharray]';
-  const label = isLinks ? "provider→project" : "project→card";
+  const selector =
+    selectorOverride ?? (isLinks ? "[data-attn-link] path[stroke-dasharray]" : '[data-attn-lane="working"] path[stroke-dasharray]');
+  const label = selectorOverride !== undefined ? `the targeted (${selectorOverride})` : isLinks ? "provider→project" : "project→card";
   const sample = () =>
     page.evaluate(
       (sel) => [...document.querySelectorAll(sel)].map((p) => Number.parseFloat(p.style.strokeDashoffset || "0")),
@@ -824,7 +846,7 @@ async function runCase(page, evidenceDir, kase) {
           break;
         }
         case "assertBeads": {
-          const outcome = await assertBeadsAnimate(page, step.params?.segment);
+          const outcome = await assertBeadsAnimate(page, step.params?.segment, step.params?.selector);
           entry.pass = outcome.pass;
           entry.detail = outcome.detail;
           entry.checks = outcome.checks;

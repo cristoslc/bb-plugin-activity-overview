@@ -318,3 +318,70 @@ test_cases:
         params: {}
         instruction: Capture the subscription-mode boxes.
         expected: A screenshot of the subscription→model boxes.
+
+  - id: TC-11
+    title: A burning grandchild gets its own river, from the same mouth, and its beads animate
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the token-flow stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-card="thr_running"]' }
+        instruction: Wait for the runaway thread's card.
+        expected: The collapsed group head is on screen.
+      - order: 3
+        action: click
+        params: { selector: '[data-attn-card-rect="thr_running"]' }
+        instruction: Open the first level.
+        expected: The child card nests inside the parent.
+      - order: 4
+        action: waitForSelector
+        params: { selector: '[data-attn-card="thr_running_child"]' }
+        instruction: Wait for the child card.
+        expected: The child is on screen, inside the parent's box.
+      - order: 5
+        action: click
+        params: { selector: '[data-attn-card-rect="thr_running_child"]' }
+        instruction: Open the second level.
+        expected: The grandchild card nests inside the child.
+      - order: 6
+        action: waitForSelector
+        params: { selector: '[data-attn-lane="working"] [data-attn-card="thr_running_grand"][data-depth="2"]' }
+        instruction: Wait for the grandchild at depth 2.
+        expected: The grandchild card is drawn two levels deep in the Working lane.
+      - order: 7
+        action: assertCount
+        params: { selector: '[data-attn-river="thr_running_grand"] path[stroke-dasharray]', equals: 1 }
+        instruction: Count the grandchild's own bead ridge.
+        expected: The grandchild draws its own river with a bead ridge — every level fans from the one mouth.
+      - order: 8
+        action: assertBeads
+        params: { selector: '[data-attn-river="thr_running_grand"] path[stroke-dasharray]' }
+        instruction: Watch the grandchild's own beads over 500ms.
+        expected: The grandchild's river animates — its beads drift even at depth 2.
+
+  - id: TC-12
+    title: A rate too small to show as whole tok/min reads as quiet, never "0 tok/min"
+    criticality: standard
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the token-flow stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-card="thr_trickle"]' }
+        instruction: Wait for the barely-burning thread's card.
+        expected: The trickle thread is on screen.
+      - order: 3
+        action: swimlane
+        params: { check: quiet }
+        instruction: Scan every thread label for the misleading "0 tok/min".
+        expected: No card or row reads "0 tok/min"; the sub-token thread reads "quiet"; a genuinely burning thread still shows its tok/min.
