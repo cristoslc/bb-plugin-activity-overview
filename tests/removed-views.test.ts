@@ -1,8 +1,9 @@
 // Removal contract: the agent lanes and activity flow views stay deleted, but
-// the token flow view has been revived as the amplitude wave (approved mockup
-// docs/user-experience/sankey-amplitude-wave-mockup.html). This guards against
-// the lane/flow pipelines resurfacing as dead code or a dead token, while
-// permitting the token flow's model, RPC, and provider-ribbon tokens.
+// the token flow view has been revived as the swimlane flow-control view
+// (approved mockup docs/user-experience/token-flow-swimlane-mockup.html). This
+// guards against the lane/flow pipelines resurfacing as dead code or a dead
+// token, while permitting the token flow's model, RPC, and provider-ribbon
+// tokens.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as model from "../views/model.ts";
@@ -30,8 +31,16 @@ test("removed views: the model exports none of the lane/activity-flow pipelines"
   }
 });
 
-test("revived token flow: the model exports the amplitude-wave pipeline", () => {
-  for (const name of ["tokenFlowLayout", "buildFamilies", "providerOfModel", "resampleWindow"]) {
+test("revived token flow: the model exports the swimlane pipeline", () => {
+  for (const name of [
+    "swimlaneLayout",
+    "laneOf",
+    "SWIMLANES",
+    "buildForest",
+    "subtreeFlow",
+    "providerOfModel",
+    "resampleWindow",
+  ]) {
     assert.ok(name in model, `model is missing ${name}`);
   }
 });

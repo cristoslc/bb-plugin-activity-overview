@@ -859,14 +859,13 @@ export function placeRegionLabels(
   return placed;
 }
 
-// ---------- token flow (provider → project → family, amplitude wave) ----------
+// ---------- token flow (provider → project → swimlanes) ----------
 //
-// Ported from the approved amplitude-wave mockup
-// (docs/user-experience/sankey-amplitude-wave-mockup.html, v19.1). One thread
-// is one river that leaves its provider block, passes through its project's
-// stacked bar, and lands on the thread's own card row in the family column.
-// The candle is the thread's total spend (context-window usage), and the
-// project's candle run mirrors the middle bar's height exactly.
+// Ported from the approved swimlane mockup
+// (docs/user-experience/token-flow-swimlane-mockup.html). Projects pile
+// vertically, one wide row each; a project's tiers tile across its row as
+// four status lanes, and every card's river fans out of one project-level
+// mouth. The pipeline below is pure; the view paints it.
 
 /** Buckets of burn history a thread series carries (the burn profile). */
 export const FLOW_BUCKETS = 20;
@@ -1003,654 +1002,605 @@ export const TOKEN_FLOW_STATUS: Record<
   idle: { color: "var(--attn-grey-2)", factor: 0, base: 0.09 },
 };
 
-/** A family: a parent thread plus its spawned children (childOf). A family
- * whose parent left the roster collapses to the child thread alone. */
-export type FlowFamily = {
-  key: string;
-  projectId: string;
-  projectName: string;
-  threads: FlowThread[]; // parent first, then children
-};
+/* ============================ swimlane flow ============================ */
+// The token flow view's geometry, approved as the swimlane mockup
+// (docs/user-experience/token-flow-swimlane-mockup.html). Three tiers, two
+// axes: providers are a vertical spine on the left; projects PILE VERTICALLY,
+// one wide landscape row each (never tiled); a project's tiers TILE across its
+// row as four status lanes (Working, Needs You, Unread, Idle left to right).
+// A parent thread's children are CONTAINED inside its card, recursing to a
+// grandchild (MAX_DEPTH). Every card in the Working lane draws its river from
+// ONE project-level mouth; a collapsed group head carries its whole subtree
+// flow (Sigma) and drops to its own flow once expanded. The whole thing is a
+// pure function of the roster plus the open sets; the view only paints it.
 
-/**
- * Group threads into families. Deterministic: families ordered by project
- * name, then the parent thread's title, then key; members parent-first, then
- * children by creation time.
- */
-export function buildFamilies(threads: FlowThread[]): FlowFamily[] {
-  const byId = new Map(threads.map((t) => [t.id, t] as const));
-  const sorted = [...threads].sort(
-    (a, b) =>
-      a.projectName.localeCompare(b.projectName) ||
-      a.title.localeCompare(b.title) ||
-      a.id.localeCompare(b.id),
-  );
-  const families = new Map<string, FlowThread[]>();
-  for (const t of sorted) {
-    const parent = t.parentThreadId !== null ? byId.get(t.parentThreadId) : undefined;
-    const key = parent !== undefined ? parent.id : t.id;
-    const members = families.get(key);
-    if (members === undefined) families.set(key, [t]);
-    else members.push(t);
-  }
-  const built: FlowFamily[] = [...families.entries()].map(([key, members]) => ({
-    key,
-    projectId: members[0]!.projectId,
-    projectName: members[0]!.projectName,
-    threads: members.sort(
-      (a, b) =>
-        Number(a.id === key ? 0 : 1) - Number(b.id === key ? 0 : 1) ||
-        (a.createdAt ?? a.updatedAt ?? 0) - (b.createdAt ?? b.updatedAt ?? 0) ||
-        a.id.localeCompare(b.id),
-    ),
-  }));
-  built.sort(
-    (a, b) =>
-      a.projectName.localeCompare(b.projectName) ||
-      (a.threads[0]?.title ?? "").localeCompare(b.threads[0]?.title ?? "") ||
-      a.key.localeCompare(b.key),
-  );
-  return built;
-}
-
-/** Geometry constants of the amplitude-wave world (the approved mockup). */
-export const TOKEN_FLOW = {
-  /** Artboard width; the world height grows with the card rail. */
-  W: 1740,
-  H_MIN: 880,
-  H_MAX: 4600,
-  /** Column face x positions: faces span [X, X + face width]. */
-  PX: 200,
-  PW: 16,
-  JX: 860,
-  JW: 14,
-  FX: 1400,
-  ZONE_W: 300,
-  TOP: 80,
-  BOTTOM: 40,
-  FAM_TOP: 240,
-  CAPTION_H: 18,
-  /** Gutter between project card clusters; gap between cards inside one. */
-  CLUSTER_GAP: 64,
-  FAMILY_GAP: 28,
-  /** Compact row metrics; the selected card grows toward the *_SEL values. */
-  ROW_H: 26,
-  ROW_H_SEL: 32,
-  PITCH: 32,
-  PITCH_SEL: 42,
-  ZONE_PAD: 12,
-  /** Minimum gap between middle-column project boxes; provider block gap. */
-  PROJ_BOX_GAP: 48,
-  PR_GAP: 64,
-  /** Design-constant px for the largest thread's total (the mockup's 200px). */
-  TOTAL_PX: 200,
-  /** Design-constant px for the busiest burn bucket (the mockup's 56px). */
-  BUCKET_PX: 56,
-  /** Mouth gradient overlay width feeding each candle. */
-  MOUTH_PX: 60,
+/** Geometry constants of the swimlane world (the approved mockup). */
+export const SWIMLANE = {
+  /** Artboard width; the world height grows with the project stack. */
+  W: 1860,
+  TOP: 60,
+  BOTTOM: 30,
+  /** Provider spine (Tier 1): a vertical column of colored blocks. */
+  SPINE_X: 40,
+  SPINE_W: 104,
+  SPINE_TOP: 90,
+  /** Tier 2: the project stack. Rows span [ROW_X, W - ROW_R]. */
+  ROW_X: 200,
+  ROW_R: 44,
+  COLLAPSED_H: 94,
+  EXP_HDR: 80,
+  ROW_GAP: 24,
+  /** Tier 3: the four status lanes tiled across an expanded row. */
+  LANE_GAP: 22,
+  LANE_PAD: 13,
+  LANE_H: 370,
+  LANE_HDR: 28,
+  LANE_FOOT: 10,
+  HDR_PAD: 22,
+  /** Card metrics: a card is a header, plus its open children below it. */
+  THREAD_H: 54,
+  THREAD_GAP: 10,
+  SUB_GAP: 8,
+  INDENT: 42,
+  /** Working-lane gutter the rivers span before the cards. */
+  TRUNK_W: 46,
+  /** parent(0) -> child(1) -> grandchild(2); hard cap, no deeper. */
+  MAX_DEPTH: 2,
 } as const;
 
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const clampN = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+/** The four status lanes, left -> right. Needs You absorbs error. */
+export type LaneId = "working" | "needs-you" | "unread" | "idle";
 
-export type FlowPt = { x: number; y: number };
+export const SWIMLANES: ReadonlyArray<{ id: LaneId; label: string; color: string }> = [
+  { id: "working", label: "Working", color: "var(--attn-working)" },
+  { id: "needs-you", label: "Needs You", color: "var(--attn-needs-you)" },
+  { id: "unread", label: "Unread", color: "var(--attn-unread)" },
+  { id: "idle", label: "Idle", color: "var(--attn-grey-2)" },
+];
 
-/** Cubic point + the y at a given x (bisection) — the river centerlines. */
-export function cubicPt(p0: FlowPt, p1: FlowPt, p2: FlowPt, p3: FlowPt, t: number): FlowPt {
-  const s = 1 - t;
-  return {
-    x: s * s * s * p0.x + 3 * s * s * t * p1.x + 3 * s * t * t * p2.x + t * t * t * p3.x,
-    y: s * s * s * p0.y + 3 * s * s * t * p1.y + 3 * s * t * t * p2.y + t * t * t * p3.y,
-  };
+/** Fold a shape status onto its lane. */
+export function laneOf(status: string): LaneId {
+  const st = tokenFlowStatus(status);
+  if (st === "running") return "working";
+  if (st === "waiting" || st === "error") return "needs-you";
+  if (st === "done") return "unread";
+  return "idle";
 }
-export function cubicYAt(p0: FlowPt, p1: FlowPt, p2: FlowPt, p3: FlowPt, x: number): number {
-  if (p3.x - p0.x < 0.5) return p0.y;
-  let lo = 0;
-  let hi = 1;
-  for (let k = 0; k < 26; k++) {
-    const mid = (lo + hi) / 2;
-    if (cubicPt(p0, p1, p2, p3, mid).x < x) lo = mid;
-    else hi = mid;
+
+/** Only the Working lane carries rivers; every other lane is cards only. */
+export const RIVER_LANES: ReadonlyArray<LaneId> = ["working"];
+
+/** A thread with its in-roster descendants (a contained subtree). */
+export type FlowNode = { thread: FlowThread; kids: FlowNode[] };
+
+/**
+ * Build the forest of roots: a thread whose parent is absent from the roster
+ * (or explicitly has none) is a root; every other thread hangs under its
+ * parent. Deterministic: siblings sort by creation time, then title, then id.
+ */
+export function buildForest(threads: FlowThread[]): FlowNode[] {
+  const byId = new Map(threads.map((t) => [t.id, t] as const));
+  const kids = new Map<string, FlowThread[]>();
+  const roots: FlowThread[] = [];
+  for (const t of threads) {
+    const parent = t.parentThreadId !== null ? byId.get(t.parentThreadId) : undefined;
+    if (parent === undefined) roots.push(t);
+    else {
+      const list = kids.get(parent.id);
+      if (list === undefined) kids.set(parent.id, [t]);
+      else list.push(t);
+    }
   }
-  return cubicPt(p0, p1, p2, p3, (lo + hi) / 2).y;
-}
-/** Catmull-Rom → cubic path through points (the band edges). */
-export function crPath(pts: FlowPt[], first: string): string {
-  if (pts.length === 0) return "";
-  const r = (n: number) => Math.round(n * 10) / 10;
-  let d = `${first} ${r(pts[0]!.x)} ${r(pts[0]!.y)}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[Math.max(0, i - 1)]!;
-    const p1 = pts[i]!;
-    const p2 = pts[i + 1]!;
-    const p3 = pts[Math.min(pts.length - 1, i + 2)]!;
-    d +=
-      ` C ${r(p1.x + (p2.x - p0.x) / 6)} ${r(p1.y + (p2.y - p0.y) / 6)},` +
-      ` ${r(p2.x - (p3.x - p1.x) / 6)} ${r(p2.y - (p3.y - p1.y) / 6)},` +
-      ` ${r(p2.x)} ${r(p2.y)}`;
-  }
-  return d;
+  const sortThreads = (list: FlowThread[]) =>
+    [...list].sort(
+      (a, b) =>
+        (a.createdAt ?? a.updatedAt ?? 0) - (b.createdAt ?? b.updatedAt ?? 0) ||
+        a.title.localeCompare(b.title) ||
+        a.id.localeCompare(b.id),
+    );
+  const node = (t: FlowThread): FlowNode => ({
+    thread: t,
+    kids: sortThreads(kids.get(t.id) ?? []).map(node),
+  });
+  return sortThreads(roots).map(node);
 }
 
-export type FlowCard = {
-  thread: FlowThread;
-  familyKey: string;
-  projectId: string;
-  isParent: boolean;
-  y: number;
-  h: number;
-  candleH: number;
-  candleY: number;
-  candleMid: number;
-  burn: boolean;
-};
-export type FlowFamilyCard = {
-  key: string;
-  projectId: string;
-  projectName: string;
-  y: number;
-  rowsH: number;
-  pad: number;
-  panelH: number;
-  zoneY: number;
-  zoneH: number;
-  selected: boolean;
-  threads: string[];
-  members: FlowCard[];
-};
-export type FlowCluster = { name: string; captionY: number; families: FlowFamilyCard[] };
-export type FlowSlice = { provider: ProviderId; threadId: string; y: number; h: number };
-export type FlowProjectBox = {
+/** A whole subtree's consumption: own tokens + every descendant's. */
+export function subtreeFlow(n: FlowNode): number {
+  return Math.max(0, n.thread.usedTokens ?? 0) + n.kids.reduce((s, k) => s + subtreeFlow(k), 0);
+}
+
+/** A whole subtree's live rate (tok/s): own + every descendant's. */
+export function subtreeRate(n: FlowNode): number {
+  return Math.max(0, n.thread.rate ?? 0) + n.kids.reduce((s, k) => s + subtreeRate(k), 0);
+}
+
+/** True when a node is open AND below the nesting cap AND actually has kids. */
+function openKidsOf(n: FlowNode, openThreads: ReadonlySet<string>, depth: number, maxDepth: number): FlowNode[] {
+  if (depth >= maxDepth || n.kids.length === 0) return [];
+  return openThreads.has(n.thread.id) ? n.kids : [];
+}
+
+/** The height a card occupies: its header, plus each open child's block. */
+export function cardHeight(
+  n: FlowNode,
+  openThreads: ReadonlySet<string>,
+  depth = 0,
+  maxDepth: number = SWIMLANE.MAX_DEPTH,
+): number {
+  const kids = openKidsOf(n, openThreads, depth, maxDepth);
+  return SWIMLANE.THREAD_H + kids.reduce((s, k) => s + SWIMLANE.SUB_GAP + cardHeight(k, openThreads, depth + 1, maxDepth), 0);
+}
+
+/** A card's own river band thickness (px), from its shown live rate. */
+export function bandW(rate: number, maxRate: number): number {
+  if (rate <= 0 || maxRate <= 0) return 2.6;
+  return 2.6 + 13 * Math.sqrt(Math.min(1, rate / maxRate));
+}
+
+/** A river band's opacity: quiet rivers dim, hot rivers bold (0.3 .. 0.8). */
+export function riverOpacity(rate: number, maxRate: number): number {
+  const norm = maxRate > 0 ? Math.min(1, Math.max(0, rate) / maxRate) : 0;
+  const base = rate <= 0 ? 0.16 : 0.3 + 0.62 * norm;
+  return clampN(0.32 + 0.5 * base, 0.3, 0.8);
+}
+
+/** The provider -> row link thickness (px); the mockup's rateW, capped at 9. */
+export function linkW(rate: number, maxRate: number): number {
+  if (rate <= 0 || maxRate <= 0) return 1.6;
+  return Math.min(9, 2 + 15 * Math.sqrt(Math.min(1, rate / maxRate)));
+}
+
+/** A card's shown flow: subtree sum while collapsed, own flow once expanded. */
+export function shownRateOf(n: FlowNode, open: boolean): number {
+  const own = Math.max(0, n.thread.rate ?? 0);
+  return n.kids.length > 0 && !open ? subtreeRate(n) : own;
+}
+
+export type SwimlaneRiver = {
   id: string;
+  cardId: string;
+  depth: number;
+  mouthX: number;
+  mouthY: number;
+  cardX: number;
+  cardY: number;
+  w: number;
+  color: string;
+  opacity: number;
+  rate: number;
+};
+
+export type SwimlaneCard = {
+  id: string;
+  thread: FlowThread;
+  lane: LaneId;
+  depth: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Subtree consumption (the bar + the total number read from it). */
+  flow: number;
+  /** The live rate the card reports (subtree when collapsed, own when open). */
+  shownRate: number;
+  hasGroup: boolean;
+  open: boolean;
+  canOpen: boolean;
+  kidCount: number;
+  error: boolean;
+  color: string;
+};
+
+export type SwimlaneLane = {
+  id: LaneId;
   label: string;
-  total: number;
+  color: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  bodyTop: number;
+  visibleH: number;
+  count: number;
+  contentH: number;
+  overflow: boolean;
+  mouth: { x: number; y: number } | null;
+  cards: SwimlaneCard[];
+  rivers: SwimlaneRiver[];
+};
+
+export type SwimlaneProviderMix = { id: ProviderId; label: string; color: string; total: number };
+
+export type SwimlaneRow = {
+  id: string;
+  name: string;
   y: number;
   h: number;
-  threads: string[];
-  members: FlowCard[];
-  slices: FlowSlice[];
+  w: number;
+  expanded: boolean;
+  total: number;
+  rate: number;
+  threads: number;
+  working: number;
+  prov: SwimlaneProviderMix[];
+  spark: number[];
+  lanes: SwimlaneLane[];
 };
-export type FlowProviderBlock = {
+
+export type SwimlaneSpineBlock = {
   id: ProviderId;
   label: string;
   color: string;
   y: number;
   h: number;
   total: number;
-  slots: Array<{ threadId: string; y: number; h: number }>;
+  rate: number;
 };
-export type FlowRiver = {
+
+export type SwimlaneLink = {
   id: string;
   provider: ProviderId;
-  threadId: string;
-  familyKey: string;
-  projectId: string;
-  status: TokenFlowStatus;
-  rate: number | null;
-  /** Total tokens (context usage); the candle + totals stroke read from it. */
-  tokens: number;
-  /** Per-bucket burn previews (oldest → newest), the A profile / C crest. */
-  series: number[];
-  /** Piece 1 (provider → project) and piece 2 (project → card row) cubics. */
-  p0: FlowPt;
-  p1: FlowPt;
-  p2: FlowPt;
-  p3: FlowPt;
-  q0: FlowPt;
-  q1: FlowPt;
-  q2: FlowPt;
-  q3: FlowPt;
-  /** Totals stroke width in world px (B/C bands and the landing). */
+  color: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
   w: number;
+  opacity: number;
+  rate: number;
 };
-export type FlowEncoding = "A" | "B" | "C";
-export type FlowLayout = {
-  /** Effective px-per-token for totals (candles, bars, B/C widths). */
-  scale: number;
-  /** Effective px-per-token for the busiest burn bucket (A profile, C crest). */
-  bucketScale: number;
+
+export type SwimlaneLayout = {
+  W: number;
   H: number;
-  clusters: FlowCluster[];
-  families: FlowFamilyCard[];
-  cards: FlowCard[];
-  projects: FlowProjectBox[];
-  providers: FlowProviderBlock[];
-  rivers: FlowRiver[];
-  droppedThreads: FlowThread[];
+  maxThreadRate: number;
+  maxShownRate: number;
+  maxFlow: number;
+  totalRate: number;
+  spine: SwimlaneSpineBlock[];
+  links: SwimlaneLink[];
+  rows: SwimlaneRow[];
 };
+
+export type SwimlaneOpts = {
+  /** Artboard width (defaults to the mockup's SWIMLANE.W). */
+  width?: number;
+  /** Project ids whose row is expanded to its four lanes. */
+  openProjects?: ReadonlySet<string>;
+  /** Thread ids whose children are shown (nested inside the card). */
+  openThreads?: ReadonlySet<string>;
+  maxDepth?: number;
+};
+
+const clampN = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
+
+/** A filled sankey river: a band of thickness w leaving a mouth at (x1,y1)
+ *  and landing at (x2,y2). Always paired with an explicit fill at the call
+ *  site (a path with no fill defaults to black — the mockup's dark wedge). */
+export function riverPath(r: { mouthX: number; mouthY: number; cardX: number; cardY: number; w: number }): string {
+  const { mouthX: x1, mouthY: y1, cardX: x2, cardY: y2, w } = r;
+  const mx = (x1 + x2) / 2;
+  const a1 = y1 - w / 2;
+  const b1 = y1 + w / 2;
+  const a2 = y2 - w / 2;
+  const b2 = y2 + w / 2;
+  const n = (v: number) => Math.round(v * 10) / 10;
+  return (
+    `M ${n(x1)} ${n(a1)} C ${n(mx)} ${n(a1)}, ${n(mx)} ${n(a2)}, ${n(x2)} ${n(a2)}` +
+    ` L ${n(x2)} ${n(b2)} C ${n(mx)} ${n(b2)}, ${n(mx)} ${n(b1)}, ${n(x1)} ${n(b1)} Z`
+  );
+}
+
+/** The river band's top edge (a stroked hairline, fill:'none' at the call). */
+export function riverEdgePath(r: { mouthX: number; mouthY: number; cardX: number; cardY: number; w: number }): string {
+  const { mouthX: x1, mouthY: y1, cardX: x2, cardY: y2, w } = r;
+  const mx = (x1 + x2) / 2;
+  const n = (v: number) => Math.round(v * 10) / 10;
+  return `M ${n(x1)} ${n(y1 - w / 2)} C ${n(mx)} ${n(y1 - w / 2)}, ${n(mx)} ${n(y2 - w / 2)}, ${n(x2)} ${n(y2 - w / 2)}`;
+}
+
+/** The river centerline the white beads ride (fill:'none' at the call). */
+export function riverBeadPath(r: { mouthX: number; mouthY: number; cardX: number; cardY: number }): string {
+  const { mouthX: x1, mouthY: y1, cardX: x2, cardY: y2 } = r;
+  const mx = (x1 + x2) / 2;
+  const n = (v: number) => Math.round(v * 10) / 10;
+  return `M ${n(x1)} ${n(y1)} C ${n(mx)} ${n(y1)}, ${n(mx)} ${n(y2)}, ${n(x2)} ${n(y2)}`;
+}
+
+/** Cards paint parent-first, so a contained child sits atop its parent rect. */
+export function cardPaintOrder(cards: readonly SwimlaneCard[]): SwimlaneCard[] {
+  return [...cards].sort((a, b) => a.depth - b.depth || a.y - b.y || a.x - b.x || a.id.localeCompare(b.id));
+}
+
+/** Rivers paint in front of every card; deepest first so the parent is front. */
+export function riverPaintOrder(rivers: readonly SwimlaneRiver[]): SwimlaneRiver[] {
+  return [...rivers].sort((a, b) => b.depth - a.depth || a.cardY - b.cardY || a.id.localeCompare(b.id));
+}
+
+const totalFlowOf = (nodes: readonly FlowNode[]): number => nodes.reduce((s, n) => s + subtreeFlow(n), 0);
+const totalRateOf = (nodes: readonly FlowNode[]): number => nodes.reduce((s, n) => s + subtreeRate(n), 0);
+const flatNodes = (nodes: readonly FlowNode[]): FlowNode[] =>
+  nodes.flatMap((n) => [n, ...flatNodes(n.kids)]);
 
 /**
- * The full amplitude-wave layout for a thread list (already window-filtered by
- * the view). Deterministic. `selected` enlarges one family's cards and `mix`
- * (0 → 1) tweens that enlargement. Cards are clustered by project (the middle
- * column's order, so rivers never cross needlessly). The totals px-per-token
- * is the mockup's 200px design constant, shrunk only when the rail would
- * overflow the artboard; the busiest burn bucket gets a fixed 56px.
+ * The full swimlane layout for a roster (already window-filtered by the view).
+ * Deterministic. Projects pile in one vertical stack, ordered by subtree flow
+ * (the hottest project first) so the out-of-control project is at the top;
+ * inside an expanded row the four lanes tile across the width, each sorted by
+ * subtree flow (highest-consuming at the top).
  */
-export function tokenFlowLayout(
-  threads: FlowThread[],
-  opts: { selected?: string | null; mix?: number } = {},
-): FlowLayout {
-  const C = TOKEN_FLOW;
-  const selected = opts.selected ?? null;
-  const mix = clampN(opts.mix ?? 1, 0, 1);
-  const tokensOf = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
+export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): SwimlaneLayout {
+  const C = SWIMLANE;
+  const W = opts.width ?? C.W;
+  const maxDepth = opts.maxDepth ?? C.MAX_DEPTH;
+  const openProjects = opts.openProjects ?? new Set<string>();
+  const openThreads = opts.openThreads ?? new Set<string>();
+  const roots = buildForest(threads);
 
-  // Crowding: drop the smallest families until the card rail fits the artboard.
-  const dropped: FlowThread[] = [];
-  let families = buildFamilies(threads);
-  const famTokens = (f: FlowFamily) => f.threads.reduce((s, t) => s + tokensOf(t), 0);
-
-  const spanOf2 = (vals: number[]) => (vals.length ? Math.max(...vals) - Math.min(...vals) : 0);
-
-  /** Positions the card rail for one effective totals scale; returns the
-   *  families, cards and the column bottom (world px). */
-  const rail = (fams: FlowFamily[], u: number) => {
-    const clusters: FlowCluster[] = [];
-    const cards: FlowCard[] = [];
-    const familyCards: FlowFamilyCard[] = [];
-    const rowHOf = (isSel: boolean, total: number) => {
-      const base = isSel ? lerp(C.ROW_H, C.ROW_H_SEL, mix) : C.ROW_H;
-      const candle = total > 0 ? Math.max(3, total * u) : 3;
-      return Math.max(base, candle);
-    };
-    const gapOf = (isSel: boolean) =>
-      isSel ? lerp(C.PITCH - C.ROW_H, C.PITCH_SEL - C.ROW_H_SEL, mix) : C.PITCH - C.ROW_H;
-    const padOf = () => C.ZONE_PAD;
-    const panelOf = (f: FlowFamily) =>
-      selected === f.key ? lerp(0, 6 + 14 + f.threads.length * 13 + 4, mix) : 0;
-
-    // Group families into project clusters (alphabetical, like the mockup).
-    const names = [...new Set(fams.map((f) => f.projectName))].sort((a, b) =>
-      a.localeCompare(b),
-    );
-    for (const name of names) {
-      const cfams = fams.filter((f) => f.projectName === name);
-      clusters.push({ name, captionY: 0, families: [] });
-      for (const f of cfams) {
-        const isSel = f.key === selected;
-        const members: FlowCard[] = [];
-        let cy = 0;
-        f.threads.forEach((t, i) => {
-          const tTotal = tokensOf(t);
-          const h = rowHOf(isSel, tTotal);
-          if (i) cy += gapOf(isSel);
-          members.push({
-            thread: t,
-            familyKey: f.key,
-            projectId: f.projectId,
-            isParent: i === 0,
-            y: cy,
-            h,
-            candleH: 0,
-            candleY: 0,
-            candleMid: 0,
-            burn: tTotal > 0,
-          });
-          cy += h;
-        });
-        familyCards.push({
-          key: f.key,
-          projectId: f.projectId,
-          projectName: f.projectName,
-          y: 0,
-          rowsH: cy,
-          pad: padOf(),
-          panelH: panelOf(f),
-          zoneY: 0,
-          zoneH: 0,
-          selected: isSel,
-          threads: f.threads.map((t) => t.id),
-          members,
-        });
-        clusters[clusters.length - 1]!.families.push(familyCards[familyCards.length - 1]!);
-      }
-    }
-
-    let y = C.FAM_TOP;
-    for (const cl of clusters) {
-      cl.captionY = y + 12;
-      y += C.CAPTION_H;
-      cl.families.forEach((fc, fi) => {
-        if (fi) y += C.FAMILY_GAP;
-        fc.y = y;
-        fc.zoneY = y - fc.pad;
-        fc.zoneH = fc.rowsH + 2 * fc.pad + fc.panelH;
-        let my = y;
-        fc.members.forEach((card, mi) => {
-          if (mi) my += gapOf(fc.selected);
-          card.y = my;
-          my += card.h;
-        });
-        y += fc.rowsH + 2 * fc.pad + fc.panelH;
-        for (const card of fc.members) cards.push(card);
-      });
-      y += C.CLUSTER_GAP;
-    }
-    y -= C.CLUSTER_GAP; // back off the trailing cluster gap
-    return { clusters, familyCards, cards, bottom: y };
-  };
-
-  // Effective totals scale: the 200px design constant, shrunk to fit if the
-  // rail would overflow the artboard (cards keep their floors; only the fit
-  // budget shrinks). Solve by fixed-point over the floors, like the mockup.
-  const maxTotal = Math.max(1, ...threads.map(tokensOf));
-  const designU = C.TOTAL_PX / maxTotal;
-  const availH = C.H_MAX - C.FAM_TOP - C.BOTTOM;
-  const solveU = (fams: FlowFamily[], budget: number) => {
-    let famGapCount = 0;
-    let fixed = 0;
-    const names = [...new Set(fams.map((f) => f.projectName))];
-    for (const name of names) {
-      const cfams = fams.filter((f) => f.projectName === name);
-      fixed += C.CAPTION_H;
-      fixed += cfams.reduce((s, f) => s + f.threads.length * C.ROW_H + 2 * C.ZONE_PAD, 0);
-      famGapCount += Math.max(0, cfams.length - 1);
-    }
-    const gaps =
-      Math.max(0, names.length - 1) * C.CLUSTER_GAP + famGapCount * C.FAMILY_GAP + fixed;
-    const room = budget - gaps;
-    const all = fams.flatMap((f) => f.threads);
-    let u = room > 0 && all.length ? room / all.reduce((s, t) => s + tokensOf(t), 0) : 0;
-    for (let pass = 0; pass < 12; pass++) {
-      let floored = 0;
-      let free = 0;
-      for (const t of all) {
-        if (tokensOf(t) * u < C.ROW_H) floored += C.ROW_H;
-        else free += tokensOf(t);
-      }
-      const next = free > 0 ? (room - floored) / free : 0;
-      if (Math.abs(next - u) < 1e-9) {
-        u = Math.max(0, next);
-        break;
-      }
-      u = Math.max(0, next);
-    }
-    return Math.max(0, u);
-  };
-
-  let u = designU;
-  for (;;) {
-    const r = rail(families, u);
-    const need = r.bottom + C.BOTTOM;
-    if (need <= C.H_MIN || r.bottom <= C.FAM_TOP + (C.H_MAX - C.FAM_TOP - C.BOTTOM)) {
-      // Fits by growing the artboard (or already fits the minimum height).
-      break;
-    }
-    // Overflowed the max artboard: shrink the totals scale to the fit budget.
-    const fitU = solveU(families, availH);
-    if (fitU < designU - 1e-9) {
-      const r2 = rail(families, fitU);
-      if (r2.bottom <= C.FAM_TOP + availH) {
-        u = fitU;
-        break;
-      }
-    }
-    if (families.length <= 1) {
-      u = fitU;
-      break;
-    }
-    // Still too crowded: drop the smallest family and retry.
-    const smallest = [...families].sort(
-      (a, b) =>
-        famTokens(a) - famTokens(b) ||
-        (a.threads[0]?.updatedAt ?? 0) - (b.threads[0]?.updatedAt ?? 0) ||
-        a.key.localeCompare(b.key),
-    )[0]!;
-    dropped.push(...smallest.threads);
-    const gone = new Set(smallest.threads.map((t) => t.id));
-    families = families.filter((f) => !f.threads.some((t) => gone.has(t.id)));
+  let maxThreadRate = 0;
+  let maxShownRate = 0;
+  let maxFlow = 0;
+  for (const n of flatNodes(roots)) {
+    maxThreadRate = Math.max(maxThreadRate, Math.max(0, n.thread.rate ?? 0));
+    maxShownRate = Math.max(maxShownRate, subtreeRate(n));
+    maxFlow = Math.max(maxFlow, subtreeFlow(n));
   }
 
-  const placed = rail(families, u);
-  const H = Math.max(C.H_MIN, placed.bottom + C.BOTTOM);
-
-  // Candles: the card row's left-edge bar; burning rows carry their honest
-  // data height, zero rows a full-slot grey stub. The row is sized to hold it.
-  for (const card of placed.cards) {
-    const total = tokensOf(card.thread);
-    card.candleH = total > 0 ? Math.max(3, total * u) : card.h;
-    card.candleY = total > 0 ? card.y + card.h - card.candleH : card.y;
-    card.candleMid = card.y + card.h / 2;
-    card.burn = total > 0;
+  // Tier 1 — provider spine (across the whole roster).
+  const provTotals = new Map<ProviderId, { total: number; rate: number }>();
+  for (const t of threads) {
+    const id = providerOf(t);
+    const cur = provTotals.get(id) ?? { total: 0, rate: 0 };
+    cur.total += Math.max(0, t.usedTokens ?? 0);
+    cur.rate += Math.max(0, t.rate ?? 0);
+    provTotals.set(id, cur);
   }
-  const cardById = new Map(placed.cards.map((c) => [c.thread.id, c]));
-
-  // Project boxes (middle): each box spans its members' card rows, with the
-  // token-sliced core as the minimum; boxes spread across the column.
-  const projectNames = [...new Set(placed.cards.map((c) => c.thread.projectId))];
-  const projectBoxes: FlowProjectBox[] = projectNames
-    .map((id) => {
-      const members = placed.cards.filter((c) => c.thread.projectId === id);
-      const total = members.reduce((s, c) => s + tokensOf(c.thread), 0);
-      return { id, label: members[0]!.thread.projectName, members, total, y: 0, h: 0, threads: [], slices: [] };
-    })
-    .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
-  for (const p of projectBoxes) {
-    const span = spanOf2(p.members.flatMap((c) => [c.y, c.y + c.h]));
-    // v19.1: the bar's height IS the candle run — the extent its members'
-    // candles span — so a project's candle run mirrors its middle bar exactly.
-    // An all-zero project keeps a thin honest bar.
-    const tops = p.members.map((c) => c.candleY);
-    const bots = p.members.map((c) => c.candleY + c.candleH);
-    const run = Math.max(...bots) - Math.min(...tops);
-    const burning = p.members.some((c) => c.burn);
-    p.h = burning ? Math.max(3, run) : Math.max(8, span, 3);
-    p.threads = p.members.map((c) => c.thread.id);
-  }
+  const grandTotal = [...provTotals.values()].reduce((s, v) => s + v.total, 0);
+  const presentProviders = PROVIDER_ORDER.filter((id) => (provTotals.get(id)?.total ?? 0) > 0);
+  const spine: SwimlaneSpineBlock[] = [];
   {
-    const boxTotal = projectBoxes.reduce((s, p) => s + p.h, 0);
-    const slack =
-      projectBoxes.length > 1 ? (H - C.TOP - C.BOTTOM - boxTotal) / (projectBoxes.length - 1) : 0;
-    const gapP = Math.max(C.PROJ_BOX_GAP, slack);
-    let c = C.TOP + Math.max(0, (H - C.TOP - C.BOTTOM - boxTotal - gapP * Math.max(0, projectBoxes.length - 1)) / 2);
-    for (const p of projectBoxes) {
-      p.y = c;
-      let cc = c;
-      for (const m of p.members) {
-        const sliceH = p.total > 0 ? (tokensOf(m.thread) * u) / p.total * p.h : p.h / p.members.length;
-        p.slices.push({ provider: providerOf(m.thread), threadId: m.thread.id, y: cc, h: sliceH });
-        cc += sliceH;
-      }
-      c += p.h + gapP;
+    let y = C.SPINE_TOP;
+    for (const id of presentProviders) {
+      const v = provTotals.get(id)!;
+      const frac = grandTotal > 0 ? v.total / grandTotal : 1 / Math.max(1, presentProviders.length);
+      const h = Math.max(56, 420 * frac);
+      spine.push({ id, label: PROVIDER_LABELS[id], color: PROVIDER_TOKENS[id], y, h, total: v.total, rate: v.rate });
+      y += h + 14;
     }
   }
-  const sliceById = new Map<string, FlowSlice>();
-  for (const p of projectBoxes) for (const s of p.slices) sliceById.set(s.threadId, s);
+  const spineById = new Map(spine.map((b) => [b.id, b] as const));
 
-  // Provider blocks (left): one block per provider, pairs ordered by card y.
-  const providers: FlowProviderBlock[] = [];
-  {
-    const present = PROVIDER_ORDER.filter((id) => placed.cards.some((c) => providerOf(c.thread) === id));
-    const blocks = present.map((id) => {
-      const pairs = placed.cards
-        .filter((c) => providerOf(c.thread) === id)
-        .sort((a, b) => a.y - b.y || a.thread.id.localeCompare(b.thread.id));
-      return { id, pairs, h: pairs.reduce((s, c) => s + Math.max(2, tokensOf(c.thread) * u), 0) };
-    });
-    const stackH = blocks.reduce((s, b) => s + b.h, 0) + Math.max(0, blocks.length - 1) * C.PR_GAP;
-    let y = C.TOP + Math.max(0, (H - C.TOP - C.BOTTOM - stackH) / 2);
-    for (const b of blocks) {
-      const start = y;
-      const slots: Array<{ threadId: string; y: number; h: number }> = [];
-      let sy = start;
-      for (const c of b.pairs) {
-        const sh = Math.max(2, tokensOf(c.thread) * u);
-        slots.push({ threadId: c.thread.id, y: sy, h: sh });
-        sy += sh;
-      }
-      providers.push({
-        id: b.id,
-        label: PROVIDER_LABELS[b.id],
-        color: PROVIDER_TOKENS[b.id],
-        y: start,
-        h: Math.max(2, b.h),
-        total: b.pairs.reduce((s, c) => s + tokensOf(c.thread), 0),
-        slots,
+  // Tier 2 — group roots into projects, hottest first.
+  const projectMap = new Map<string, { id: string; name: string; roots: FlowNode[] }>();
+  for (const r of roots) {
+    const p = projectMap.get(r.thread.projectId);
+    if (p === undefined) {
+      projectMap.set(r.thread.projectId, {
+        id: r.thread.projectId,
+        name: r.thread.projectName,
+        roots: [r],
       });
-      y = sy + C.PR_GAP;
-    }
+    } else p.roots.push(r);
   }
-  const provSlot = new Map<string, { y: number; h: number }>();
-  for (const p of providers) for (const s of p.slots) provSlot.set(s.threadId, s);
-
-  // Rivers: one per burning thread, provider slot → project slice → card row.
-  const rivers: FlowRiver[] = [];
-  const seg2X0 = C.JX + C.JW;
-  const seg2Span = C.FX - 6 - seg2X0;
-  // The busiest burn bucket sets the interval scale (A profile, C crest).
-  let maxBucket = 1;
-  for (const t of placed.cards.map((c) => c.thread)) {
-    for (const v of t.series) if (v > maxBucket) maxBucket = v;
-  }
-  const bucketScale = C.BUCKET_PX / maxBucket;
-  for (const card of placed.cards) {
-    const t = card.thread;
-    const total = tokensOf(t);
-    if (total <= 0) continue;
-    const prov = providerOf(t);
-    const ps = provSlot.get(t.id);
-    const js = sliceById.get(t.id);
-    if (ps === undefined || js === undefined) continue;
-    const w = Math.max(1.5, total * u - 1);
-    const sy = ps.y + ps.h / 2;
-    const py = js.y + js.h / 2;
-    const p0 = { x: C.PX + C.PW, y: sy };
-    const p1 = { x: (p0.x + C.JX) / 2, y: sy };
-    const p2 = { x: (p0.x + C.JX) / 2, y: py };
-    const p3 = { x: C.JX, y: py };
-    const q0 = { x: seg2X0, y: py };
-    const q1 = { x: seg2X0 + seg2Span * 0.55, y: py };
-    const q2 = { x: seg2X0 + seg2Span * 0.85, y: card.candleMid };
-    const q3 = { x: C.FX - 6, y: card.candleMid };
-    rivers.push({
-      id: `river:${t.id}`,
-      provider: prov,
-      threadId: t.id,
-      familyKey: card.familyKey,
-      projectId: t.projectId,
-      status: tokenFlowStatus(t.status),
-      rate: t.rate,
-      tokens: total,
-      series: t.series.length ? t.series : new Array<number>(FLOW_BUCKETS).fill(0),
-      p0,
-      p1,
-      p2,
-      p3,
-      q0,
-      q1,
-      q2,
-      q3,
-      w,
-    });
-  }
-
-  return {
-    scale: u,
-    bucketScale,
-    H,
-    clusters: placed.clusters,
-    families: placed.familyCards,
-    cards: placed.cards,
-    projects: projectBoxes,
-    providers,
-    rivers,
-    droppedThreads: dropped,
-  };
-}
-
-/** The river's centerline y at world x. */
-export function riverYAt(r: FlowRiver, x: number): number {
-  if (x <= TOKEN_FLOW.JX) return cubicYAt(r.p0, r.p1, r.p2, r.p3, x);
-  return cubicYAt(r.q0, r.q1, r.q2, r.q3, x);
-}
-/** The centerline's unit-normal denominator (hypot(1, slope)) at world x. */
-export function riverSlope(r: FlowRiver, x: number): number {
-  const xPrev = Math.max(r.p0.x, x - 2);
-  const xNext = Math.min(r.q3.x, x + 2);
-  const yPrev = riverYAt(r, xPrev);
-  const yNext = riverYAt(r, xNext);
-  return Math.hypot(1, (yNext - yPrev) / (xNext - xPrev || 2));
-}
-/** The river's band width (px) at world x for an encoding: A = the per-bucket
- *  burn profile on the bucket scale; B/C = the totals width everywhere. */
-export function riverWidthAt(r: FlowRiver, x: number, bucketScale: number, enc: FlowEncoding): number {
-  if (enc !== "A") return r.w;
-  const prof = riverProfileAt(r, x, bucketScale);
-  return Math.max(2, prof);
-}
-/** Interpolate the A profile (bucket·bucketScale) at world x. */
-export function riverProfileAt(r: FlowRiver, x: number, bucketScale: number): number {
-  const n = r.series.length || FLOW_BUCKETS;
-  const f01 = ((x - r.p0.x) / (r.q3.x - r.p0.x)) * n - 0.5;
-  if (f01 <= 0) return r.series[0]! * bucketScale;
-  if (f01 >= n - 1) return r.series[n - 1]! * bucketScale;
-  const i = Math.floor(f01);
-  const fr = f01 - i;
-  return (r.series[i]! + (r.series[i + 1]! - r.series[i]!) * fr) * bucketScale;
-}
-
-/** Build the filled band, the gradient mouth and (A/C) the bright crest. */
-export function buildRiverPaths(
-  r: FlowRiver,
-  bucketScale: number,
-  enc: FlowEncoding,
-): { bandD: string; mouthD: string; crestD: string | null; topPts: FlowPt[] } {
-  const C = TOKEN_FLOW;
-  const widthAt = (x: number) => riverWidthAt(r, x, bucketScale, enc);
-  const xs1 = Array.from({ length: 7 }, (_, i) => r.p0.x + (C.JX - r.p0.x) * (i / 6));
-  const xs2 = Array.from({ length: 15 }, (_, i) => seg2Start() + seg2Width() * (i / 14));
-  const xsAll = enc === "A" ? xs1.concat(xs2) : xs2;
-  const top: FlowPt[] = [];
-  const bot: FlowPt[] = [];
-  for (const x of xsAll) {
-    const y = riverYAt(r, x);
-    const nl = riverSlope(r, x);
-    const half = widthAt(x) / 2;
-    top.push({ x, y: y - half / nl });
-    bot.push({ x, y: y + half / nl });
-  }
-  const bandD = crPath(top, "M") + crPath([...bot].reverse(), " L") + " Z";
-  const mx0 = C.FX - C.MOUTH_PX;
-  const mTop: FlowPt[] = [];
-  const mBot: FlowPt[] = [];
-  for (let i = 0; i < 7; i++) {
-    const x = mx0 + (C.FX - mx0) * (i / 6);
-    const y = riverYAt(r, x);
-    const nl = riverSlope(r, x);
-    const half = widthAt(x) / 2;
-    mTop.push({ x, y: y - half / nl });
-    mBot.push({ x, y: y + half / nl });
-  }
-  const mouthD = crPath(mTop, "M") + crPath([...mBot].reverse(), " L") + " Z";
-  let crestD: string | null = null;
-  if (enc === "A") crestD = crPath(top, "M");
-  else if (enc === "C") {
-    // The crest rides inside the totals band at its own (bucket) scale.
-    const half = r.w / 2;
-    const crust: FlowPt[] = [];
-    for (const x of xsAll) {
-      const y = riverYAt(r, x);
-      const nl = riverSlope(r, x);
-      const a = Math.min(riverProfileAt(r, x, bucketScale) / 2, half / nl * 0.98);
-      crust.push({ x, y: y - a / nl });
-    }
-    crestD = crPath(crust, "M");
-  }
-  return { bandD, mouthD, crestD, topPts: top };
-  function seg2Start() {
-    return C.JX + C.JW;
-  }
-  function seg2Width() {
-    return C.FX - 6 - (C.JX + C.JW);
-  }
-}
-
-/** The river centerline as one path (beads ride it in A/B/C). */
-export function riverCenterPath(r: FlowRiver): string {
-  const r2 = (n: number) => Math.round(n * 10) / 10;
-  return (
-    `M ${r2(r.p0.x)} ${r2(r.p0.y)} C ${r2(r.p1.x)} ${r2(r.p1.y)}, ${r2(r.p2.x)} ${r2(r.p2.y)}, ${r2(r.p3.x)} ${r2(r.p3.y)}` +
-    ` L ${r2(r.q0.x)} ${r2(r.q0.y)} C ${r2(r.q1.x)} ${r2(r.q1.y)}, ${r2(r.q2.x)} ${r2(r.q2.y)}, ${r2(r.q3.x)} ${r2(r.q3.y)}`
+  const projects = [...projectMap.values()].sort(
+    (a, b) =>
+      totalFlowOf(b.roots) - totalFlowOf(a.roots) ||
+      a.name.localeCompare(b.name) ||
+      a.id.localeCompare(b.id),
   );
+
+  const rowX = C.ROW_X;
+  const rowW = W - C.ROW_X - C.ROW_R;
+  const lanes = SWIMLANES;
+  const laneW = (rowW - 2 * C.HDR_PAD - (lanes.length - 1) * C.LANE_GAP) / lanes.length;
+
+  const rows: SwimlaneRow[] = [];
+  const links: SwimlaneLink[] = [];
+  let y = C.TOP;
+
+  for (const p of projects) {
+    const present = p.roots.some((r) => r.thread.projectId === p.id);
+    const nodes = flatNodes(p.roots);
+    const threadsAll = nodes.map((n) => n.thread);
+    const total = threadsAll.reduce((s, t) => s + Math.max(0, t.usedTokens ?? 0), 0);
+    const rate = threadsAll.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0);
+    const working = threadsAll.filter((t) => laneOf(t.status) === "working").length;
+    const provMap = new Map<ProviderId, number>();
+    for (const t of threadsAll) {
+      const id = providerOf(t);
+      provMap.set(id, (provMap.get(id) ?? 0) + Math.max(0, t.usedTokens ?? 0));
+    }
+    const prov: SwimlaneProviderMix[] = PROVIDER_ORDER.filter((id) => (provMap.get(id) ?? 0) > 0).map((id) => ({
+      id,
+      label: PROVIDER_LABELS[id],
+      color: PROVIDER_TOKENS[id],
+      total: provMap.get(id) ?? 0,
+    }));
+    // The burn sparkline follows the hottest thread in the project.
+    const busiest = [...nodes].sort(
+      (a, b) =>
+        Math.max(0, b.thread.rate ?? 0) - Math.max(0, a.thread.rate ?? 0) ||
+        subtreeFlow(b) - subtreeFlow(a) ||
+        a.thread.id.localeCompare(b.thread.id),
+    )[0];
+    const spark = busiest !== undefined && busiest.thread.series.length > 0 ? busiest.thread.series : new Array<number>(FLOW_BUCKETS).fill(0);
+
+    const expanded = present && openProjects.has(p.id);
+    const h = expanded ? C.EXP_HDR + 12 + C.LANE_H + 16 : C.COLLAPSED_H;
+    const row: SwimlaneRow = {
+      id: p.id,
+      name: p.name,
+      y,
+      h,
+      w: rowW,
+      expanded,
+      total,
+      rate,
+      threads: threadsAll.length,
+      working,
+      prov,
+      spark,
+      lanes: [],
+    };
+
+    if (expanded) {
+      const laneTop = y + C.EXP_HDR + 12;
+      const bodyTop = laneTop + C.LANE_HDR;
+      const visibleH = C.LANE_H - C.LANE_HDR - C.LANE_FOOT;
+      for (let i = 0; i < lanes.length; i++) {
+        const def = lanes[i]!;
+        const lx = rowX + C.HDR_PAD + i * (laneW + C.LANE_GAP);
+        const inLane = p.roots
+          .filter((r) => laneOf(r.thread.status) === def.id)
+          .sort(
+            (a, b) =>
+              subtreeFlow(b) - subtreeFlow(a) ||
+              a.thread.title.localeCompare(b.thread.title) ||
+              a.thread.id.localeCompare(b.thread.id),
+          );
+        const isRiver = RIVER_LANES.includes(def.id);
+        const gw = isRiver ? C.TRUNK_W + 10 : 0;
+        const cardX = lx + C.LANE_PAD + gw;
+        const cardW = laneW - 2 * C.LANE_PAD - gw;
+        const mouth = isRiver ? { x: lx + C.LANE_PAD + 4, y: bodyTop + 14 } : null;
+
+        const cards: SwimlaneCard[] = [];
+        const rivers: SwimlaneRiver[] = [];
+
+        // `y` is the card's own top (absolute); children are placed below it
+        // from that anchor, exactly like the mockup, so a nested child never
+        // lands on top of its parent.
+        const place = (n: FlowNode, depth: number, x: number, y: number, nodeW: number): void => {
+          const kidCount = n.kids.length;
+          const canOpen = depth < maxDepth && kidCount > 0;
+          const open = canOpen && openThreads.has(n.thread.id);
+          const kids = open ? n.kids : [];
+          const cardH = cardHeight(n, openThreads, depth, maxDepth);
+          const card: SwimlaneCard = {
+            id: n.thread.id,
+            thread: n.thread,
+            lane: def.id,
+            depth,
+            x,
+            y,
+            w: nodeW,
+            h: cardH,
+            flow: subtreeFlow(n),
+            shownRate: shownRateOf(n, open),
+            hasGroup: kidCount > 0,
+            open,
+            canOpen,
+            kidCount,
+            error: tokenFlowStatus(n.thread.status) === "error",
+            color: PROVIDER_TOKENS[providerOf(n.thread)],
+          };
+          cards.push(card);
+          if (mouth !== null) {
+            rivers.push({
+              id: `river:${n.thread.id}`,
+              cardId: n.thread.id,
+              depth,
+              mouthX: mouth.x,
+              mouthY: mouth.y,
+              cardX: x,
+              cardY: y + 16,
+              w: bandW(card.shownRate, maxShownRate),
+              color: card.color,
+              opacity: riverOpacity(card.shownRate, maxShownRate),
+              rate: card.shownRate,
+            });
+          }
+          if (kids.length > 0) {
+            // The indent shrinks with the card so a nested child stays inside
+            // its parent even in a narrow lane.
+            const indent = Math.min(C.INDENT, Math.max(12, Math.round(nodeW * 0.22)));
+            let childY = y + C.THREAD_H;
+            for (const k of kids) {
+              childY += C.SUB_GAP;
+              place(k, depth + 1, x + indent, childY, nodeW - indent - 8);
+              childY += cardHeight(k, openThreads, depth + 1, maxDepth);
+            }
+          }
+        };
+
+        let cy = bodyTop + C.LANE_PAD;
+        for (const r of inLane) {
+          place(r, 0, cardX, cy, cardW);
+          cy += cardHeight(r, openThreads, 0, maxDepth) + C.THREAD_GAP;
+        }
+        const contentH = cy - bodyTop;
+        row.lanes.push({
+          id: def.id,
+          label: def.label,
+          color: def.color,
+          x: lx,
+          y: laneTop,
+          w: laneW,
+          h: C.LANE_H,
+          bodyTop,
+          visibleH,
+          count: inLane.length,
+          contentH,
+          overflow: contentH > visibleH,
+          mouth,
+          cards,
+          rivers,
+        });
+      }
+
+      // Provider -> row links.
+      const cyMid = y + C.EXP_HDR / 2;
+      for (const mix of prov) {
+        const block = spineById.get(mix.id);
+        if (block === undefined) continue;
+        links.push({
+          id: `link:${p.id}:${mix.id}`,
+          provider: mix.id,
+          color: mix.color,
+          x1: C.SPINE_X + C.SPINE_W,
+          y1: block.y + block.h / 2,
+          x2: rowX + 4,
+          y2: cyMid,
+          w: linkW(rate, maxThreadRate),
+          opacity: riverOpacity(rate, maxThreadRate),
+          rate,
+        });
+      }
+    } else {
+      const cyMid = y + C.COLLAPSED_H / 2;
+      for (const mix of prov) {
+        const block = spineById.get(mix.id);
+        if (block === undefined) continue;
+        links.push({
+          id: `link:${p.id}:${mix.id}`,
+          provider: mix.id,
+          color: mix.color,
+          x1: C.SPINE_X + C.SPINE_W,
+          y1: block.y + block.h / 2,
+          x2: rowX + 4,
+          y2: cyMid,
+          w: linkW(rate, maxThreadRate),
+          opacity: riverOpacity(rate, maxThreadRate),
+          rate,
+        });
+      }
+    }
+
+    rows.push(row);
+    y += h + C.ROW_GAP;
+  }
+
+  const H = Math.max(240, y - C.ROW_GAP + C.BOTTOM);
+  return {
+    W,
+    H,
+    maxThreadRate,
+    maxShownRate,
+    maxFlow,
+    totalRate: threads.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0),
+    spine,
+    links,
+    rows,
+  };
 }
