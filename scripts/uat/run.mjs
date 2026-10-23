@@ -326,6 +326,171 @@ async function assertPulse(page) {
   };
 }
 
+// ---------- swimlane token-flow helpers ----------
+
+/**
+ * Layout-invariant probes for the token-flow swimlanes, run in the page. Each
+ * check reads the data-attn-* marks the view paints, so the assertions track
+ * what actually rendered, not a re-derivation of the model.
+ */
+async function swimlaneCheck(page, check) {
+  const outcome = await page.evaluate((which) => {
+    const checks = [];
+    const add = (name, ok, detail) => checks.push({ name, ok, detail });
+    const svg = document.querySelector('svg[aria-label="token flow swimlanes"]');
+    if (svg === null) return { pass: false, detail: "the token flow stage is not mounted", checks: [{ name: "stage", ok: false, detail: "no swimlane svg" }] };
+    const rects = (sel) => [...document.querySelectorAll(sel)];
+    const box = (el) => {
+      const r = el.getBoundingClientRect();
+      const id =
+        el.getAttribute("data-attn-row-rect") ??
+        el.getAttribute("data-attn-lane-rect") ??
+        el.getAttribute("data-attn-row") ??
+        el.getAttribute("data-attn-lane") ??
+        "";
+      return { id, l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height };
+    };
+
+    if (which === "stack") {
+      const rows = rects("[data-attn-row-rect]");
+      add("rows present", rows.length >= 2, `${rows.length} project rows`);
+      const boxes = rows.map(box);
+      for (let i = 1; i < boxes.length; i++) {
+        add(`row ${boxes[i].id} stacks below ${boxes[i - 1].id}`, boxes[i].t >= boxes[i - 1].b - 0.5, `${boxes[i].t} >= ${boxes[i - 1].b}`);
+      }
+      const widths = new Set(boxes.map((b) => Math.round(b.w)));
+      const lefts = new Set(boxes.map((b) => Math.round(b.l)));
+      add("rows share one full width (never tiled)", widths.size === 1 && lefts.size === 1, `lefts ${[...lefts]} widths ${[...widths]}`);
+      const stage = document.querySelector("[data-attn-stage]");
+      if (stage !== null) {
+        const sr = stage.getBoundingClientRect();
+        add("the stack fits the stage width", boxes.every((b) => b.r <= sr.right + 1 && b.l >= sr.left - 1), `stage ${sr.left.toFixed(0)}..${sr.right.toFixed(0)}`);
+      }
+      return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "projects pile vertically, one full-width row each" };
+    }
+
+    if (which === "lanes") {
+      const lanes = rects("[data-attn-lane-rect]");
+      add("four lanes", lanes.length === 4, `${lanes.length} lanes`);
+      if (lanes.length !== 4) return { pass: false, checks, detail: "expected four lanes" };
+      const boxes = lanes.map(box);
+      add("lane order", JSON.stringify(boxes.map((b) => b.id)) === JSON.stringify(["working", "needs-you", "unread", "idle"]), boxes.map((b) => b.id).join(", "));
+      for (let i = 1; i < boxes.length; i++) {
+        // Occlusion: no lane may overlap the one before it (a gutter separates them).
+        add(`${boxes[i].id} does not overlap ${boxes[i - 1].id}`, boxes[i].l >= boxes[i - 1].r - 0.5, `left ${boxes[i].l.toFixed(1)} >= right ${boxes[i - 1].r.toFixed(1)}`);
+      }
+      const heights = boxes.map((b) => Math.round(b.h));
+      add("lanes share one height band", new Set(heights).size === 1, `heights ${[...new Set(heights)]}`);
+      // The lane band sits inside the row, below the header (no lane under it).
+      const rowEl = document.querySelector('[data-attn-row][data-expanded="true"] [data-attn-row-rect]');
+      if (rowEl !== null) {
+        const rb = box(rowEl);
+        add("lanes sit inside the row", boxes.every((b) => b.l >= rb.l - 0.5 && b.r <= rb.r + 0.5), `row ${rb.l.toFixed(1)}..${rb.r.toFixed(1)}`);
+        add("lanes sit below the row header", boxes.every((b) => b.t >= rb.t + 60), "lanes start below the expanded header");
+      }
+      // The whole world must fit the stage: no lane may be painted off-screen.
+      const stage = document.querySelector("[data-attn-stage]");
+      if (stage !== null) {
+        const sr = stage.getBoundingClientRect();
+        add("all four lanes fit the stage width", boxes.every((b) => b.r <= sr.right + 1), `last lane ends ${Math.max(...boxes.map((b) => b.r)).toFixed(0)}, stage ends ${sr.right.toFixed(0)}`);
+      }
+      return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "four lanes tiled left→right, gutter-separated, no overlap" };
+    }
+
+    if (which === "rivers") {
+      const lane = document.querySelector('[data-attn-lane="working"]');
+      if (lane === null) return { pass: false, checks, detail: "no working lane" };
+      const order = [...lane.querySelectorAll("[data-attn-card], [data-attn-river]")];
+      const cards = order.filter((el) => el.hasAttribute("data-attn-card"));
+      const rivers = order.filter((el) => el.hasAttribute("data-attn-river"));
+      add("rivers present", rivers.length > 0, `${rivers.length} rivers`);
+      add("a card per river", rivers.length === cards.length, `${cards.length} cards, ${rivers.length} rivers`);
+      // Z-order: every river paints after every card (rivers in front of cards).
+      const lastCard = order.map((el, i) => (el.hasAttribute("data-attn-card") ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
+      const firstRiver = order.findIndex((el) => el.hasAttribute("data-attn-river"));
+      add("rivers in front of every card", firstRiver > lastCard, `first river @${firstRiver}, last card @${lastCard}`);
+      // Z-order among rivers: deepest first (the grandchild's river is furthest back).
+      const depths = rivers.map((el) => Number(el.getAttribute("data-depth")));
+      const deepestFirst = depths.every((d, i) => i === 0 || depths[i - 1] >= d);
+      add("rivers paint deepest-first", deepestFirst, `depths ${depths.join(",")}`);
+      // Every river leaves the one project mouth.
+      const mouth = lane.querySelector("[data-attn-mouth]");
+      add("one mouth", mouth !== null, mouth === null ? "no mouth" : "mouth present");
+      if (mouth !== null) {
+        const mx = mouth.getAttribute("cx");
+        const my = mouth.getAttribute("cy");
+        const starts = rivers.map((el) => `${el.getAttribute("data-mouth-x")},${el.getAttribute("data-mouth-y")}`);
+        const want = `${mx},${my}`;
+        add("all rivers from the one mouth", starts.every((s) => s === want), `starts ${[...new Set(starts)].join(" | ")} vs mouth ${want}`);
+      }
+      // Other lanes carry no rivers.
+      const others = rects("[data-attn-lane]").filter((el) => el.getAttribute("data-attn-lane") !== "working");
+      add("non-working lanes carry no rivers", others.every((el) => el.querySelector("[data-attn-river]") === null), "needs-you/unread/idle are cards only");
+      return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "rivers in front of cards, deepest first, all from one mouth" };
+    }
+
+    if (which === "group-collapsed" || which === "group-expanded") {
+      const heads = rects("[data-attn-card][data-has-group='true']");
+      const want = which === "group-collapsed" ? "false" : "true";
+      const head = heads.find((el) => el.getAttribute("data-open") === want);
+      add("a group head is present", head !== undefined, `${heads.length} group heads; wanting open=${want}`);
+      if (head !== undefined) {
+        const text = head.textContent ?? "";
+        if (which === "group-collapsed") add("collapsed head shows the subtree sum (Σ)", text.includes("Σ"), text.trim());
+        else add("expanded head shows own flow", /own \d/.test(text) && !text.includes("Σ"), text.trim());
+      }
+      return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `group head (${which}) reads correctly` };
+    }
+
+    return { pass: false, checks, detail: `unknown swimlane check "${which}"` };
+  }, check);
+  return outcome;
+}
+
+/**
+ * Scroll one lane with a wheel event and prove no other lane moved: read every
+ * lane's card-group transform before and after, then require exactly the
+ * scrolled lane to have changed.
+ */
+async function wheelLane(page, delta) {
+  const transforms = () =>
+    page.evaluate(() =>
+      Object.fromEntries(
+        [...document.querySelectorAll("[data-attn-lane-cards]")].map((el) => [
+          el.getAttribute("data-attn-lane-cards"),
+          el.getAttribute("transform"),
+        ]),
+      ),
+    );
+  const target = await page.evaluate(() => {
+    const lane = document.querySelector('[data-attn-lane][data-overflow="true"]');
+    if (lane === null) return null;
+    const r = lane.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, id: lane.getAttribute("data-attn-lane") };
+  });
+  if (target === null) return { pass: false, checks: [], detail: "no overflowing lane to scroll" };
+  const before = await transforms();
+  await page.evaluate(
+    ({ x, y, d }) => {
+      const lane = document.querySelector('[data-attn-lane][data-overflow="true"]');
+      lane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: d, deltaMode: 0, clientX: x, clientY: y }));
+    },
+    { x: target.x, y: target.y, d: delta },
+  );
+  await sleep(300);
+  const after = await transforms();
+  const moved = Object.keys(after).filter((id) => before[id] !== after[id]);
+  const checks = [
+    { name: "the scrolled lane moved", ok: moved.includes(target.id), detail: `${target.id} transform ${before[target.id]} → ${after[target.id]}` },
+    {
+      name: "no other lane moved",
+      ok: moved.every((id) => id === target.id),
+      detail: `moved: ${moved.join(", ") || "none"}`,
+    },
+  ];
+  return { pass: checks.every((c) => c.ok), checks, detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `${target.id} scrolled independently` };
+}
+
 // ---------- execution ----------
 
 async function runCase(page, evidenceDir, kase) {
@@ -412,11 +577,13 @@ async function runCase(page, evidenceDir, kase) {
         }
         case "click": {
           // Click the first element matching `selector` (the harness's generic
-          // gesture; the app's own attributes are the selectors).
+          // gesture; the app's own attributes are the selectors). SVG elements
+          // have no `.click()`, so dispatch a bubbling MouseEvent instead —
+          // React's delegated handler sees it the same way.
           entry.pass = await page.evaluate((selector) => {
             const el = document.querySelector(selector);
             if (el === null) return false;
-            el.click();
+            el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
             return true;
           }, step.params.selector);
           entry.detail = entry.pass ? `clicked ${step.params.selector}` : `no element for ${step.params.selector}`;
@@ -467,6 +634,34 @@ async function runCase(page, evidenceDir, kase) {
           const okId = wanted === undefined || ids.includes(wanted);
           entry.pass = okCount && okId;
           entry.detail = `nav calls ${JSON.stringify(ids)} (count ${ids.length}, want ${want}${wanted !== undefined ? `, id ${wanted}` : ""})`;
+          break;
+        }
+        case "waitForSelector": {
+          // Wait (bounded) until a selector appears — the swimlane view's data
+          // arrives one RPC round-trip after the tab switch.
+          const deadline = Date.now() + (step.params.timeout ?? 8000);
+          let found = false;
+          while (Date.now() < deadline) {
+            found = await page.evaluate((selector) => document.querySelector(selector) !== null, step.params.selector);
+            if (found) break;
+            await sleep(100);
+          }
+          entry.pass = found;
+          entry.detail = found ? `${step.params.selector} appeared` : `timeout waiting for ${step.params.selector}`;
+          break;
+        }
+        case "swimlane": {
+          const outcome = await swimlaneCheck(page, step.params?.check ?? "lanes");
+          entry.pass = outcome.pass;
+          entry.detail = outcome.detail;
+          entry.checks = outcome.checks;
+          break;
+        }
+        case "wheelLane": {
+          const outcome = await wheelLane(page, step.params?.delta ?? 240);
+          entry.pass = outcome.pass;
+          entry.detail = outcome.detail;
+          entry.checks = outcome.checks;
           break;
         }
         case "profile": {

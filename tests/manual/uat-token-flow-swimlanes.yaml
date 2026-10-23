@@ -1,0 +1,198 @@
+test_suite:
+  id: uat-token-flow-swimlanes-001
+  title: Token flow renders as a swimlane flow-control stack — projects pile vertically, tiers tile, rivers front the cards
+  description: >
+    Headless suite for the swimlane token-flow port. Projects pile vertically as
+    one full-width row each (never tiled); an expanded row tiles its status
+    tiers across the width as four lanes (Working, Needs You, Unread, Idle) with
+    a gutter between them and no overlap; every card's river paints in front of
+    the cards, deepest first, from the project's one mouth; a collapsed group
+    head reads its subtree sum (Σ) and drops to its own flow once expanded; and
+    each lane scrolls on its own without moving a neighbour. The mock SDK serves
+    a fixed flow fixture (Alpha work opens by default, its Working lane holds
+    more cards than the capped lane height holds).
+  tags: [interaction, tokenflow, swimlane, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: Projects pile vertically as one full-width row each, never tiled
+    criticality: blocker
+    precondition: >
+      dist/ is built (npm run build); the harness serves it; headless Chrome is
+      available at CHROME_PATH (default: system Chrome).
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-row="proj_alpha"]' }
+        instruction: Wait for the flow RPC to land and the stack to paint.
+        expected: The project rows are on screen.
+      - order: 3
+        action: swimlane
+        params: { check: stack }
+        instruction: Read every project row's box.
+        expected: Rows descend without overlap and all share one full width and one left edge — the stack, not a tile grid.
+      - order: 4
+        action: profile
+        params: {}
+        instruction: Capture the finished stack.
+        expected: A full-view screenshot of the project stack for the report.
+
+  - id: TC-02
+    title: An expanded row tiles four status lanes left-to-right, gutter-separated, no occlusion
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-lane="working"]' }
+        instruction: Wait for the seeded (hottest) project to open its lanes.
+        expected: Four lanes paint inside the opened row.
+      - order: 3
+        action: swimlane
+        params: { check: lanes }
+        instruction: Read every lane's box in the expanded row.
+        expected: Working, Needs You, Unread, Idle tile left to right with a gutter and no lane overlapping its neighbour.
+      - order: 4
+        action: profile
+        params: {}
+        instruction: Capture the tiled lanes.
+        expected: A screenshot showing the four gutter-separated lanes.
+
+  - id: TC-03
+    title: Every card's river paints in front of the cards, all from the one project mouth
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-river]' }
+        instruction: Wait for the Working lane's rivers.
+        expected: Rivers paint from the project's one mouth.
+      - order: 3
+        action: swimlane
+        params: { check: rivers }
+        instruction: Read the DOM order and geometry of the Working lane's cards and rivers.
+        expected: Every river paints after every card (in front), deepest first, and every river's band leaves the same single mouth; the other lanes carry no rivers.
+      - order: 4
+        action: profile
+        params: {}
+        instruction: Capture the rivers.
+        expected: A screenshot showing the rivers fanning from the one mouth.
+
+  - id: TC-04
+    title: A collapsed group head reads its subtree sum (Σ) and drops to its own flow once expanded
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-card="thr_running"]' }
+        instruction: Wait for the nested-card chain to paint.
+        expected: The runaway thread's card is on screen, collapsed.
+      - order: 3
+        action: swimlane
+        params: { check: group-collapsed }
+        instruction: Read the collapsed group head's label.
+        expected: The head reports `Σ … tok/min · … total` — the whole subtree's flow while collapsed.
+      - order: 4
+        action: click
+        params: { selector: '[data-attn-card-rect="thr_running"]' }
+        instruction: Open the group head.
+        expected: Its children nest inside the card and the head's river drops to its own flow.
+      - order: 5
+        action: waitForSelector
+        params: { selector: '[data-attn-card="thr_running"][data-open="true"]' }
+        instruction: Wait for the card to re-render open.
+        expected: The card reports open, with its children nested inside it.
+      - order: 6
+        action: swimlane
+        params: { check: group-expanded }
+        instruction: Read the expanded group head's label.
+        expected: The head reports `own … tok/min · … total` (its own flow, the subtree total still shown).
+      - order: 7
+        action: profile
+        params: {}
+        instruction: Capture the nested cards.
+        expected: A screenshot of the parent → child → grandchild chain nested inside one card.
+
+  - id: TC-05
+    title: Each lane scrolls on its own; scrolling one never moves another
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-lane][data-overflow="true"]' }
+        instruction: Wait for the Working lane to overflow its capped height.
+        expected: The Working lane carries more cards than fit, so it reports overflow.
+      - order: 3
+        action: wheelLane
+        params: { delta: 260 }
+        instruction: Wheel over the overflowing lane.
+        expected: That lane's card group scrolls; every other lane's card group is unmoved.
+      - order: 4
+        action: profile
+        params: {}
+        instruction: Capture the scrolled lane.
+        expected: A screenshot showing the Working lane scrolled with the others at rest.
+
+  - id: TC-06
+    title: A collapsed row carries no lanes; expanding it reveals the four tiles
+    criticality: standard
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-lane="working"]' }
+        instruction: Wait for the seeded project's lanes.
+        expected: Exactly one project is open, so four lanes paint.
+      - order: 3
+        action: assertCount
+        params: { selector: '[data-attn-lane]', equals: 4 }
+        instruction: Count the lanes with only the seeded project open.
+        expected: Four lanes — the collapsed rows contribute none.
+      - order: 4
+        action: click
+        params: { selector: '[data-attn-row-rect="proj_beta"]' }
+        instruction: Expand the collapsed Beta infra row.
+        expected: Its four lanes tile in below the header.
+      - order: 5
+        action: waitForSelector
+        params: { selector: '[data-attn-lane-row="proj_beta"]' }
+        instruction: Wait for the new lanes.
+        expected: The row's lanes appear.
+      - order: 6
+        action: assertCount
+        params: { selector: '[data-attn-lane]', equals: 8 }
+        instruction: Count the lanes with two projects open.
+        expected: Eight lanes — four per expanded project.

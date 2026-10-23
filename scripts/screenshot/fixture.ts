@@ -117,3 +117,87 @@ export const SHAPE_DELAY_MS = Math.max(
   0,
   Number(new URLSearchParams(window.location.search).get("shapeDelay") ?? "0") || 0,
 );
+
+/**
+ * Simulated `flow` RPC payload for the screenshot/UAT harness: the swimlane
+ * token-flow fixture. Two projects — Alpha work opens by default (it holds the
+ * runaway thread plus enough working threads to overflow the Working lane, so
+ * the suite can assert independent lane scrolling) and Beta infra stays
+ * collapsed. Every thread carries a 20-bucket burn series so the rivers and the
+ * row sparkline have real shapes.
+ */
+const FLOW_BUCKETS = 20;
+const burn = (peak: number, shape: "ramp" | "steady" | "burst"): number[] =>
+  Array.from({ length: FLOW_BUCKETS }, (_, i) => {
+    const u = i / (FLOW_BUCKETS - 1);
+    const v =
+      shape === "ramp"
+        ? 0.12 + 0.88 * u ** 1.5
+        : shape === "burst"
+          ? u < 0.62
+            ? 0.12
+            : 0.12 + 3.4 * ((u - 0.62) / 0.38) ** 1.3
+          : 0.85;
+    return Math.max(0, Math.round(peak * v));
+  });
+
+type FlowThreadFixture = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  title: string;
+  status: string;
+  parentThreadId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  usedTokens: number;
+  modelContextWindow: number;
+  model: string | null;
+  provider: string;
+  rate: number;
+  tracked: number;
+  series: number[];
+};
+
+const flowThread = (over: Partial<FlowThreadFixture> & { id: string; usedTokens: number }): FlowThreadFixture => ({
+  projectId: "proj_alpha",
+  projectName: "Alpha work",
+  title: over.id,
+  status: "running",
+  parentThreadId: null,
+  createdAt: NOW - 600_000,
+  updatedAt: NOW - 60_000,
+  modelContextWindow: 200_000,
+  model: null,
+  provider: "anthropic",
+  rate: 0,
+  tracked: 0,
+  series: burn(Math.max(20, over.rate ?? 40), "steady"),
+  ...over,
+});
+
+export const SIM_FLOW = {
+  windowMs: 3_600_000,
+  buckets: FLOW_BUCKETS,
+  generatedAt: NOW,
+  truncated: false,
+  threads: [
+    // Alpha work — the runaway thread with a contained child and grandchild.
+    flowThread({ id: "thr_running", title: "Refactor the export path", usedTokens: 24_600, rate: 264, series: burn(320, "ramp") }),
+    flowThread({ id: "thr_running_child", title: "layout regression sweep", usedTokens: 11_400, rate: 172, parentThreadId: "thr_running", createdAt: NOW - 400_000 }),
+    flowThread({ id: "thr_running_grand", title: "pixel snapshot pass", usedTokens: 5_200, rate: 60, parentThreadId: "thr_running_child", provider: "google", createdAt: NOW - 300_000 }),
+    // More working threads, so the lane overflows its capped height.
+    flowThread({ id: "thr_run_b", title: "backup script review", usedTokens: 8_800, rate: 90, provider: "openai" }),
+    flowThread({ id: "thr_run_c", title: "nightly sync sweep", usedTokens: 7_100, rate: 44, provider: "google" }),
+    flowThread({ id: "thr_run_d", title: "cache warm pass", usedTokens: 6_200, rate: 30, provider: "ollama" }),
+    flowThread({ id: "thr_run_e", title: "index rebuild", usedTokens: 5_400, rate: 20, provider: "openai" }),
+    flowThread({ id: "thr_run_f", title: "log tail probe", usedTokens: 4_100, rate: 12, provider: "anthropic" }),
+    // The other three lanes.
+    flowThread({ id: "thr_error", title: "Fix flaky importer test", status: "error", usedTokens: 31_500, provider: "google", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    flowThread({ id: "thr_done", title: "treemap label layer", status: "done", usedTokens: 12_400, rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    flowThread({ id: "thr_idle", title: "legend chips", status: "idle", usedTokens: 3_100, provider: "openai", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    // Beta infra — stays collapsed by default.
+    flowThread({ id: "thr_running_slow", projectId: "proj_beta", projectName: "Beta infra", title: "Audit the migration notes", usedTokens: 38_200, rate: 60, provider: "openai" }),
+    flowThread({ id: "thr_wait", projectId: "proj_beta", projectName: "Beta infra", title: "card tween", status: "waiting", usedTokens: 9_600, provider: "anthropic", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+  ],
+};
