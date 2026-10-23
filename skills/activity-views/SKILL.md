@@ -83,6 +83,15 @@ may need to act on."*
   heads a group reports `Σ … tok/min` while collapsed (its whole subtree's flow,
   so the set reads as one river); open, it drops to `own … tok/min` because the
   descendants now report theirs. Its bar and total always show the subtree sum.
+- **A rate too small to show whole is reported as "quiet", never "0 tok/min".**
+  The host's context reading only advances when a turn lands, so most threads
+  burn nothing at any given moment and a few burn a trickle. A live rate below
+  one whole token per minute would round to a "0 tok/min" that reads as broken
+  on a thread that is not idle, so cards and rows below that threshold say
+  "quiet" (`readsQuiet`, `QUIET_RATE_TPM` in views/model.ts) and keep showing the
+  token total; a thread with a real burn still shows tok/min and animates. A
+  grandchild with a real burn always draws its own river and its beads drift,
+  same as any other depth.
 - **Threads nest inside their parent's card only when they share its lane.**
   A child in the same lane nests inside the parent's card (indented, recursing
   parent → child → grandchild, hard-capped at the grandchild, `MAX_DEPTH = 2`,

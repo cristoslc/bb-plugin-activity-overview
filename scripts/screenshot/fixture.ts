@@ -194,6 +194,11 @@ export const SIM_FLOW = {
     flowThread({ id: "thr_run_d", title: "cache warm pass", usedTokens: 6_200, rate: 30, provider: "ollama", agentProvider: "pi", model: "pi" }),
     flowThread({ id: "thr_run_e", title: "index rebuild", usedTokens: 5_400, rate: 20, provider: "openai", agentProvider: "codex", model: "gpt-6-luna" }),
     flowThread({ id: "thr_run_f", title: "log tail probe", usedTokens: 4_100, rate: 12, provider: "anthropic", model: "synthetic/syn:small:text" }),
+    // A running thread that is barely burning: its rate is below one whole
+    // token per minute, which used to render as the misleading "0 tok/min".
+    // It heads a group so the quiet label's "quiet · N total" form is on screen.
+    flowThread({ id: "thr_trickle", title: "trace tail probe", usedTokens: 2_400, rate: 0.004, provider: "anthropic", model: "synthetic/syn:small:text" }),
+    flowThread({ id: "thr_trickle_sub", title: "trace tail sub-sweep", usedTokens: 900, rate: 0, parentThreadId: "thr_trickle", provider: "anthropic", model: "synthetic/syn:small:text" }),
     // The other three lanes.
     flowThread({ id: "thr_error", title: "Fix flaky importer test", status: "error", usedTokens: 31_500, provider: "google", agentProvider: "claude-code", model: "claude-sonnet-5.5", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
     flowThread({ id: "thr_done", title: "treemap label layer", status: "done", usedTokens: 12_400, rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),

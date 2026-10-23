@@ -36,6 +36,10 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
+    "text": "**A thread that is barely burning now reads \"quiet\" instead of a misleading \"0 tok/min\".** A live rate under one whole token per minute was rounded for display, so a running thread looked dead and its group head read `Σ 0 tok/min`; the flow view now says \"quiet\" and keeps showing the token total, while a thread with a real burn still shows its tok/min and animates.",
+    "children": []
+  },
+  {
     "text": "**The provider-to-project rivers now read as rivers, not hairlines.** The spine fed each project row with a thin stub capped at a few pixels, so only the project-to-card half of a path animated; the provider segment now gets the same treatment as the card segment, a filled provider-colored band sized by that provider's flow in the project, translucent, with beads drifting whenever that segment is live.",
     "children": []
   },

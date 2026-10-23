@@ -19,6 +19,7 @@ import {
   laneOf,
   modelParts,
   providerOfModel,
+  readsQuiet,
   recentFlowTokMin,
   resampleWindow,
   riverBeadPath,
@@ -676,4 +677,32 @@ test("swimlaneLayout: the mode flows through to the Tier-1 grouping", () => {
   const bySub = swimlaneLayout(threads, { width: 1860, mode: "subscription" });
   assert.equal(bySub.mode, "subscription");
   assert.deepEqual(bySub.spine.map((s) => s.id).sort(), ["Codex", "synthetic"]);
+});
+
+test("a rate too small to show as whole tok/min reads as quiet, never \"0 tok/min\"", () => {
+  assert.equal(readsQuiet(0), true, "no measured burn is quiet");
+  assert.equal(readsQuiet(0.004), true, "0.24 tok/min would round to the misleading 0");
+  assert.equal(readsQuiet(0.0083), true, "just under half a tok/min is still quiet");
+  assert.equal(readsQuiet(0.5), false, "30 tok/min is a real rate");
+  assert.equal(readsQuiet(30), false);
+  // The layout carries the flag: a barely-burning group head is quiet, and a
+  // genuinely burning one is not.
+  const slow = swimlaneLayout(
+    [
+      fThread({ id: "trickle", status: "running", usedTokens: 2400, rate: 0.004 }),
+      fThread({ id: "trickle-sub", parentThreadId: "trickle", status: "running", usedTokens: 900, rate: 0, createdAt: 2000 }),
+    ],
+    { width: 1860, openProjects: new Set(["proj_1"]) },
+  );
+  const head = slow.rows[0]!.lanes.find((ln) => ln.id === "working")!.cards.find((c) => c.id === "trickle")!;
+  assert.equal(head.hasGroup, true);
+  assert.equal(head.quiet, true, "the bare trickle is reported as quiet");
+  assert.ok(head.shownRate > 0, "it is not zero — the reading is real, just tiny");
+
+  const fast = swimlaneLayout([fThread({ id: "hot", status: "running", usedTokens: 5000, rate: 40 })], {
+    width: 1860,
+    openProjects: new Set(["proj_1"]),
+  });
+  const hot = fast.rows[0]!.lanes.find((ln) => ln.id === "working")!.cards.find((c) => c.id === "hot")!;
+  assert.equal(hot.quiet, false, "a real burn is not quiet");
 });

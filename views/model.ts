@@ -1487,6 +1487,18 @@ export function riverOpacity(rate: number, maxRate: number): number {
   return clampN(0.32 + 0.5 * base, 0.3, 0.8);
 }
 
+/**
+ * A live rate below this many tokens per minute cannot be shown honestly as a
+ * whole number: rounding it yields "0 tok/min" on a thread that is not idle.
+ * Cards, rows and spine blocks whose rate is this small say "quiet" instead.
+ */
+export const QUIET_RATE_TPM = 0.5;
+
+/** True when a rate is too small to display as whole tokens-per-minute. */
+export function readsQuiet(ratePerSec: number): boolean {
+  return Math.max(0, ratePerSec) * 60 < QUIET_RATE_TPM;
+}
+
 /** A card's shown flow: subtree sum while collapsed, own flow once expanded. */
 export function shownRateOf(n: FlowNode, open: boolean): number {
   const own = Math.max(0, n.thread.rate ?? 0);
@@ -1520,6 +1532,8 @@ export type SwimlaneCard = {
   flow: number;
   /** The live rate the card reports (subtree when collapsed, own when open). */
   shownRate: number;
+  /** True when that rate is too small to show as whole tok/min ("quiet"). */
+  quiet: boolean;
   hasGroup: boolean;
   open: boolean;
   canOpen: boolean;
@@ -1557,6 +1571,8 @@ export type SwimlaneRow = {
   expanded: boolean;
   total: number;
   rate: number;
+  /** True when the row's live rate is too small to show as whole tok/min. */
+  quiet: boolean;
   threads: number;
   working: number;
   prov: SwimlaneProviderMix[];
@@ -1821,6 +1837,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
       expanded,
       total,
       rate,
+      quiet: readsQuiet(rate),
       threads: threadsAll.length,
       working,
       prov,
@@ -1861,6 +1878,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
           const open = canOpen && openThreads.has(n.thread.id);
           const kids = open ? n.kids : [];
           const cardH = cardHeight(n, openThreads, depth, maxDepth);
+          const shownRate = shownRateOf(n, open);
           const card: SwimlaneCard = {
             id: n.thread.id,
             thread: n.thread,
@@ -1871,7 +1889,8 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
             w: nodeW,
             h: cardH,
             flow: subtreeFlow(n),
-            shownRate: shownRateOf(n, open),
+            shownRate,
+            quiet: readsQuiet(shownRate),
             hasGroup: kidCount > 0,
             open,
             canOpen,
