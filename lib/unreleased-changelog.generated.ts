@@ -23,9 +23,13 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
   {
     "text": "**The Token flow tab's left tier is now a stack of nested provider/model boxes.** The ACP provider is the outer box and each subscription-and-model pair (say `synthetic / hf:zai-org/GLM-5.3-Flash`) is an inner box, with every box's height encoding active token flow — tokens per minute over the last 10 intervals, so the hottest model is the tallest box and a quiet one never shrinks below a legible floor.",
     "children": [
-      "A toggle in the view chrome swaps Tier 1 to the subscription with Tier 2 as the model, re-cutting the same roster by who it is subscribed to.",
+      "A toggle in the view chrome swaps Tier 1 to the ACP provider with Tier 2 as the subscription-and-model pair, re-cutting the same roster by the agent that ran it.",
       "The `flow` RPC now carries each thread's ACP provider id (`agentProvider`), the Tier-1 key in provider mode; the server reads it from `threads.list`'s `providerId`."
     ]
+  },
+  {
+    "text": "**The Token flow tab now opens grouped by subscription.** Tier 1's default axis flips from the ACP provider to the subscription the model rides — a model with no subscription stands in under its ACP provider's label — with the bare model as Tier 2; the toggle's other half, now labelled \"ACP provider\", re-cuts the column by provider with the subscription-and-model pairs inside.",
+    "children": []
   },
   {
     "text": "**The Board opens at the same size as the Unit treemap now.** Its shelves grow to fill the chrome-free fit box (solving for the largest slot scale whose pack still fits the height, capped at 2×), so the opening camera lands at 1× instead of leaving unused viewport; a one- or two-project roster stays capped rather than ballooning into a poster.",

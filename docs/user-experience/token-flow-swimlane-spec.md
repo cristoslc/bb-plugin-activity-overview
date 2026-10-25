@@ -11,7 +11,7 @@ supersedes: token-flow-tiled-spec.md (declined)
 > [!NOTE] Implemented.
 > Ported into the live plugin: `swimlaneLayout` and the river helpers in `views/model.ts`, painted by `views/TokenFlowView.tsx`. See `tests/token-flow.test.ts` and `tests/manual/uat-token-flow-swimlanes.yaml`.
 >
-> **Update (thr_h3id3kyfaf):** Tier 1 is no longer a flat provider-family spine. The left column is now a stack of nested boxes — outer = the ACP provider (`agentProvider`, from `threads.list`'s `providerId`), inner = the subscription-and-model pair — with every box's height encoding active flow (tok/min over the last 10 intervals; `tierGroups`, `boxHeight`, `recentFlowTokMin` in `views/model.ts`). A view-chrome toggle swaps Tier 1 to the subscription with Tier 2 as the model. The `flow` RPC gained the `agentProvider` field for this.
+> **Update (thr_h3id3kyfaf):** Tier 1 is no longer a flat provider-family spine. The left column is now a stack of nested boxes — outer = the subscription the model rides (`modelParts` in `views/model.ts`), inner = the model — with every box's height encoding active flow (tok/min over the last 10 intervals; `tierGroups`, `boxHeight`, `recentFlowTokMin` in `views/model.ts`). This subscription axis is the **default**; a view-chrome toggle swaps Tier 1 to the ACP provider (`agentProvider`, from `threads.list`'s `providerId`) with Tier 2 as the subscription-and-model pair. The `flow` RPC gained the `agentProvider` field for this.
 
 ## The goal (north star)
 

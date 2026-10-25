@@ -185,7 +185,7 @@ test("links: the Tier-1→project rivers are bands sized by each group's flow", 
     fThread({ id: "a2", projectId: "pa", projectName: "Alpha", status: "running", usedTokens: 60_000, rate: 300, provider: "openai", agentProvider: "codex" }),
     fThread({ id: "b1", projectId: "pb", projectName: "Beta", status: "idle", usedTokens: 400, rate: 0, provider: "anthropic", agentProvider: "acp-opencode" }),
   ];
-  const l = swimlaneLayout(threads, { width: 1860 });
+  const l = swimlaneLayout(threads, { width: 1860, mode: "provider" });
   assert.equal(l.links.length, 3, "one river per Tier-1 group per project");
   const opencodeAlpha = l.links.find((k) => k.id === "link:pa:acp-opencode")!;
   const codexAlpha = l.links.find((k) => k.id === "link:pa:codex")!;
@@ -455,8 +455,8 @@ test("paint order: cards parent-first; rivers in front, deepest furthest back", 
 });
 
 test("tier 1: the nested boxes stack on the left; links run the column → row", () => {
-  const l = swimlaneLayout(roster(), { width: 1860, openProjects: new Set(["pa"]) });
-  // One outer box per ACP provider (the default mode), not per model family.
+  const l = swimlaneLayout(roster(), { width: 1860, openProjects: new Set(["pa"]), mode: "provider" });
+  // One outer box per ACP provider (the toggle's mode), not per model family.
   assert.deepEqual(
     l.spine.map((s) => s.id).sort(),
     ["acp-opencode", "claude-code", "codex"],
@@ -677,6 +677,16 @@ test("swimlaneLayout: the mode flows through to the Tier-1 grouping", () => {
   const bySub = swimlaneLayout(threads, { width: 1860, mode: "subscription" });
   assert.equal(bySub.mode, "subscription");
   assert.deepEqual(bySub.spine.map((s) => s.id).sort(), ["Codex", "synthetic"]);
+});
+
+test("swimlaneLayout: with no mode passed, Tier 1 defaults to the subscription axis", () => {
+  const threads = [
+    fThread({ id: "a", agentProvider: "acp-opencode", model: "synthetic/x", series: flowSeries(60) }),
+    fThread({ id: "b", agentProvider: "codex", model: "gpt-6-luna", series: flowSeries(20) }),
+  ];
+  const l = swimlaneLayout(threads, { width: 1860 });
+  assert.equal(l.mode, "subscription", "the absent mode means the subscription axis, the operator's default");
+  assert.deepEqual(l.spine.map((s) => s.id).sort(), ["Codex", "synthetic"], "the outer boxes are subscriptions, not ACP providers");
 });
 
 test("a rate too small to show as whole tok/min reads as quiet, never \"0 tok/min\"", () => {
