@@ -550,8 +550,9 @@ async function swimlaneCheck(page, check) {
     }
 
     if (which === "toggle") {
-      // The view-chrome toggle swaps Tier 1 from the ACP provider to the
-      // subscription (and Tier 2 from subscription+model to model).
+      // The view-chrome toggle swaps Tier 1 between the subscription (the
+      // default axis) and the ACP provider — and Tier 2 between the model and
+      // the subscription+model pair — whichever way it currently points.
       const before = document.querySelector("[data-attn-tiers]")?.getAttribute("data-attn-tiers") ?? null;
       const keysBefore = [...document.querySelectorAll("[data-attn-tier1]")].map((el) => el.getAttribute("data-attn-tier1")).join(",");
       const target = before === "provider" ? "subscription" : "provider";

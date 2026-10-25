@@ -134,8 +134,8 @@ export function TokenFlowView() {
   const [speedMul, setSpeedMul] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [width, setWidth] = useState<number>(SWIMLANE.W);
-  /** Tier-1 grouping: the ACP provider (default) or the subscription. */
-  const [mode, setMode] = useState<FlowMode>("provider");
+  /** Tier-1 grouping: the subscription (default) or the ACP provider. */
+  const [mode, setMode] = useState<FlowMode>("subscription");
 
   const threads = useMemo((): FlowThread[] => (flow === null ? [] : flow.threads), [flow]);
 
@@ -314,7 +314,7 @@ export function TokenFlowView() {
               className={`px-2 py-0.5 text-[11px] ${mode === "provider" ? "text-foreground" : "text-muted-foreground"}`}
               style={mode === "provider" ? { background: "var(--attn-selected)" } : undefined}
             >
-              provider
+              ACP provider
             </button>
             <button
               type="button"
@@ -393,8 +393,8 @@ export function TokenFlowView() {
           aria-label="token flow swimlanes"
         >
           {/* Tier 1 — the nested provider/model boxes (the two-tier rework):
-              outer box = the ACP provider (or the subscription), inner boxes =
-              the subscription+model pairs (or the models). Height encodes
+              outer box = the subscription (or the ACP provider), inner boxes =
+              the models (or the subscription+model pairs). Height encodes
               active flow. */}
           <g data-attn-tiers={layout.mode}>
             {layout.spine.map((b) => (
@@ -487,8 +487,8 @@ export function TokenFlowView() {
 
 /**
  * One Tier-1 outer box with its Tier-2 inner boxes nested inside. The outer box
- * is the ACP provider (or the subscription); the inner boxes are the
- * subscription+model pairs (or the models). Both tiers' HEIGHTS encode active
+ * is the subscription (or the ACP provider); the inner boxes are the
+ * models (or the subscription+model pairs). Both tiers' HEIGHTS encode active
  * flow (`boxHeight` in views/model.ts); the numbers read tok/min over the last
  * 10 intervals. No status-derived fills — the accent is the model-family color.
  */

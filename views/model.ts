@@ -1635,7 +1635,7 @@ export type SwimlaneOpts = {
   /** Thread ids whose children are shown (nested inside the card). */
   openThreads?: ReadonlySet<string>;
   maxDepth?: number;
-  /** The Tier-1 grouping axis: ACP provider (default) or subscription. */
+  /** The Tier-1 grouping axis: the subscription (default) or the ACP provider. */
   mode?: FlowMode;
   /** The sampled burn window behind `.series` (defaults to FLOW_WINDOW_MS). */
   windowMs?: number;
@@ -1706,7 +1706,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   const C = SWIMLANE;
   const W = opts.width ?? C.W;
   const maxDepth = opts.maxDepth ?? C.MAX_DEPTH;
-  const mode = opts.mode ?? "provider";
+  const mode = opts.mode ?? "subscription";
   const windowMs = opts.windowMs ?? FLOW_WINDOW_MS;
   const buckets = opts.buckets ?? FLOW_BUCKETS;
   const openProjects = opts.openProjects ?? new Set<string>();
@@ -1725,12 +1725,11 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   }
 
   // Tier 1 — the nested provider/model boxes (the operator's rework,
-  // thr_h3id3kyfaf). The outer box is the ACP provider in provider mode (the
-  // subscription in the toggle's mode); the inner boxes are the
-  // subscription+model pairs (the models). Every box's height encodes active
+  // thr_h3id3kyfaf). The outer box is the subscription in the default mode (the
+  // ACP provider in the toggle's mode); the inner boxes are the models (the
+  // subscription+model pairs). Every box's height encodes active
   // flow. Replaces the old flat provider-family spine.
   const spine = tierGroups(threads, mode, { windowMs, buckets });
-  const spineByKey = new Map(spine.map((b) => [b.id, b] as const));
 
   // Tier 2 — one row per project, hottest first. A project owns the threads
   // whose own projectId is its own, so a promoted child reports in its own
@@ -1956,13 +1955,16 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
     // Tier-1 -> row rivers: the same river treatment the card segment gets — a
     // filled band sized by that group's flow in THIS project, translucent, with
     // a bead ridge for live activity. The river leaves the group's outer box.
+    // Iterating the spine (sorted hottest-first) rather than outerMap keeps the
+    // push order deterministic across input order — a Map remembers the
+    // roster's first-encounter order, which input reversal reshuffles.
     const cyMid = y + (expanded ? C.EXP_HDR / 2 : C.COLLAPSED_H / 2);
-    for (const [key, mix] of outerMap) {
-      const block = spineByKey.get(key);
-      if (block === undefined) continue;
+    for (const block of spine) {
+      const mix = outerMap.get(block.id);
+      if (mix === undefined) continue;
       links.push({
-        id: `link:${p.id}:${key}`,
-        tier1: key,
+        id: `link:${p.id}:${block.id}`,
+        tier1: block.id,
         color: block.color,
         x1: C.SPINE_X + C.SPINE_W,
         y1: block.y + block.h / 2,

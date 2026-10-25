@@ -59,15 +59,17 @@ may need to act on."*
   Every lane sorts its threads by whole-subtree flow, highest at the top, so the
   runaway thread is the first row of the Working lane.
 - **Nested left column, two axes.** The left column's Tier 1 is a stack of
-  nested boxes: the outer box is the ACP provider (the thread's bb `providerId`,
-  labelled "opencode"/"Codex"/…) and the Tier-2 inner boxes are the
-  subscription-and-model pairs that provider rode (say
-  `synthetic / hf:zai-org/GLM-5.3-Flash`). Every box's height encodes active
+  nested boxes: the outer box is the subscription the model rides (say
+  `synthetic`) — the default axis — and the Tier-2 inner boxes are the models
+  under it; a model with no subscription stands in under its ACP provider's
+  label. Every box's height encodes active
   flow — tokens per minute summed over the last 10 intervals of the sampled
   window (`recentFlowTokMin`, `boxHeight`, `tierGroups` in views/model.ts) — so
   the hottest model is the tallest box and a quiet one keeps a legibility floor;
   outer boxes sort hottest-first and wrap their inner boxes. A view-chrome
-  toggle swaps Tier 1 to the subscription with Tier 2 as the model. The projects
+  toggle swaps Tier 1 to the ACP provider (the thread's bb `providerId`,
+  labelled "opencode"/"Codex"/…) with Tier 2 as the subscription-and-model
+  pairs (say `synthetic / hf:zai-org/GLM-5.3-Flash`). The projects
   remain a vertical stack of wide rows, hottest project first — never tiled —
   and an expanded row tiles its four status lanes across its width.
 - **A flow path is two rivers, and both are drawn the same way.** A Tier-1
@@ -110,7 +112,8 @@ may need to act on."*
   `usedTokens` (the totals) and resamples the plugin's local sample ring of
   positive context growth into equal wall-clock buckets (the burn profile), and
   carries each thread's ACP provider id (`agentProvider`, from `threads.list`'s
-  `providerId`) — the Tier-1 key in provider mode; the subscription and model
+  `providerId`) — the Tier-1 key when the toggle swaps the axis to the ACP
+  provider; the subscription and model
   are split client-side (`modelParts`). Unrecognized model families ride the
   "other" row (`providerOfModel` in views/model.ts — the server imports it), and
   a thread with no ACP provider groups under "Unknown".
