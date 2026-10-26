@@ -1,0 +1,196 @@
+test_suite:
+  id: uat-treemap-tiles-001
+  title: The treemap opens as full-fill status tiles at fit and switches to dots only when zoomed in
+  description: >
+    Headless suite for the treemap's render-mode switch. At the fitted view
+    every thread renders as one full-fill square (data-attn-mark="tile") whose
+    status color fills its treemap slot; zooming in past the same 1.2×
+    threshold that makes dots clickable swaps every tile back to a status dot
+    (data-attn-mark="dot"); fitting again swaps back. Tiles stay inert at fit
+    (no navigation; their click falls through to the region's zoom gesture),
+    and the hover card works over a tile exactly as over a dot.
+  tags: [rendering, treemap, zoom, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: At the fitted view the treemap renders one full-fill tile per thread and no dots
+    criticality: blocker
+    preconditions:
+      - dist/ has been built (`npm run build`); the harness serves it from vite
+      - Headless Chrome is available at CHROME_PATH (default: system Chrome)
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Open the panel.
+        expected: The tab bar paints and the harness is live.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab (it opens at the fitted view).
+        expected: The treemap paints at the fitted view.
+      - order: 3
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="tile"]'
+          equals: 4
+        instruction: Assert one full-fill tile per fixture thread.
+        expected: Four tiles mounted, one per thread.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="dot"]'
+          equals: 0
+        instruction: Assert no dots render at the fitted view.
+        expected: Zero dots mounted.
+      - order: 5
+        action: profile
+        instruction: Capture a screenshot of the tile mosaic as evidence.
+        expected: Evidence saved under docs/uat/.
+
+  - id: TC-02
+    title: Zooming in past the threshold swaps the tiles for status dots
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view (tiles).
+      - order: 3
+        action: click
+        params:
+          selector: '[data-attn-control="+"]'
+        instruction: Zoom in once, past the zoomed-in threshold (1.2).
+        expected: The camera scale rises past 1.2 and the marks swap to dots.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="dot"]'
+          equals: 4
+        instruction: Assert one status dot per fixture thread while zoomed in.
+        expected: Four dots mounted.
+      - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="tile"]'
+          equals: 0
+        instruction: Assert no tiles remain while zoomed in.
+        expected: Zero tiles mounted.
+
+  - id: TC-03
+    title: Fitting again swaps the dots back to tiles (crossing both directions)
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view (tiles).
+      - order: 3
+        action: click
+        params:
+          selector: '[data-attn-control="+"]'
+        instruction: Zoom in past the threshold.
+        expected: The marks swap to dots.
+      - order: 4
+        action: click
+        params:
+          selector: '[data-attn-control="⤢"]'
+        instruction: Fit the camera back to the fitted view.
+        expected: The camera returns to fit and the marks swap back to tiles.
+      - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="tile"]'
+          equals: 4
+        instruction: Assert the tiles are back after the downward crossing.
+        expected: Four tiles mounted again.
+      - order: 6
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="dot"]'
+          equals: 0
+        instruction: Assert no dots remain at the fitted view.
+        expected: Zero dots mounted.
+
+  - id: TC-04
+    title: The hover card works over a tile at the fitted view and clears on leave
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view (tiles).
+      - order: 3
+        action: hover
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_running"]'
+        instruction: Hover the working thread's full-fill tile.
+        expected: The card appears with the full title and a resolved snippet, entirely inside the panel, unoccluded, and with no transformed ancestor (TC-01's camera escape holds over tiles).
+      - order: 4
+        action: pointerAway
+        instruction: Move the pointer off the tile.
+        expected: The card unmounts; no stale card is left floating.
+
+  - id: TC-05
+    title: Tiles stay inert at the fitted view — a tile click falls through to the region gesture, never navigation
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view (tiles).
+      - order: 3
+        action: click
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_error"]'
+        instruction: Click a full-fill tile at the fitted view.
+        expected: Nothing navigates; the click falls through to the region's zoom-into-project gesture (the close control pins on while the project is focused).
+      - order: 4
+        action: assertNavCalls
+        params:
+          equals: 0
+        instruction: Assert no navigation fired at the fitted view.
+        expected: No recorded toThread calls.
+      - order: 5
+        action: assertExists
+        params:
+          selector: '[data-attn-reset]'
+        instruction: Assert the region gesture consumed the click (focus pins the close control).
+        expected: The close control is mounted.

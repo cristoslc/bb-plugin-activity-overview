@@ -32,6 +32,10 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
+    "text": "**The Unit treemap now opens as a full-fill status mosaic and switches to dots only when you zoom in.** At the fitted view each thread's status color fills its treemap slot edge to edge — idle threads keeping their age-grey fade — so dominance reads as one color mosaic; zooming past the same 1.2× threshold that makes dots clickable swaps the tiles back to dots, and fitting again swaps them back.",
+    "children": []
+  },
+  {
     "text": "**The Token flow stack now puts the currently-active project on top.** Rows re-sort by the shown live token rate (the row's tok/min), ties breaking by last activity and then total tokens, so the project burning right now leads the stack instead of the one holding the most stored tokens; rows re-order only on flow refreshes, riding the existing animation.",
     "children": []
   },

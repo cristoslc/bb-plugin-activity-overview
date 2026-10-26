@@ -14,8 +14,16 @@ tabs: three aggregate tabs rendered live from the host's sidebar thread data, pl
   dots = thread count; color = status; empty slots stay put so daily change
   lands in a familiar spot.
 - **Unit treemap** — region area = thread count (squarified); each thread
-  occupies its true unit area as one constant-size dot; neutral region fill,
-  thin voids separate projects, no strokes. Every project shows its title at
+  occupies its true unit area as one mark whose form follows the camera
+  (`treemapMarkMode` in views/model.ts, the same 1.2× threshold that gates dot
+  clicks): at the fitted view the mark is a full-fill tile — the thread's
+  status color filling its slot minus a thin pitch-derived gutter
+  (`tileForSlot`, `tileGutter`), idle tiles keeping the age-grey ramp — and
+  zoomed in past 1.2× the tiles switch back to the constant-size dots. Tiles
+  are inert by design (opening happens only zoomed in): a tile's click falls
+  through to the region's zoom-into-project gesture, and the hover card works
+  over a tile exactly as over a dot. Neutral region fill, thin voids separate
+  projects, no strokes. Every project shows its title at
   every zoom and pan: the labels live in a screen-space layer drawn at a fixed
   size, decoupled from the camera, one chip per visible project seated without
   overlap (`placeRegionLabels`, `treemapLayout` in views/model.ts). The tab
@@ -172,13 +180,18 @@ the content block, no baked-in padding).
   measured token burn: 10× the tokens, 10× the pulse), unread
   #2e9e45, idle grey fading with age (#a8b3bf toward #2a3038).
 - Dominance is always read from the dot color pattern; no region is ever
-  painted with a status override.
+  painted with a status override. In the treemap the pattern reads through
+  full-fill tiles at the fitted view and dots when zoomed in — same colors,
+  same classification, one mark per thread either way. A treemap tile is the
+  thread's own mark, not a container, so the no-status-container rule is
+  untouched.
 - The Token flow tab is a structural flow display, not an aggregate: its
   rivers and card bars are line/area work (like the removed Activity flow's
   dashed connectors were), their fills come from the `--attn-prov-*` tokens,
   and its neutral lane/row fills are never status-derived — status shows only
   as dots and lane headers.
-- Hover any dot for a card with the full thread title, status, age, and the end
+- Hover any dot — or any fitted-view treemap tile — for a card with the full
+  thread title, status, age, and the end
   of its conversation. The card portals into the panel root, so it never
   scales with the camera; a thread whose rate is not measurable yet keeps the
   base pulse, and a measured zero holds the slowest blink (never frozen).
