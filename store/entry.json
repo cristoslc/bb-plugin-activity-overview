@@ -1,0 +1,34 @@
+{
+  "id": "activity-overview",
+  "displayName": "Activity Overview",
+  "description": "Every visible bb thread as one status light. Activity Overview adds a nav panel with four live views of the same roster: a fixed-slot dot board per project, a unit treemap sized by thread count, strip tiles, and a token-flow stack. Color reads status (needs-you, error, working, unread, idle), idle dots fade with age, and working dots pulse at each thread's measured token rate.",
+  "icon": "Activity",
+  "tags": [
+    "threads",
+    "status",
+    "glanceable",
+    "dashboard",
+    "treemap",
+    "token-usage"
+  ],
+  "author": {
+    "name": "Cristos L-C",
+    "github": "cristoslc",
+    "url": "https://github.com/cristoslc"
+  },
+  "category": "thread-management",
+  "source": {
+    "git": {
+      "url": "https://github.com/cristoslc/bb-plugin-activity-overview.git",
+      "range": "^0.4.0"
+    }
+  },
+  "screenshots": [
+    "./screenshots/activity-overview/board-dark.png",
+    "./screenshots/activity-overview/treemap-dark.png",
+    "./screenshots/activity-overview/tiles-dark.png",
+    "./screenshots/activity-overview/tokenflow-dark.png",
+    "./screenshots/activity-overview/board-light.png"
+  ],
+  "overview": "./overview/activity-overview.md"
+}

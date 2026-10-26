@@ -24,10 +24,10 @@ is that port, with this repo's names and branch facts.
 - `main` is the stable branch. It moves only by fast-forwarding to a commit
   on the `dev` lineage; a `--ff-only` refusal means main and dev diverged —
   stop and reconcile instead of papering over it with a merge commit.
-- Not listed on the bb community marketplace yet as of 2026-10; the
-  marketplace check below is skipped until a submission exists. If the
-  plugin is ever listed, every cut must verify `source.git.range` covers
-  the tagged version and bump the range in that cut's marketplace PR.
+- The plugin's bb community marketplace listing is prepared in-repo
+  (`store/entry.json` plus the evergreen `PLUGIN_OVERVIEW.md`) and is
+  submitted from `get-bb/marketplace`; see §4a. Until the listing is live,
+  installs come from GitHub tags as before.
 
 ## 1. Merging work into `dev` — the changelog happens here
 
@@ -84,6 +84,20 @@ is that port, with this repo's names and branch facts.
 - `npm run build` — the plugin must build into `dist/`. `dist/` is
   gitignored; it is never committed.
 
+## 2b. Store-evidence gate (before tagging)
+
+- `npm run release-safety` — it builds, runs every automated UAT suite in
+  `tests/manual` against the real app (reports land in `docs/uat/`), then
+  captures the release-safety screenshot matrix into the gitignored
+  `docs/release-safety/`: the four tabs at desktop, a light-theme board,
+  narrower and phone layouts, and the What's-new modal. Any failing step
+  stops the release — fix it in a normal landing, never by editing a suite
+  green on release day.
+- The committed store media (`docs/screenshots/`) is regenerated when a view
+  meaningfully changes: `npm run shots` and `npm run gif` (`npm run build`
+  first; the harness serves `dist/app.css`). A store listing that references a
+  renamed or reshaped screenshot fails `npm run store:check`.
+
 ## 3. Finalize commit (on the dev lineage)
 
 If your branch doesn't contain `origin/dev` yet, merge `dev` in first. One
@@ -120,6 +134,37 @@ else should ride in it.
 - Push `dev`, `main`, and the tag to `origin` — a pushed tag is the
   distribution surface (users install semver ranges like `git:...@^X.Y`).
 - Remove the temp worktree.
+
+## 4a. Marketplace listing check
+
+The bb community marketplace is the repo `get-bb/marketplace` (served at
+https://getbb.app/marketplace). An entry is `entries/<plugin-id>.json` plus an
+optional `overview/<plugin-id>.md` (UTF-8, max 4000 chars) and up to six
+`screenshots/<plugin-id>/…` files (PNG/JPEG/WebP, at most 2 MiB each, at least
+1200 px wide). This repo owns the sources: `store/entry.json` (id, name,
+description, tags, source range) and the evergreen `PLUGIN_OVERVIEW.md`, with
+screenshots from `docs/screenshots/`.
+
+- `npm run store:build` validates every source against the marketplace's own
+  rules and assembles a ready-to-copy drop under `dist/store/`; a red
+  `npm run store:check` is a release blocker. Nothing under `dist/` is
+  committed.
+- The `source.git.range` tracks the release line. On 0.x a caret pins the
+  minor (`^0.4.0` means `>=0.4.0 <0.5.0`), so every 0.x minor cut must raise
+  the range in the same cut; from 1.0 on a caret pins only the major, so later
+  1.x cuts need no range change. A range-only bump is not a frozen-v1 field
+  change. The frozen-v1 fields are `id`, `displayName`, `description`, `icon`,
+  `tags`, `author`, and `source`; a change to one needs the `v1-change` label.
+- Submit from `get-bb/marketplace`, never from this repo: copy
+  `dist/store/entries/<id>.json` to `entries/<id>.json`,
+  `dist/store/overview/<id>.md` to `overview/<id>.md`, and
+  `dist/store/screenshots/<id>/` to `screenshots/<id>/`. Batch an overview
+  rewrite with any `description` refresh into one PR (both are listing copy).
+  The submitter has no label rights on `get-bb/marketplace`, so when a
+  frozen-v1 field changes, request the `v1-change` label in the PR body.
+- The overview is written as a fixed set of capability pillars that does NOT
+  churn with versions; per-release detail lives in `CHANGELOG.md` and the
+  What's-new feed. The living README stays the version-chasing document.
 
 ## 5. What's-new derivation (`WHATS_NEW` in `lib/whats-new.ts`)
 
