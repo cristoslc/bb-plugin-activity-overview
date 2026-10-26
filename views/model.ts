@@ -324,6 +324,59 @@ export function dotAction(scale: number, threshold = ZOOMED_IN_SCALE): "open" | 
   return isZoomedIn(scale, threshold) ? "open" : "inert";
 }
 
+// ---------- treemap mark mode: full-fill tiles at fit, dots zoomed in ----------
+
+/**
+ * Which mark one treemap cell renders at camera scale `k`: a full-fill status
+ * tile at or below the zoomed-in threshold, a status dot past it. The switch
+ * reuses `ZOOMED_IN_SCALE` — the one threshold the treemap already owns — so
+ * "zoomed in" keeps a single meaning: tiles are the inert fitted-view marks
+ * (their clicks fall through to the region gesture) and dots are the
+ * actionable units. Strictly greater, like `isZoomedIn`: exactly at the
+ * threshold, tiles still render. The mode is a pure function of the committed
+ * camera scale, so a crossing flips it exactly once — parking the camera near
+ * the boundary never flickers.
+ */
+export type TreemapMark = "tile" | "dot";
+
+export function treemapMarkMode(scale: number, threshold = ZOOMED_IN_SCALE): TreemapMark {
+  return isZoomedIn(scale, threshold) ? "dot" : "tile";
+}
+
+/**
+ * The void between adjacent full-fill tiles, derived from the layout pitch so
+ * it scales with the slot sizes: thin at real-roster densities, never absent
+ * (one tile must read as one thread), never a seam system. The gutter is split
+ * evenly between opposing slot edges, so two adjacent tiles keep exactly
+ * `tileGutter` of void between their marks.
+ */
+export const TILE_GUTTER = { fraction: 0.07, min: 2, max: 8 } as const;
+
+export function tileGutter(pitch: number, band = TILE_GUTTER): number {
+  if (!Number.isFinite(pitch) || pitch <= 0) {
+    throw new RangeError(`tileGutter: pitch must be finite and positive, got ${pitch}`);
+  }
+  return Math.min(band.max, Math.max(band.min, pitch * band.fraction));
+}
+
+/**
+ * Full-fill geometry for one treemap cell slot at the fitted view: the tile
+ * fills the slot minus the gutter, centered, so the mark's area still reads as
+ * the thread's unit area (the treemap's honest fill survives at fit). A slot
+ * smaller than the gutter degenerates to a zero-size tile — the honest empty
+ * mark for a slot too small to draw one.
+ */
+export function tileForSlot(
+  cw: number,
+  ch: number,
+  pitch: number,
+  gutter = tileGutter(pitch),
+): { dx: number; dy: number; w: number; h: number } {
+  const w = Math.max(0, cw - gutter);
+  const h = Math.max(0, ch - gutter);
+  return { dx: (cw - w) / 2, dy: (ch - h) / 2, w, h };
+}
+
 // ---------- working-dot pulse rate (token burn) ----------
 //
 // A working dot's pulse is a slow blink (opacity 1 → 0.55 → 1). Its period is

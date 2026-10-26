@@ -5,6 +5,7 @@ import {
   classify, buildProjects, buildAgentTree,
   squarify, makeCards, shelfPack, attentionScore,
   familyTints, FAMILY_TINTS, zoomToRect, clampPan, clampPanEdges,
+  treemapMarkMode, tileForSlot, tileGutter, TILE_GUTTER, ZOOMED_IN_SCALE,
   type AttnThread, type AttnProject,
 } from "../views/model.ts";
 
@@ -222,4 +223,58 @@ test("clampPanEdges keeps the top margin clear while honoring the bottom margin"
   assert.equal(clampPanEdges(700, 360, 900, 60, 16), 524);
   assert.equal(clampPanEdges(-99, 2000, 1000, 16, 16), -99); // inside the band stays put
   assert.equal(clampPanEdges(-5000, 2000, 1000, 16, 16), -1016);
+});
+
+// ---------- treemap mark mode: full-fill tiles at fit, dots zoomed in ----------
+
+test("treemapMarkMode: tiles at and below the zoomed-in threshold, dots past it", () => {
+  assert.equal(treemapMarkMode(0.2), "tile"); // the zoom-out floor
+  assert.equal(treemapMarkMode(1), "tile"); // the fitted view
+  assert.equal(treemapMarkMode(1.19), "tile");
+  assert.equal(treemapMarkMode(ZOOMED_IN_SCALE), "tile"); // boundary: strictly greater
+  assert.equal(treemapMarkMode(1.2 + 1e-9), "dot");
+  assert.equal(treemapMarkMode(5), "dot"); // the zoom-in ceiling
+});
+
+test("treemapMarkMode honours a custom threshold", () => {
+  assert.equal(treemapMarkMode(1.5, 2), "tile");
+  assert.equal(treemapMarkMode(2, 2), "tile"); // exactly at the threshold: not zoomed in
+  assert.equal(treemapMarkMode(2.5, 2), "dot");
+});
+
+test("tileGutter scales with the pitch and clamps to its band", () => {
+  approx(tileGutter(100), 100 * TILE_GUTTER.fraction); // mid-band: proportional
+  assert.equal(tileGutter(10), TILE_GUTTER.min); // floor keeps one tile = one thread
+  assert.equal(tileGutter(500), TILE_GUTTER.max); // ceiling keeps the void thin
+  assert.throws(() => tileGutter(0)); // fail loud: a junk pitch must not paint NaN tiles
+  assert.throws(() => tileGutter(Number.NaN));
+});
+
+test("tileForSlot fills the slot minus the gutter, centered", () => {
+  const g = tileGutter(100);
+  const t = tileForSlot(100, 100, 100);
+  approx(t.w, 100 - g);
+  approx(t.h, 100 - g);
+  approx(t.dx, g / 2);
+  approx(t.dy, g / 2);
+  // a non-square slot fills each axis independently and stays centered
+  const r = tileForSlot(300, 80, 100);
+  approx(r.w, 300 - g);
+  approx(r.h, 80 - g);
+  approx(r.dx, g / 2);
+  approx(r.dy, g / 2);
+});
+
+test("adjacent slots keep exactly one gutter of void between their tiles", () => {
+  const cw = 90, ch = 60, pitch = 70;
+  const a = tileForSlot(cw, ch, pitch);
+  const b = tileForSlot(cw, ch, pitch); // b's slot starts where a's ends
+  approx(cw + b.dx - (a.dx + a.w), tileGutter(pitch));
+  approx(ch + b.dy - (a.dy + a.h), tileGutter(pitch));
+});
+
+test("a slot smaller than the gutter degenerates to a zero-size tile", () => {
+  const t = tileForSlot(1, 1, 100);
+  assert.equal(t.w, 0);
+  assert.equal(t.h, 0);
 });

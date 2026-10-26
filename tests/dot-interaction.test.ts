@@ -4,7 +4,7 @@
 // gesture stays unambiguous.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ZOOMED_IN_SCALE, dotAction, isZoomedIn } from "../views/model.ts";
+import { ZOOMED_IN_SCALE, dotAction, isZoomedIn, treemapMarkMode } from "../views/model.ts";
 
 test("ZOOMED_IN_SCALE is the single shared threshold (1.2)", () => {
   assert.equal(ZOOMED_IN_SCALE, 1.2);
@@ -37,5 +37,11 @@ test("dotAction: open while zoomed in, inert at the fitted view", () => {
 test("dotAction and isZoomedIn never disagree (one rule, two spellings)", () => {
   for (const k of [0.2, 0.5, 1, 1.19, 1.2, 1.21, 1.5, 2, 5]) {
     assert.equal(dotAction(k), isZoomedIn(k) ? "open" : "inert", `k=${k}`);
+  }
+});
+
+test("treemapMarkMode and dotAction never disagree (dots render exactly when dots open)", () => {
+  for (const k of [0.2, 0.5, 1, 1.19, 1.2, 1.21, 1.5, 2, 5]) {
+    assert.equal(treemapMarkMode(k), dotAction(k) === "open" ? "dot" : "tile", `k=${k}`);
   }
 });

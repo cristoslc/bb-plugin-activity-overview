@@ -15,7 +15,7 @@ The **Activity Overview** panel appears in the sidebar (routed at `/plugins/acti
 ## Views (tabs)
 
 - **Board** — one card per project, fixed dot slots. Volume of dots = thread count, color = status, empty slots keep their place.
-- **Unit treemap** — region area = thread count (squarified); each thread fills its true unit area as one constant-size dot; projects separate by a thin void, no strokes.
+- **Unit treemap** — region area = thread count (squarified); at the fitted view each thread fills its true unit area as one full-fill status tile (zoomed in past 1.2× it is one constant-size dot); projects separate by a thin void, no strokes.
 - **Strip tiles** — one tile per project: name over a strip, one 4px unit per thread, hottest statuses at the left edge; tiles flow-wrap.
 
 ## Reading the dots

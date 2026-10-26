@@ -51,6 +51,8 @@ import {
   zoomToRect,
   clampPanEdges,
   isZoomedIn,
+  treemapMarkMode,
+  tileForSlot,
   type AttnProject,
   type AttnThread,
   type Cell,
@@ -704,6 +706,7 @@ function Dot({
   return (
     <div
       data-attn-unit=""
+      data-attn-mark="dot"
       data-thread-id={cell.t.id}
       data-attn-pulse={working ? (period === null ? "none" : String(Math.round(period))) : undefined}
       role={actionable ? "button" : undefined}
@@ -847,6 +850,71 @@ export function BoardView({
 // ---------- view 2: unit treemap (honest fill + zoom-to-project) ----------
 /** Touch press-and-hold duration for the family-tint preview. */
 const LONG_PRESS_MS = 400;
+/** Corner radius of a full-fill tile (world px): softens the mosaic without
+ * any stroke or seam work. */
+const TILE_RADIUS = 2;
+
+/**
+ * The fitted-view treemap mark (treemapMarkMode's "tile"): the thread's status
+ * color filling its slot minus a thin gutter. Inert by design — opening only
+ * happens zoomed in — so its clicks fall through to the region's
+ * zoom-into-project gesture, like an inert dot's did. Working tiles keep the
+ * burn pulse; idle tiles keep the age-grey ramp through cellColor.
+ */
+function Tile({
+  cell,
+  x,
+  y,
+  w,
+  h,
+  nowMs,
+  pulseRate,
+  onHover,
+  onHoverEnd,
+}: {
+  cell: Cell;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  nowMs: number;
+  /** Measured burn (tok/s) for a working tile; null/absent = not measurable. */
+  pulseRate?: number | null;
+  /** Pointer entered this tile. */
+  onHover?: (thread: AttnThread, el: HTMLElement) => void;
+  /** Pointer left this tile (or the panel). */
+  onHoverEnd?: () => void;
+}) {
+  const status = classify(cell.t);
+  const period = status === "working" ? pulsePeriodMs(pulseRate ?? null) : null;
+  return (
+    <div
+      data-attn-unit=""
+      data-attn-mark="tile"
+      data-thread-id={cell.t.id}
+      data-attn-pulse={period === null ? undefined : String(Math.round(period))}
+      className="absolute"
+      style={{
+        left: x,
+        top: y,
+        width: w,
+        height: h,
+        borderRadius: TILE_RADIUS,
+        background: cellColor(cell.t, nowMs),
+        animation: period === null ? undefined : `attn-pulse ${period}ms ease-in-out infinite`,
+      }}
+      onPointerEnter={
+        onHover === undefined
+          ? undefined
+          : (e) => {
+              if (e.pointerType !== "mouse") return; // touch has no hover
+              onHover(cell.t, e.currentTarget);
+            }
+      }
+      onPointerLeave={onHoverEnd}
+    />
+  );
+}
 
 export function UnitTreemapView({
   data,
@@ -893,6 +961,9 @@ export function UnitTreemapView({
   // actionability tracks the current scale.
   const cam = useCamera(apiRef);
   const zoomed = isZoomedIn(cam.k);
+  // Render mode of the treemap marks: full-fill tiles at/below the zoomed-in
+  // threshold, dots past it (treemapMarkMode, single shared threshold).
+  const tiles = treemapMarkMode(cam.k) === "tile";
   // A reset (the top-right close control or a background click) also clears
   // the project focus, so the view and the camera return together. While a
   // project is focused the close control is pinned visible even if the
@@ -1035,6 +1106,25 @@ export function UnitTreemapView({
               : null}
             {r.p.cells.map((cell, i) => {
               const j = i % r.cols, k = Math.floor(i / r.cols);
+              // Tile mode (fitted view): the status color fills the slot.
+              // Dot mode (zoomed in): the constant-size centered dot.
+              if (tiles) {
+                const tile = tileForSlot(r.cw, r.ch, model.pitch);
+                return (
+                  <Tile
+                    key={cell.t.id}
+                    cell={cell}
+                    x={j * r.cw + tile.dx}
+                    y={k * r.ch + tile.dy}
+                    w={tile.w}
+                    h={tile.h}
+                    nowMs={nowMs}
+                    pulseRate={wiring.pulseRates.get(cell.t.id)}
+                    onHover={wiring.onHover}
+                    onHoverEnd={wiring.onHoverEnd}
+                  />
+                );
+              }
               return (
                 <Dot
                   key={cell.t.id}

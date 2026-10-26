@@ -73,6 +73,17 @@ test("theme: every --attn-* token referenced by the model and views is declared"
   }
 });
 
+test("theme: the CSS string carries no // line comments (they are not CSS)", () => {
+  // `//` does not start a comment in CSS: after each `;` the parser reads the
+  // trailing text as the next declaration's NAME, rejects it, and discards up
+  // to the next `;` — a chain reaction that silently deleted every declaration
+  // after a `//` (the tint palette, and with it --attn-error in the light
+  // block and --attn-idle-ink in the dark block) while the text-presence
+  // checks above kept passing.
+  const offenders = [...THEME_CSS.matchAll(/\/\/[^\n]*/g)].map((m) => m[0]);
+  assert.deepEqual(offenders, []);
+});
+
 test("theme: idle ramp thresholds ascend with the fade", () => {
   for (let i = 1; i < GREYS.length; i++) {
     assert.ok(GREYS[i]![0] > GREYS[i - 1]![0]);

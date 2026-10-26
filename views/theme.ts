@@ -29,12 +29,12 @@ export const THEME_CSS = `
      region fill (ADR-clean — no status data in the tints). The six hues are
      shared by both themes; each keeps the ramp far enough from --attn-card
      that a family reads at a glance, while status ink stays legible on it. */
-  --attn-tint-0: #d3e0ef; // blue
-  --attn-tint-1: #d4e8da; // green
-  --attn-tint-2: #e3d8ee; // purple
-  --attn-tint-3: #eee2d6; // warm
-  --attn-tint-4: #d9def6; // indigo
-  --attn-tint-5: #e4e8c8; // olive
+  --attn-tint-0: #d3e0ef; /* blue */
+  --attn-tint-1: #d4e8da; /* green */
+  --attn-tint-2: #e3d8ee; /* purple */
+  --attn-tint-3: #eee2d6; /* warm */
+  --attn-tint-4: #d9def6; /* indigo */
+  --attn-tint-5: #e4e8c8; /* olive */
   /* status hues: ADR-0001's four, held steady per theme, slightly deepened on
      light so they hold against a bright stage. */
   --attn-error: #d34b43;
@@ -83,12 +83,12 @@ export const THEME_CSS = `
   --attn-prov-other: var(--attn-grey-2);
   --attn-prov-zone: #17222d;
   --attn-prov-zone-border: #2f3f50;
-  --attn-tint-0: #16304d; // blue
-  --attn-tint-1: #123524; // green
-  --attn-tint-2: #2d2145; // purple
-  --attn-tint-3: #3d2b1c; // warm
-  --attn-tint-4: #1b2b5e; // indigo
-  --attn-tint-5: #3a3d14; // olive
+  --attn-tint-0: #16304d; /* blue */
+  --attn-tint-1: #123524; /* green */
+  --attn-tint-2: #2d2145; /* purple */
+  --attn-tint-3: #3d2b1c; /* warm */
+  --attn-tint-4: #1b2b5e; /* indigo */
+  --attn-tint-5: #3a3d14; /* olive */
   --attn-idle-ink: var(--muted-foreground, #a8b3bf);
 }
 `;
