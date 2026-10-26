@@ -48,6 +48,10 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
+    "text": "**Theme colors now paint as declared: the stylesheet no longer silently loses declarations.** The theme blocks ended tint lines with `//` comments, which are not CSS — the parser discarded the declaration chain that followed them, so light mode never had `--attn-error` (error marks painted transparent), the family-tint palette collapsed to its first hue, and the dark block lost its idle-ink override; the comments are real CSS comments now, so error red, all six family tints, and the dark age ramp reach the page.",
+    "children": []
+  },
+  {
     "text": "**A thread that is barely burning now reads \"quiet\" instead of a misleading \"0 tok/min\".** A live rate under one whole token per minute was rounded for display, so a running thread looked dead and its group head read `Σ 0 tok/min`; the flow view now says \"quiet\" and keeps showing the token total, while a thread with a real burn still shows its tok/min and animates.",
     "children": []
   },
