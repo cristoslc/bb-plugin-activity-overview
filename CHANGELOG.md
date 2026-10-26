@@ -19,8 +19,11 @@ Bullet discipline (the What's-new modal reads these, see `.agents/agents-md-deta
   - A toggle in the view chrome swaps Tier 1 to the ACP provider with Tier 2 as the subscription-and-model pair, re-cutting the same roster by the agent that ran it.
   - The `flow` RPC now carries each thread's ACP provider id (`agentProvider`), the Tier-1 key in provider mode; the server reads it from `threads.list`'s `providerId`.
 
+- **The Token flow tab's project stack is now filterable by project.** A toolbar text filter matches a project's name or id (trimmed, case-insensitive; empty shows all); a project that misses vanishes from the stack — never greyed out — and the whole layout (spine boxes, rivers, totals, the tok/min readout) re-scales to the visible set, with a "No projects match …" note and a clear control when nothing does.
+
 ### Changed
 
+- **The Token flow stack now puts the currently-active project on top.** Rows re-sort by the shown live token rate (the row's tok/min), ties breaking by last activity and then total tokens, so the project burning right now leads the stack instead of the one holding the most stored tokens; rows re-order only on flow refreshes, riding the existing animation.
 - **The Token flow tab now opens grouped by subscription.** Tier 1's default axis flips from the ACP provider to the subscription the model rides — a model with no subscription stands in under its ACP provider's label — with the bare model as Tier 2; the toggle's other half, now labelled "ACP provider", re-cuts the column by provider with the subscription-and-model pairs inside.
 - **The Board opens at the same size as the Unit treemap now.** Its shelves grow to fill the chrome-free fit box (solving for the largest slot scale whose pack still fits the height, capped at 2×), so the opening camera lands at 1× instead of leaving unused viewport; a one- or two-project roster stays capped rather than ballooning into a poster.
 - **Every treemap project shows its title at every zoom and pan.** Titles moved to a screen-space layer drawn at a fixed size and decoupled from the camera, one chip per visible project seated without overlap — small projects are labeled at fit and no title shrinks away when the camera zooms out.

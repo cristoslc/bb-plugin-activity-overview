@@ -1,0 +1,167 @@
+test_suite:
+  id: uat-token-flow-filter-001
+  title: Token flow stack ranks by current activity and filters by project — active projects lead, misses vanish
+  description: >
+    Headless suite for the token flow stack's activity sort and project filter.
+    The harness fixture carries three projects: Alpha work (burning hard), Beta
+    infra (burning a little) and Gamma archive (the largest stored total on the
+    board, but no measurable rate and quiet for hours) — so an activity-first
+    stack must rank Alpha → Beta → Gamma where a tokens-first stack would have
+    led with Gamma. The toolbar's project filter narrows the stack by project
+    name or id (trimmed, case-insensitive); a filtered-out project disappears
+    from the stack entirely (never dimmed), an expanded row stays open under a
+    matching query, and a query that matches nothing swaps the stage for a
+    clear empty state with a way back.
+  tags: [interaction, tokenflow, swimlane, filter, sort, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: The stack ranks by current activity — the burning projects lead, the big quiet one sinks
+    criticality: blocker
+    precondition: >
+      dist/ is built (npm run build); the harness serves it; headless Chrome is
+      available at CHROME_PATH (default: system Chrome).
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-row-rect="proj_gamma"]' }
+        instruction: Wait for the full stack (all three fixture projects) to paint.
+        expected: Alpha, Beta and Gamma rows are on screen.
+      - order: 3
+        action: swimlane
+        params: { check: stack-order, order: [proj_alpha, proj_beta, proj_gamma] }
+        instruction: Read every project row top-to-bottom.
+        expected: The rows rank Alpha → Beta → Gamma — the currently-active projects on top, the token-heaviest but quiet project last (a tokens-first sort would have led with Gamma).
+      - order: 4
+        action: profile
+        params: {}
+        instruction: Capture the activity-ranked stack.
+        expected: A screenshot of the stack with the burners leading.
+
+  - id: TC-02
+    title: The project filter narrows the stack; a filtered-out project vanishes, never dims
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-row-rect="proj_gamma"]' }
+        instruction: Wait for the full stack to paint.
+        expected: All three project rows are on screen.
+      - order: 3
+        action: type
+        params: { selector: '[data-attn-project-filter]', value: "beta" }
+        instruction: Type "beta" into the toolbar's project filter.
+        expected: The filter engages (case-insensitive name match on "Beta infra").
+      - order: 4
+        action: assertCount
+        params: { selector: '[data-attn-row-rect]', equals: 1 }
+        instruction: Count the project rows under the filter.
+        expected: Exactly one row — Beta infra.
+      - order: 5
+        action: assertGone
+        params: { selector: '[data-attn-row-rect="proj_alpha"]' }
+        instruction: Look for the filtered-out Alpha row.
+        expected: Gone from the DOM entirely — a miss is removed, not greyed out.
+      - order: 6
+        action: waitFor
+        params: { text: "1/3" }
+        instruction: Read the filter's match-count chip.
+        expected: The chip reports 1 of 3 projects visible.
+      - order: 7
+        action: profile
+        params: {}
+        instruction: Capture the filtered stack.
+        expected: A screenshot showing only the matching project.
+
+  - id: TC-03
+    title: An expanded row stays open and filterable under a matching query
+    criticality: standard
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-lane="working"]' }
+        instruction: Wait for the seeded (hottest) project to open its lanes.
+        expected: Alpha work is expanded with its four lanes.
+      - order: 3
+        action: type
+        params: { selector: '[data-attn-project-filter]', value: "ALPHA" }
+        instruction: Type "ALPHA" (uppercased, to prove case-insensitivity) into the project filter.
+        expected: The filter keeps the matching expanded row.
+      - order: 4
+        action: assertCount
+        params: { selector: '[data-attn-lane]', equals: 4 }
+        instruction: Count the lanes under the filter.
+        expected: The expanded row's four lanes are still drawn — collapsed and expanded rows filter identically.
+      - order: 5
+        action: assertCount
+        params: { selector: '[data-attn-row-rect]', equals: 1 }
+        instruction: Count the rows under the filter.
+        expected: Exactly one row — Alpha work, still expanded.
+      - order: 6
+        action: profile
+        params: {}
+        instruction: Capture the filtered, expanded row.
+        expected: A screenshot of the expanded Alpha row alone.
+
+  - id: TC-04
+    title: A query that matches nothing shows a clear empty state with a way back
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow" }
+        instruction: Open the panel on the Token flow tab.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-row-rect="proj_alpha"]' }
+        instruction: Wait for the stack to paint.
+        expected: The project rows are on screen.
+      - order: 3
+        action: type
+        params: { selector: '[data-attn-project-filter]', value: "zzz-no-such-project" }
+        instruction: Type a query that matches no project.
+        expected: The stack empties into the empty state.
+      - order: 4
+        action: waitForSelector
+        params: { selector: '[data-attn-empty-state]' }
+        instruction: Wait for the empty-state note.
+        expected: A "No projects match …" note names the query, with a Clear control.
+      - order: 5
+        action: assertCount
+        params: { selector: '[data-attn-row-rect]', equals: 0 }
+        instruction: Count the rows under the empty match.
+        expected: Zero rows — the stage holds only the note.
+      - order: 6
+        action: click
+        params: { selector: '[data-attn-empty-state-clear]' }
+        instruction: Click the empty state's Clear-filter control.
+        expected: The filter empties and the full stack returns.
+      - order: 7
+        action: waitForSelector
+        params: { selector: '[data-attn-row-rect="proj_gamma"]' }
+        instruction: Wait for the restored stack.
+        expected: All three project rows are back.
+      - order: 8
+        action: profile
+        params: {}
+        instruction: Capture the restored stack.
+        expected: A screenshot of the unfiltered three-project stack.

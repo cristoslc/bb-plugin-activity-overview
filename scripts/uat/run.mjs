@@ -333,8 +333,8 @@ async function assertPulse(page) {
  * check reads the data-attn-* marks the view paints, so the assertions track
  * what actually rendered, not a re-derivation of the model.
  */
-async function swimlaneCheck(page, check) {
-  const outcome = await page.evaluate(async (which) => {
+async function swimlaneCheck(page, check, order = null) {
+  const outcome = await page.evaluate(async ({ which, wantOrder }) => {
     const checks = [];
     const add = (name, ok, detail) => checks.push({ name, ok, detail });
     const svg = document.querySelector('svg[aria-label="token flow swimlanes"]');
@@ -595,8 +595,28 @@ async function swimlaneCheck(page, check) {
       };
     }
 
+    if (which === "stack-order") {
+      // The stack's rank order: every project row read top-to-bottom must
+      // equal the wanted id order (the activity sort's end-to-end probe).
+      const rows = rects("[data-attn-row-rect]").map(box).sort((a, b) => a.t - b.t);
+      const ids = rows.map((b) => b.id);
+      add("rows present", rows.length >= 2, `${rows.length} project rows`);
+      if (Array.isArray(wantOrder) && wantOrder.length > 0) {
+        add(
+          `stack order is ${wantOrder.join(" → ")}`,
+          JSON.stringify(ids) === JSON.stringify(wantOrder),
+          ids.length ? ids.join(" → ") : "no rows",
+        );
+      }
+      return {
+        pass: checks.every((c) => c.ok),
+        checks,
+        detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || `stack order: ${ids.join(" → ")}`,
+      };
+    }
+
     return { pass: false, checks, detail: `unknown swimlane check "${which}"` };
-  }, check);
+  }, { which: check, wantOrder: order });
   return outcome;
 }
 
@@ -778,6 +798,26 @@ async function runCase(page, evidenceDir, kase) {
           entry.detail = entry.pass ? `clicked ${step.params.selector}` : `no element for ${step.params.selector}`;
           break;
         }
+        case "type": {
+          // Set an input's value the way React's controlled inputs accept: a
+          // direct `.value` write is undone by React's re-render, so the value
+          // goes through the input's own prototype setter followed by a
+          // bubbling `input` event — the same signal real typing produces.
+          entry.pass = await page.evaluate(({ selector, value }) => {
+            const el = document.querySelector(selector);
+            if (el === null || !(el instanceof HTMLInputElement)) return false;
+            const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")?.set;
+            if (setter === undefined) return false;
+            el.focus();
+            setter.call(el, value);
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            return true;
+          }, { selector: step.params.selector, value: step.params.value ?? "" });
+          entry.detail = entry.pass
+            ? `typed "${step.params.value ?? ""}" into ${step.params.selector}`
+            : `no input element for ${step.params.selector}`;
+          break;
+        }
         case "assertExists": {
           entry.pass = await page.evaluate((selector) => document.querySelector(selector) !== null, step.params.selector);
           entry.detail = entry.pass ? `${step.params.selector} present` : `${step.params.selector} absent`;
@@ -840,7 +880,7 @@ async function runCase(page, evidenceDir, kase) {
           break;
         }
         case "swimlane": {
-          const outcome = await swimlaneCheck(page, step.params?.check ?? "lanes");
+          const outcome = await swimlaneCheck(page, step.params?.check ?? "lanes", step.params?.order);
           entry.pass = outcome.pass;
           entry.detail = outcome.detail;
           entry.checks = outcome.checks;
