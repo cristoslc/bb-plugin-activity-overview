@@ -136,13 +136,23 @@ export function TokenFlowView() {
   const [width, setWidth] = useState<number>(SWIMLANE.W);
   /** Tier-1 grouping: the subscription (default) or the ACP provider. */
   const [mode, setMode] = useState<FlowMode>("subscription");
+  /**
+   * The project text filter — view-local session state (not persisted, unlike
+   * Focus Board's localStorage-backed filters). An empty query shows every
+   * project; a miss removes its row from the stack entirely.
+   */
+  const [projectQuery, setProjectQuery] = useState("");
 
   const threads = useMemo((): FlowThread[] => (flow === null ? [] : flow.threads), [flow]);
+  /** How many projects the roster holds (the filter count's denominator). */
+  const totalProjects = useMemo(() => new Set(threads.map((t) => t.projectId)).size, [threads]);
 
   const layout: SwimlaneLayout = useMemo(
-    () => swimlaneLayout(threads, { width, openProjects, openThreads, mode }),
-    [threads, width, openProjects, openThreads, mode],
+    () => swimlaneLayout(threads, { width, openProjects, openThreads, mode, projectFilter: projectQuery }),
+    [threads, width, openProjects, openThreads, mode, projectQuery],
   );
+  const filterActive = projectQuery.trim() !== "";
+  const noMatches = filterActive && layout.rows.length === 0;
 
   // Seed the view: open the hottest project once, so the lanes are on screen.
   const seededRef = useRef(false);
@@ -301,8 +311,41 @@ export function TokenFlowView() {
           <span className="text-sm font-bold" style={{ color: "var(--attn-emph)" }}>
             {fmtTokMin(totalMin)}
           </span>
-          <span>tok/min all projects</span>
+          <span>{filterActive ? "tok/min visible projects" : "tok/min all projects"}</span>
         </span>
+        <label className="flex items-center gap-1 text-[11px]" data-attn-project-filter-active={filterActive}>
+          <span className="text-muted-foreground">Filter</span>
+          <span className="relative inline-flex items-center">
+            <input
+              data-attn-project-filter=""
+              type="text"
+              value={projectQuery}
+              onChange={(e) => setProjectQuery(e.target.value)}
+              placeholder="Filter projects…"
+              aria-label="Filter projects"
+              spellCheck={false}
+              className={`rounded border border-border/60 bg-transparent py-0.5 text-[11px] outline-none focus:border-border ${filterActive ? "w-36 pr-5" : "w-36"}`}
+              style={{ color: "var(--attn-label)" }}
+            />
+            {filterActive ? (
+              <button
+                type="button"
+                data-attn-project-filter-clear=""
+                aria-label="Clear project filter"
+                title="Clear project filter"
+                onClick={() => setProjectQuery("")}
+                className="absolute right-1 text-[11px] leading-none text-muted-foreground hover:text-foreground"
+              >
+                ×
+              </button>
+            ) : null}
+          </span>
+          {filterActive ? (
+            <span data-attn-filter-count="" className="text-[10.5px]" style={{ color: "var(--attn-faint)" }}>
+              {layout.rows.length}/{totalProjects}
+            </span>
+          ) : null}
+        </label>
         <span className="flex items-center gap-1 text-[11px]" data-attn-tier-toggle={mode}>
           <span className="text-muted-foreground">Tier 1</span>
           <span className="inline-flex overflow-hidden rounded border border-border/60">
@@ -381,8 +424,30 @@ export function TokenFlowView() {
         </label>
       </div>
 
-      {/* stage — a plain vertical/diagonal scroll; the SVG is 1:1 in world px */}
+      {/* stage — a plain vertical/diagonal scroll; the SVG is 1:1 in world px.
+          A filter that matches nothing swaps the stage for a note (the
+          empty state), naming the query with a way back. */}
       <div ref={setStageEl} data-attn-stage="" className="relative min-h-0 flex-1 overflow-auto">
+        {noMatches ? (
+          <div data-attn-empty-state="" className="flex h-full w-full items-center justify-center">
+            <div className="text-center">
+              <p className="text-sm" style={{ color: "var(--attn-sub)" }}>
+                No projects match{" "}
+                <span className="font-semibold" style={{ color: "var(--attn-emph)" }}>
+                  “{projectQuery.trim()}”
+                </span>
+              </p>
+              <button
+                type="button"
+                data-attn-empty-state-clear=""
+                onClick={() => setProjectQuery("")}
+                className="mt-2 rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                Clear filter
+              </button>
+            </div>
+          </div>
+        ) : (
         <svg
           ref={stageSvgRef}
           viewBox={`0 0 ${layout.W} ${layout.H}`}
@@ -457,6 +522,7 @@ export function TokenFlowView() {
             );
           })}
         </svg>
+        )}
       </div>
 
       {/* legend — a fixed strip (no floating card over the stage) */}

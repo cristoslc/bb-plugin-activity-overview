@@ -120,11 +120,14 @@ export const SHAPE_DELAY_MS = Math.max(
 
 /**
  * Simulated `flow` RPC payload for the screenshot/UAT harness: the swimlane
- * token-flow fixture. Two projects — Alpha work opens by default (it holds the
- * runaway thread plus enough working threads to overflow the Working lane, so
- * the suite can assert independent lane scrolling) and Beta infra stays
- * collapsed. Every thread carries a 20-bucket burn series so the rivers and the
- * row sparkline have real shapes.
+ * token-flow fixture. Three projects — Alpha work opens by default (it holds
+ * the runaway thread plus enough working threads to overflow the Working lane,
+ * so the suite can assert independent lane scrolling), Beta infra and Gamma
+ * archive stay collapsed. Gamma exists to discriminate the stack's activity
+ * sort: it stores the most tokens by far but burns nothing and its threads
+ * went quiet hours ago, so an activity-first stack must rank it last (a
+ * tokens-first stack would have led with it). Every thread carries a 20-bucket
+ * burn series so the rivers and the row sparkline have real shapes.
  */
 const FLOW_BUCKETS = 20;
 const burn = (peak: number, shape: "ramp" | "steady" | "burst"): number[] =>
@@ -212,5 +215,11 @@ export const SIM_FLOW = {
     // Beta infra — stays collapsed by default.
     flowThread({ id: "thr_running_slow", projectId: "proj_beta", projectName: "Beta infra", title: "Audit the migration notes", usedTokens: 38_200, rate: 60, provider: "openai", agentProvider: "codex", model: "gpt-6-luna" }),
     flowThread({ id: "thr_wait", projectId: "proj_beta", projectName: "Beta infra", title: "card tween", status: "waiting", usedTokens: 9_600, provider: "anthropic", agentProvider: "claude-code", model: "claude-sonnet-5.5", rate: 0, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    // Gamma archive — the activity sort's discriminator: the largest stored
+    // total on the board, no measurable rate, threads quiet for hours. Under
+    // the activity-first stack it ranks last; under a tokens-first stack it
+    // would have led.
+    flowThread({ id: "thr_archive_a", projectId: "proj_gamma", projectName: "Gamma archive", title: "old sweep one", status: "idle", usedTokens: 400_000, rate: 0, updatedAt: NOW - 7200_000, createdAt: NOW - 9000_000, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
+    flowThread({ id: "thr_archive_b", projectId: "proj_gamma", projectName: "Gamma archive", title: "old sweep two", status: "idle", usedTokens: 120_000, rate: 0, updatedAt: NOW - 8000_000, createdAt: NOW - 9500_000, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
   ],
 };

@@ -70,8 +70,21 @@ may need to act on."*
   toggle swaps Tier 1 to the ACP provider (the thread's bb `providerId`,
   labelled "opencode"/"Codex"/…) with Tier 2 as the subscription-and-model
   pairs (say `synthetic / hf:zai-org/GLM-5.3-Flash`). The projects
-  remain a vertical stack of wide rows, hottest project first — never tiled —
-  and an expanded row tiles its four status lanes across its width.
+  remain a vertical stack of wide rows — never tiled — and an expanded row
+  tiles its four status lanes across its width.
+- **The stack ranks by current activity, and the toolbar filters projects.**
+  Rows sort by the shown live rate (Σ the threads' measured burn), ties
+  breaking by last activity (the newest `updatedAt` on the `flow` payload),
+  then total tokens, then name/id — so the project burning right now leads the
+  stack and a big-but-quiet project sinks; rows re-sort on flow refreshes,
+  riding the bead animation. A toolbar text filter matches a project's name or
+  id (trimmed, case-insensitive; empty = show all, view-local session state,
+  not persisted): a miss **vanishes from the stack** (never dimmed) and every
+  total — spine boxes, rivers, sparkline maxima, the tok/min readout —
+  re-scales to the visible set; a query matching nothing shows a "No projects
+  match …" note with a clear control (`projectMatchesQuery`,
+  `swimlaneLayout`'s `projectFilter` opt in views/model.ts; UAT in
+  `tests/manual/uat-token-flow-filter.yaml`).
 - **A flow path is two rivers, and both are drawn the same way.** A Tier-1
   outer box feeds each project row with a filled band in the gutter between the
   column and the row, sized by that group's flow in that project; then the

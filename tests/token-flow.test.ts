@@ -18,6 +18,7 @@ import {
   cardPaintOrder,
   laneOf,
   modelParts,
+  projectMatchesQuery,
   providerOfModel,
   readsQuiet,
   recentFlowTokMin,
@@ -242,6 +243,75 @@ test("stack: projects pile vertically, one full-width row each, never tiled", ()
   assert.ok(l.H >= l.rows[l.rows.length - 1]!.y + l.rows[l.rows.length - 1]!.h);
   // The hottest project (activity: 38200+... vs focus-board) leads the stack.
   assert.equal(l.rows[0]!.name, "activity");
+});
+
+test("stack order keys on activity: rate first, then last activity, then tokens", () => {
+  // "big" holds by far the most tokens but burns nothing and went quiet hours
+  // ago; "hot" and "mid" burn. An activity-first stack leads with the
+  // burners and buries the big quiet one, whichever its stored total.
+  const threads = [
+    fThread({ id: "t_big", projectId: "p_big", projectName: "big", usedTokens: 900_000, rate: 0, updatedAt: 9_000_000 }),
+    fThread({ id: "t_hot", projectId: "p_hot", projectName: "hot", usedTokens: 1_000, rate: 200, updatedAt: 1_000 }),
+    fThread({ id: "t_mid", projectId: "p_mid", projectName: "mid", usedTokens: 500_000, rate: 100, updatedAt: 5_000_000 }),
+  ];
+  const l = swimlaneLayout(threads, { width: 1860 });
+  assert.deepEqual(l.rows.map((r) => r.name), ["hot", "mid", "big"]);
+});
+
+test("stack order: an equal rate ranks by last activity; a full tie falls through tokens, then name", () => {
+  const threads = [
+    // Same rate (100): the more recently active project ranks above the stale one.
+    fThread({ id: "a", projectId: "p_stale", projectName: "stale", usedTokens: 900_000, rate: 100, updatedAt: 1_000 }),
+    fThread({ id: "b", projectId: "p_fresh", projectName: "fresh", usedTokens: 100, rate: 100, updatedAt: 9_000 }),
+    // Dead-even tie on every activity key: total tokens decide…
+    fThread({ id: "c", projectId: "p_light", projectName: "zeta", usedTokens: 5, rate: 0, updatedAt: 1 }),
+    fThread({ id: "d", projectId: "p_heavy", projectName: "yank", usedTokens: 9, rate: 0, updatedAt: 1 }),
+  ];
+  const l = swimlaneLayout(threads, { width: 1860 });
+  assert.deepEqual(l.rows.map((r) => r.id), ["p_fresh", "p_stale", "p_heavy", "p_light"]);
+});
+
+test("stack order: a full tie on activity and tokens falls back to name, then id", () => {
+  const threads = [
+    fThread({ id: "a", projectId: "p_b", projectName: "twin", usedTokens: 5, rate: 0, updatedAt: 1 }),
+    fThread({ id: "b", projectId: "p_a", projectName: "twin", usedTokens: 5, rate: 0, updatedAt: 1 }),
+    fThread({ id: "c", projectId: "p_alpha", projectName: "alpha", usedTokens: 5, rate: 0, updatedAt: 1 }),
+  ];
+  const l = swimlaneLayout(threads, { width: 1860 });
+  assert.deepEqual(l.rows.map((r) => r.id), ["p_alpha", "p_a", "p_b"]);
+});
+
+test("projectMatchesQuery: trimmed case-insensitive substring over name and id; empty passes all", () => {
+  const beta = { id: "proj_beta", name: "Beta infra" };
+  assert.equal(projectMatchesQuery(beta, "BETA"), true, "name, case-insensitive");
+  assert.equal(projectMatchesQuery(beta, "  infra  "), true, "query is trimmed");
+  assert.equal(projectMatchesQuery(beta, "proj_beta"), true, "the id joins the haystack");
+  assert.equal(projectMatchesQuery(beta, "gamma"), false, "a miss fails");
+  assert.equal(projectMatchesQuery(beta, ""), true, "empty shows all");
+  assert.equal(projectMatchesQuery(beta, "   "), true, "whitespace-only shows all");
+  assert.equal(projectMatchesQuery(beta, undefined), true, "absent shows all");
+});
+
+test("swimlaneLayout honours the project filter: misses vanish, the visible set re-scales", () => {
+  const l = swimlaneLayout(roster(), { width: 1860, projectFilter: "focus" });
+  assert.deepEqual(l.rows.map((r) => r.name), ["focus-board"], "only the matching project row is drawn");
+  assert.equal(l.totalRate, 150, "totals describe the visible set only");
+  for (const k of l.links) {
+    assert.ok(k.id.startsWith("link:pf:"), `no link may point at a filtered-out project: ${k.id}`);
+  }
+  // The filtered stack still stacks and keeps finite geometry.
+  assert.ok(Number.isFinite(l.H) && l.H > 0);
+});
+
+test("swimlaneLayout: the filter keeps an expanded row's lanes; an empty match yields a finite empty stack", () => {
+  const open = new Set(["pa"]);
+  const kept = swimlaneLayout(roster(), { width: 1860, projectFilter: "ACT", openProjects: open });
+  assert.deepEqual(kept.rows.map((r) => r.id), ["pa"], "case-insensitive name match keeps the row");
+  assert.equal(kept.rows[0]!.lanes.length, 4, "an expanded row stays expanded under the filter");
+  const none = swimlaneLayout(roster(), { width: 1860, projectFilter: "no-such-project" });
+  assert.deepEqual(none.rows, [], "a query matching nothing draws no rows");
+  assert.deepEqual(none.links, [], "and no rivers");
+  assert.ok(Number.isFinite(none.H) && none.H > 0, "the world stays finite");
 });
 
 test("tiers tile: an expanded row carries four lanes left-to-right with a gutter", () => {

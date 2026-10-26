@@ -12,6 +12,8 @@ supersedes: token-flow-tiled-spec.md (declined)
 > Ported into the live plugin: `swimlaneLayout` and the river helpers in `views/model.ts`, painted by `views/TokenFlowView.tsx`. See `tests/token-flow.test.ts` and `tests/manual/uat-token-flow-swimlanes.yaml`.
 >
 > **Update (thr_h3id3kyfaf):** Tier 1 is no longer a flat provider-family spine. The left column is now a stack of nested boxes — outer = the subscription the model rides (`modelParts` in `views/model.ts`), inner = the model — with every box's height encoding active flow (tok/min over the last 10 intervals; `tierGroups`, `boxHeight`, `recentFlowTokMin` in `views/model.ts`). This subscription axis is the **default**; a view-chrome toggle swaps Tier 1 to the ACP provider (`agentProvider`, from `threads.list`'s `providerId`) with Tier 2 as the subscription-and-model pair. The `flow` RPC gained the `agentProvider` field for this.
+>
+> **Update (thr_x88jeef663):** the stack's order keys on **current activity** and the toolbar gained a **project filter** (§2b).
 
 ## The goal (north star)
 
@@ -48,6 +50,14 @@ Five `tokenFlowStatus` values fold into four lanes; Needs You absorbs error (the
 ## 2. Collapsed project = one wide row (Tier 2 at rest)
 
 A row (~full width × 94px) carries the project name, total tokens, live **tok/min**, thread/working counts, a **provider-mix strip**, and a **burn sparkline** for the hottest thread. Flow lines run provider → row: **thickness = historical burn, beads = current activity**. Quiet projects sit dim.
+
+## 2b. Stack order and the project filter (thr_x88jeef663)
+
+The operator's two asks for the stack: **active projects on top**, and a **project filter** like Focus Board's.
+
+- **Stack order keys on current activity.** Rows sort by the shown live rate (Σ the project's threads' measured burn — the same tok/min the row displays), ties break by **last activity** (the newest `updatedAt` any of its threads carries — already on the `flow` payload, so no RPC change), then by **total tokens**, then name, then id, so equal keys never reorder. A project that stores the most tokens but burns nothing ranks below any burning project. Rows **re-sort on flow refreshes** (the coalesced `FLOW_CHANGED` push and the 15s heartbeat), riding the existing bead animation: the rate key is a one-hour windowed average, so it moves slowly, and last activity promotes only a project that became the most recently active — a legible change, not jitter. This was a judgment call the operator can override; added hysteresis (a "hot for N refreshes" ladder) was declined because it would make the layout stateful.
+- **The project filter is a toolbar text input** (the Focus Board interaction pattern — one match test, no dimming). It matches a project's **name or id** as a trimmed, case-insensitive substring; an empty query shows every project. A project that misses **disappears from the stack** — never greyed — and the whole layout re-scales to the visible set: spine boxes, Tier-1→row rivers, totals, sparkline maxima and the toolbar's tok/min readout (relabelled "visible projects" while a filter is active) all describe only what is drawn. Collapsed and expanded rows filter identically; an expanded row that stays matched stays open. A query that matches nothing swaps the stage for a **"No projects match …" note with a Clear-filter control** (the camera needs nothing special: the stage is a plain scroll and the world height shrinks with the stack). The filter is **view-local session state, not persisted** — Focus Board persists its filters in `localStorage` (its ADR 0001 calls them view adjustments); that was flagged to the operator, not built unasked. Pure helpers: `projectMatchesQuery`, `swimlaneLayout`'s `projectFilter` opt; tests in `tests/token-flow.test.ts`, UAT in `tests/manual/uat-token-flow-filter.yaml`.
+
 
 ## 3. Expanded project = tiled status lanes (Tier 3)
 
@@ -86,7 +96,7 @@ A thread with children shows a `▸ N sub` / `▾ N nested` chip. Opened, its ch
 
 ## 7. Open questions for the operator
 
-1. **Stack order:** order project rows by hotness (busiest at top) rather than alphabetically? — *implemented as hotness: rows sort by subtree flow, so the out-of-control project leads the stack.*
+1. **Stack order:** order project rows by hotness (busiest at top) rather than alphabetically? — *implemented as hotness: rows sort by subtree flow, so the out-of-control project leads the stack. Re-keyed in thr_x88jeef663 to current activity: shown live rate first, then last activity, then total tokens (§2b).*
 2. **Lane sort:** every lane sorts by consumption (proposed) — or should Needs You sort error-first/most-urgent?
 3. **Best-case confirm:** should an all-folded project with no live burn collapse to a single thin line instead of a full row?
 4. **Nesting depth cap:** hard cap at grandchild (operator's call; `MAX_DEPTH = 2`) — confirmed. Anything deeper would be shown collapsed at the grandchild.

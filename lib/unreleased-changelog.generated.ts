@@ -28,6 +28,14 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     ]
   },
   {
+    "text": "**The Token flow tab's project stack is now filterable by project.** A toolbar text filter matches a project's name or id (trimmed, case-insensitive; empty shows all); a project that misses vanishes from the stack — never greyed out — and the whole layout (spine boxes, rivers, totals, the tok/min readout) re-scales to the visible set, with a \"No projects match …\" note and a clear control when nothing does.",
+    "children": []
+  },
+  {
+    "text": "**The Token flow stack now puts the currently-active project on top.** Rows re-sort by the shown live token rate (the row's tok/min), ties breaking by last activity and then total tokens, so the project burning right now leads the stack instead of the one holding the most stored tokens; rows re-order only on flow refreshes, riding the existing animation.",
+    "children": []
+  },
+  {
     "text": "**The Token flow tab now opens grouped by subscription.** Tier 1's default axis flips from the ACP provider to the subscription the model rides — a model with no subscription stands in under its ACP provider's label — with the bare model as Tier 2; the toggle's other half, now labelled \"ACP provider\", re-cuts the column by provider with the subscription-and-model pairs inside.",
     "children": []
   },

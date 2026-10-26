@@ -1637,6 +1637,12 @@ export type SwimlaneOpts = {
   maxDepth?: number;
   /** The Tier-1 grouping axis: the subscription (default) or the ACP provider. */
   mode?: FlowMode;
+  /**
+   * The project text filter: rows whose project (name or id) misses it vanish
+   * from the stack — never dimmed — and every downstream total (spine boxes,
+   * rivers, sparkline maxima, the grand rate) re-scales to the visible set.
+   */
+  projectFilter?: string;
   /** The sampled burn window behind `.series` (defaults to FLOW_WINDOW_MS). */
   windowMs?: number;
   /** The bucket count behind `.series` (defaults to FLOW_BUCKETS). */
@@ -1644,6 +1650,17 @@ export type SwimlaneOpts = {
 };
 
 const clampN = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
+
+/**
+ * The project filter's one match test (the Focus Board pattern): a trimmed,
+ * case-insensitive substring over the project's name and id. An empty (or
+ * absent) query passes everything, so no selection is the same as "show all".
+ */
+export function projectMatchesQuery(project: { id: string; name: string }, query: string | undefined): boolean {
+  const q = (query ?? "").trim().toLowerCase();
+  if (q === "") return true;
+  return project.name.toLowerCase().includes(q) || project.id.toLowerCase().includes(q);
+}
 
 /** A filled sankey river: a band of thickness w leaving a mouth at (x1,y1)
  *  and landing at (x2,y2). Always paired with an explicit fill at the call
@@ -1693,14 +1710,18 @@ const flatNodes = (nodes: readonly FlowNode[]): FlowNode[] =>
 
 /**
  * The full swimlane layout for a roster (already window-filtered by the view).
- * Deterministic. Projects pile in one vertical stack, ordered by total tokens
- * (the hottest project first) so the out-of-control project is at the top;
- * inside an expanded row the four lanes tile across the width, each sorted by
- * subtree flow (highest-consuming at the top). A thread's card lives in the
- * lane of its own status — a child that shares its parent's lane is nested
- * inside the parent's card, and a child in another lane is promoted to its own
- * lane's top level (`containedForest`), so a running thread is never hidden
- * behind a non-running parent.
+ * Deterministic. The optional `projectFilter` narrows the roster to threads
+ * whose project passes `projectMatchesQuery` before anything is laid out, so
+ * the spine, the rows, the rivers and every total describe exactly the visible
+ * set. Projects pile in one vertical stack, ordered by current activity — the
+ * shown live rate first, then last activity, then total tokens, then name,
+ * then id — so the project burning right now leads the stack and equal keys
+ * never reorder; inside an expanded row the four lanes tile across the width,
+ * each sorted by subtree flow (highest-consuming at the top). A thread's card
+ * lives in the lane of its own status — a child that shares its parent's lane
+ * is nested inside the parent's card, and a child in another lane is promoted
+ * to its own lane's top level (`containedForest`), so a running thread is
+ * never hidden behind a non-running parent.
  */
 export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): SwimlaneLayout {
   const C = SWIMLANE;
@@ -1711,7 +1732,11 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   const buckets = opts.buckets ?? FLOW_BUCKETS;
   const openProjects = opts.openProjects ?? new Set<string>();
   const openThreads = opts.openThreads ?? new Set<string>();
-  const roots = buildForest(threads);
+  // The project filter is the roster's gate: everything below (forest, spine,
+  // project map, totals) reads the narrowed set, so a filtered-out project
+  // vanishes whole — no row, no river, no spine contribution.
+  const visible = threads.filter((t) => projectMatchesQuery({ id: t.projectId, name: t.projectName }, opts.projectFilter));
+  const roots = buildForest(visible);
   // What the lanes actually draw: a child that shares its parent's lane stays
   // nested inside the parent's card; a child in another lane is promoted to its
   // own lane's top level.
@@ -1729,14 +1754,23 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   // ACP provider in the toggle's mode); the inner boxes are the models (the
   // subscription+model pairs). Every box's height encodes active
   // flow. Replaces the old flat provider-family spine.
-  const spine = tierGroups(threads, mode, { windowMs, buckets });
+  const spine = tierGroups(visible, mode, { windowMs, buckets });
 
-  // Tier 2 — one row per project, hottest first. A project owns the threads
-  // whose own projectId is its own, so a promoted child reports in its own
-  // project's row rather than its parent's.
+  // Tier 2 — one row per project, the currently-active project first: the
+  // shown live rate leads (Σ the threads' measured burn), last activity breaks
+  // rate ties (a project that just went quiet sinks below one still burning),
+  // total tokens breaks activity ties, and name/id keep full ties stable.
+  // Re-sorting rides the flow refreshes: the rate key is a one-hour windowed
+  // average, so it moves slowly, and last activity promotes only a project
+  // that became the most recently active — a legible change, not jitter.
+  const rateOfProject = (ts: FlowThread[]): number => ts.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0);
+  const lastActivityOf = (ts: FlowThread[]): number =>
+    ts.reduce((m, t) => Math.max(m, t.updatedAt ?? t.createdAt ?? 0), 0);
+  // A project owns the threads whose own projectId is its own, so a promoted
+  // child reports in its own project's row rather than its parent's.
   const projectMap = new Map<string, { id: string; name: string; threads: FlowThread[] }>();
   const tokensOfThread = (t: FlowThread) => Math.max(0, t.usedTokens ?? 0);
-  for (const t of threads) {
+  for (const t of visible) {
     const p = projectMap.get(t.projectId);
     if (p === undefined) {
       projectMap.set(t.projectId, { id: t.projectId, name: t.projectName, threads: [t] });
@@ -1744,8 +1778,9 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   }
   const projects = [...projectMap.values()].sort(
     (a, b) =>
-      b.threads.reduce((s, t) => s + tokensOfThread(t), 0) -
-        a.threads.reduce((s, t) => s + tokensOfThread(t), 0) ||
+      rateOfProject(b.threads) - rateOfProject(a.threads) ||
+      lastActivityOf(b.threads) - lastActivityOf(a.threads) ||
+      b.threads.reduce((s, t) => s + tokensOfThread(t), 0) - a.threads.reduce((s, t) => s + tokensOfThread(t), 0) ||
       a.name.localeCompare(b.name) ||
       a.id.localeCompare(b.id),
   );
@@ -1757,7 +1792,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
   let maxLinkRate = 0;
   {
     const byProject = new Map<string, Map<string, { total: number; rate: number }>>();
-    for (const t of threads) {
+    for (const t of visible) {
       let m = byProject.get(t.projectId);
       if (m === undefined) {
         m = new Map();
@@ -1987,7 +2022,7 @@ export function swimlaneLayout(threads: FlowThread[], opts: SwimlaneOpts = {}): 
     H,
     maxShownRate,
     maxFlow,
-    totalRate: threads.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0),
+    totalRate: visible.reduce((s, t) => s + Math.max(0, t.rate ?? 0), 0),
     mode,
     spine,
     links,
