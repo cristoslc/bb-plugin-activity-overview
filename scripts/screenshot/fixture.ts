@@ -17,6 +17,10 @@ export interface SimThread {
   updatedAt: number;
   createdAt: number;
   isPinned?: boolean;
+  /** Set on the demo fixture's needs-you threads (classify reads it first). */
+  hasPendingInteraction?: boolean;
+  /** Set on the demo fixture's unread threads (classify reads it last). */
+  isUnread?: boolean;
 }
 
 const NOW = 1760000000000;
@@ -70,6 +74,89 @@ export const SIM_THREADS: readonly SimThread[] = [
     updatedAt: NOW - 7200_000,
     createdAt: NOW - 9000_000,
   },
+];
+
+/**
+ * The demo fixture (`?demo=1`): extra projects whose threads carry the statuses
+ * the base fixture never shows — needs-you (a pending interaction), unread, and
+ * nested children/grandchildren — so the store screenshots and the hero GIF show
+ * every dot hue at a realistic density. Appended on top of the base set; UAT
+ * suites never set the flag and keep their assertions pinned to the base four
+ * threads.
+ */
+const demoThread = (
+  over: Pick<SimThread, "id" | "projectId" | "title" | "status"> &
+    Partial<SimThread>,
+): SimThread => ({
+  titleFallback: "New thread",
+  parentThreadId: null,
+  updatedAt: NOW - 90_000,
+  createdAt: NOW - 700_000,
+  ...over,
+});
+
+export const SIM_DEMO_PROJECTS: readonly { id: string; name: string }[] = [
+  { id: "proj_gamma", name: "Gamma archive" },
+  { id: "proj_delta", name: "Delta redesign" },
+  { id: "proj_epsilon", name: "Epsilon docs" },
+  { id: "proj_zeta", name: "Design system" },
+  { id: "proj_eta", name: "Platform services" },
+  { id: "proj_theta", name: "Data pipeline" },
+  { id: "proj_iota", name: "Mobile shell" },
+];
+
+/**
+ * Bulk projects so the aggregate views read like a long-lived workspace rather
+ * than a demo of five. Generated (never hand-listed) so the fixture stays
+ * small and deterministic; statuses cycle through a fixed pattern so every
+ * view shows all five hues at a realistic density.
+ */
+const BULK: readonly { id: string; name: string; count: number }[] = [
+  { id: "proj_zeta", name: "Design system", count: 14 },
+  { id: "proj_eta", name: "Platform services", count: 20 },
+  { id: "proj_theta", name: "Data pipeline", count: 10 },
+  { id: "proj_iota", name: "Mobile shell", count: 7 },
+];
+const BULK_STATUS = ["active", "active", "idle", "idle", "error", "active", "idle"] as const;
+
+const bulkThreads: SimThread[] = BULK.flatMap((project) =>
+  Array.from({ length: project.count }, (_, i) =>
+    demoThread({
+      id: `thr_bulk_${project.id}_${i}`,
+      projectId: project.id,
+      title: `${project.name} task ${i + 1}`,
+      status: BULK_STATUS[i % BULK_STATUS.length],
+      updatedAt: NOW - (i + 1) * 60_000,
+      isUnread: i % 7 === 3,
+      hasPendingInteraction: i % 9 === 5,
+    }),
+  ),
+);
+
+export const SIM_DEMO_THREADS: readonly SimThread[] = [
+  // Gamma archive — quiet after a burst; one error and one stuck watcher.
+  demoThread({ id: "thr_demo_err", projectId: "proj_gamma", title: "Nightly export crashed", status: "error", updatedAt: NOW - 300_000 }),
+  demoThread({ id: "thr_demo_watch", projectId: "proj_gamma", title: "Watch the backup rotation", status: "idle", updatedAt: NOW - 5_400_000 }),
+  demoThread({ id: "thr_demo_old", projectId: "proj_gamma", title: "Retire the v1 importer", status: "idle", updatedAt: NOW - 86_400_000 }),
+  demoThread({ id: "thr_demo_arch", projectId: "proj_gamma", title: null, status: "idle", updatedAt: NOW - 172_800_000 }),
+
+  // Delta redesign — the active family: a working parent with a nested child
+  // and grandchild, plus a needs-you sibling waiting on the operator.
+  demoThread({ id: "thr_demo_des", projectId: "proj_delta", title: "Redesign the settings pane", status: "active", updatedAt: NOW - 45_000 }),
+  demoThread({ id: "thr_demo_des_c1", projectId: "proj_delta", title: "Wire the new toggles", status: "active", parentThreadId: "thr_demo_des", updatedAt: NOW - 30_000 }),
+  demoThread({ id: "thr_demo_des_c2", projectId: "proj_delta", title: "Snapshot the layout", status: "active", parentThreadId: "thr_demo_des", updatedAt: NOW - 120_000 }),
+  demoThread({ id: "thr_demo_des_g1", projectId: "proj_delta", title: "Bump the icon set", status: "idle", parentThreadId: "thr_demo_des_c1", updatedAt: NOW - 400_000 }),
+  demoThread({ id: "thr_demo_ask", projectId: "proj_delta", title: "Approve the new palette", status: "active", hasPendingInteraction: true, updatedAt: NOW - 20_000 }),
+  demoThread({ id: "thr_demo_ask2", projectId: "proj_delta", title: "Pick a default font", status: "idle", hasPendingInteraction: true, updatedAt: NOW - 260_000 }),
+
+  // Epsilon docs — unread handoffs and a fresh idle thread.
+  demoThread({ id: "thr_demo_unread", projectId: "proj_epsilon", title: "Review the migration guide", status: "idle", isUnread: true, updatedAt: NOW - 180_000 }),
+  demoThread({ id: "thr_demo_unread2", projectId: "proj_epsilon", title: "Reply to the API notes", status: "idle", isUnread: true, updatedAt: NOW - 600_000 }),
+  demoThread({ id: "thr_demo_pin", projectId: "proj_epsilon", title: "Tracked: release checklist", status: "idle", isPinned: true, updatedAt: NOW - 900_000 }),
+  demoThread({ id: "thr_demo_fresh", projectId: "proj_epsilon", title: "Draft the changelog intro", status: "active", updatedAt: NOW - 8_000 }),
+
+  // The generated bulk families, so the board, treemap, and tiles fill.
+  ...bulkThreads,
 ];
 
 /** A small Shape: root → 2 projects → threads → turns → work. */

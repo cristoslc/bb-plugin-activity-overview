@@ -54,6 +54,12 @@
     "build": "node scripts/generate-unreleased.mjs && node scripts/generate-whats-new.mjs && bb plugin build",
     "test": "node scripts/generate-unreleased.mjs && node scripts/generate-whats-new.mjs && node --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "uat": "node scripts/uat/run.mjs"
+    "uat": "node scripts/uat/run.mjs",
+    "shots": "node scripts/screenshot/shoot.mjs",
+    "gif": "node scripts/screenshot/capture-tab-tour-gif.mjs",
+    "release-shots": "node scripts/uat/release-shots.mjs",
+    "release-safety": "npm run build && npm run uat && npm run release-shots",
+    "store:check": "node scripts/store/build-listing.ts",
+    "store:build": "node scripts/store/build-listing.ts --write"
   }
 }

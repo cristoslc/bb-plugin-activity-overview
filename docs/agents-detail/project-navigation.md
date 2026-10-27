@@ -3,7 +3,12 @@
 ## Starting points
 - `PURPOSE.md` — one-paragraph outcome
 - `README.md` — user-facing landing page
-- `AGENTS.md` — agent guidance + `## Test command`
+- `AGENTS.md` — agent guidance + `## Test command` + `## Store & media`
+
+## Scripts (not under docs/)
+- `scripts/screenshot/` — the render/UAT harness and the media runs (`shoot.mjs`, `capture-tab-tour-gif.mjs`).
+- `scripts/uat/` — YAML-suite runner, the shared harness starter, and the store-evidence run.
+- `scripts/store/` + `store/entry.json` — the bb community marketplace listing and its validator. See `AGENTS.md` `## Store & media`.
 
 ## Hubs and spokes
 - `docs/ARCHITECTURE.md` → `docs/technical-architecture/` (c4/, tech-stack.md)

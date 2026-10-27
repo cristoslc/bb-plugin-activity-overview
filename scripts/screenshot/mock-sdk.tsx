@@ -11,13 +11,18 @@
  */
 import { createRoot, type Root } from "react-dom/client";
 import type { ComponentType } from "react";
-import { SHAPE_DELAY_MS, SIM_FLOW, SIM_PROJECTS, SIM_SHAPE, SIM_THREADS } from "./fixture";
+import { SHAPE_DELAY_MS, SIM_DEMO_PROJECTS, SIM_DEMO_THREADS, SIM_FLOW, SIM_PROJECTS, SIM_SHAPE, SIM_THREADS } from "./fixture";
 
 /** ?sideDelay= — how long the sidebar data stalls in "loading" before ready. */
 const SIDE_DELAY_MS = Math.max(
   0,
   Number(new URLSearchParams(window.location.search).get("sideDelay") ?? "0") || 0,
 );
+
+/** ?demo=1 — append the showcase projects/threads for the store media runs. */
+const DEMO = new URLSearchParams(window.location.search).get("demo") === "1";
+const SIDEBAR_PROJECTS = DEMO ? [...SIM_PROJECTS, ...SIM_DEMO_PROJECTS] : SIM_PROJECTS;
+const SIDEBAR_THREADS = DEMO ? [...SIM_THREADS, ...SIM_DEMO_THREADS] : SIM_THREADS;
 
 export const registeredNavPanel: {
   path?: string;
@@ -80,8 +85,8 @@ export function experimental_useSidebarThreads(): unknown {
   return sideState.ready
     ? {
         status: "ready",
-        threads: SIM_THREADS,
-        projects: SIM_PROJECTS,
+        threads: SIDEBAR_THREADS,
+        projects: SIDEBAR_PROJECTS,
         experimental_archived: null,
       }
     : { status: "loading" };

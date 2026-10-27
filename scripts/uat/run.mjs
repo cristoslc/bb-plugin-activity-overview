@@ -12,16 +12,15 @@
  * One-time browser setup: the runner uses the system Chrome, so nothing is
  * downloaded. Set CHROME_PATH if Chrome is not in the default place.
  */
-import { spawn } from "node:child_process";
 import { mkdir, access, readFile, readdir, writeFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { parse } from "yaml";
+import { startHarness } from "./harness.mjs";
 
 const CHROME =
   process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const HARNESS_CONFIG = "scripts/screenshot/vite.config.ts";
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const REPORT_DIR = `${repo}/docs/uat/`;
 const SPINNER_SELECTOR = 'span[style*="attn-spin"]';
@@ -50,37 +49,6 @@ try {
 } catch {
   console.error("uat: dist/app.css is missing — run `npm run build` first (the harness serves the compiled bundle).");
   process.exit(2);
-}
-
-function startHarness(port) {
-  // Spawn the local vite binary directly: going through npx leaves the
-  // underlying vite process orphaned when the wrapper is killed.
-  const child = spawn(
-    process.execPath,
-    [`${repo}node_modules/vite/bin/vite.js`, "--config", HARNESS_CONFIG, "--port", String(port), "--strictPort"],
-    { cwd: repo, stdio: ["ignore", "ignore", "pipe"] },
-  );
-  child.stderr.on("data", (chunk) => {
-    if (/error/i.test(String(chunk))) process.stderr.write(`  vite: ${String(chunk)}`);
-  });
-  const base = `http://localhost:${port}/`;
-  return {
-    base,
-    stop: () => child.kill(),
-    async waitUp() {
-      for (let attempt = 0; attempt < 100; attempt++) {
-        try {
-          const response = await fetch(base);
-          if (response.ok) return;
-        } catch {
-          // Not up yet.
-        }
-        await sleep(200);
-      }
-      child.kill();
-      throw new Error(`uat: harness did not come up on ${base}`);
-    },
-  };
 }
 
 // ---------- in-page probes ----------
@@ -923,8 +891,7 @@ async function runCase(page, evidenceDir, kase) {
 
 // Unique port per run: a stray server from an earlier session must never
 // serve stale transformed modules to a fresh suite run.
-const harness = startHarness(Number(process.env.HARNESS_PORT ?? String(5300 + (process.pid % 600))));
-await harness.waitUp();
+const harness = await startHarness(Number(process.env.HARNESS_PORT ?? String(5300 + (process.pid % 600))));
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: "new",
