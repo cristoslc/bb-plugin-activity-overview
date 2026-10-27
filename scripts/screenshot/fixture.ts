@@ -1,6 +1,7 @@
 /**
  * Simulated host data for the screenshot/UAT harness: a small but real-looking
- * sidebar (two projects, three threads) and a Shape the `shape` RPC returns.
+ * sidebar (two projects, seven threads — four of them idle, one per spread of
+ * the grey age ramp) and a Shape the `shape` RPC returns.
  *
  * Fields mirror what views/Views.tsx and views/model.ts read: threads carry
  * id/projectId/title/titleFallback/status/updatedAt, projects carry id/name,
@@ -24,6 +25,15 @@ export interface SimThread {
 }
 
 const NOW = 1760000000000;
+
+/**
+ * Harness boot time. The idle threads' ages are relative to it, not to the
+ * fixed NOW snapshot: the idle-visibility slider cuts idle threads by grey-ramp
+ * age bucket, so a fixed past epoch would push the whole ladder into the
+ * dimmest shade (every idle thread reading "a year old") and no mid-ramp stop
+ * could demonstrate a cut.
+ */
+const BOOT = Date.now();
 
 export const SIM_PROJECTS: readonly { id: string; name: string }[] = [
   { id: "proj_alpha", name: "Alpha work" },
@@ -71,8 +81,43 @@ export const SIM_THREADS: readonly SimThread[] = [
     titleFallback: "Housekeeping",
     status: "idle",
     parentThreadId: null,
-    updatedAt: NOW - 7200_000,
-    createdAt: NOW - 9000_000,
+    updatedAt: BOOT - 7200_000,
+    createdAt: BOOT - 9000_000,
+  },
+  {
+    // Three more idle threads, one per deeper grey-ramp shade, so the
+    // treemap's idle-visibility slider has a real ladder to cut: thr_idle
+    // covers grey-0 (2h), and these cover grey-1 (2d), grey-3 (30d) and
+    // grey-5 (200d). The treemap suites assert per-shade visibility through
+    // these ids; the treemap-tiles suite counts all seven base threads.
+    id: "thr_idle_week",
+    projectId: "proj_beta",
+    title: null,
+    titleFallback: "Rotation notes",
+    status: "idle",
+    parentThreadId: null,
+    updatedAt: BOOT - 2 * 86_400_000,
+    createdAt: BOOT - 3 * 86_400_000,
+  },
+  {
+    id: "thr_idle_month",
+    projectId: "proj_beta",
+    title: null,
+    titleFallback: "Quarterly archive",
+    status: "idle",
+    parentThreadId: null,
+    updatedAt: BOOT - 30 * 86_400_000,
+    createdAt: BOOT - 40 * 86_400_000,
+  },
+  {
+    id: "thr_idle_year",
+    projectId: "proj_beta",
+    title: null,
+    titleFallback: "Legacy importer",
+    status: "idle",
+    parentThreadId: null,
+    updatedAt: BOOT - 200 * 86_400_000,
+    createdAt: BOOT - 210 * 86_400_000,
   },
 ];
 
@@ -81,8 +126,8 @@ export const SIM_THREADS: readonly SimThread[] = [
  * the base fixture never shows — needs-you (a pending interaction), unread, and
  * nested children/grandchildren — so the store screenshots and the hero GIF show
  * every dot hue at a realistic density. Appended on top of the base set; UAT
- * suites never set the flag and keep their assertions pinned to the base four
- * threads.
+ * suites never set the flag and keep their assertions pinned to the base
+ * seven threads.
  */
 const demoThread = (
   over: Pick<SimThread, "id" | "projectId" | "title" | "status"> &

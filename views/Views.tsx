@@ -53,6 +53,8 @@ import {
   isZoomedIn,
   treemapMarkMode,
   tileForSlot,
+  IDLE_STOP_ALL,
+  idleStopCaption,
   type AttnProject,
   type AttnThread,
   type Cell,
@@ -925,6 +927,7 @@ export function UnitTreemapView({
   apiRef,
   onOpenThread,
   wiring,
+  idleStop = IDLE_STOP_ALL,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -937,14 +940,20 @@ export function UnitTreemapView({
   onOpenThread: (id: string) => void;
   /** Hover card + burn-rate pulse, shared with the other views. */
   wiring: DotWiring;
+  /**
+   * The idle-visibility slider's stop (OverviewPage owns the session state):
+   * idle threads dimmer than this leave the layout entirely — the treemap
+   * re-squarifies and every total re-scales to the visible set.
+   */
+  idleStop?: number;
 }) {
   const world = useMemo(() => worldOf(w, h), [w, h]);
   useEffect(() => {
     onWorld(world);
   }, [world, onWorld]);
   const { projects } = useMemo(
-    () => buildProjects(data.threads, data.projects, nowMs),
-    [data, nowMs],
+    () => buildProjects(data.threads, data.projects, nowMs, { idleStop }),
+    [data, nowMs, idleStop],
   );
   const model = useMemo(() => treemapLayout(projects, w, h), [projects, w, h]);
 
@@ -1469,6 +1478,11 @@ export function OverviewPage() {
     const stored = readCameraStore().tab;
     return TABS.some((t) => t.id === stored) ? (stored as TabId) : "board";
   });
+  // The treemap's idle-visibility slider: session state (like the cameras'
+  // pre-persistence days), never persisted — a fresh panel opens showing every
+  // idle thread. Owned here so the shared legend's counts re-scale with the
+  // treemap's visible set while the tab is active.
+  const [idleStop, setIdleStop] = useState<number>(IDLE_STOP_ALL);
   // World bounds of the active aggregate view, reported through onWorld.
   // The report is cached per tab: re-clicking the active tab (or landing on a
   // view that re-reports nothing new) must never leave `world` null, or the
@@ -1519,7 +1533,15 @@ export function OverviewPage() {
     return <p className="p-4 text-sm text-muted-foreground">Could not read thread data.</p>;
   }
   const nowMs = Date.now();
-  const built = buildProjects(live.data.threads, live.data.projects, nowMs);
+  // The legend describes what the active view shows: on the treemap tab that
+  // is the idle-visibility slider's visible set, everywhere else the whole
+  // roster (the other views have no idle gate).
+  const built = buildProjects(
+    live.data.threads,
+    live.data.projects,
+    nowMs,
+    tab === "treemap" ? { idleStop } : undefined,
+  );
   const counts = statusCounts(built.projects, nowMs);
   const total = built.total;
   const switchTab = (id: TabId) => {
@@ -1542,7 +1564,7 @@ export function OverviewPage() {
       ) : measured ? (
         <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} idleStop={idleStop} /> : null}
           {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
         </MapCanvas>
       ) : null}
@@ -1599,6 +1621,35 @@ export function OverviewPage() {
         </div>
       </div>
       <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
+      {/* The treemap's idle-visibility slider: floating chrome above the zoom
+          controls, on the treemap tab only. Stops are keyed to the grey ramp
+          (IDLE_STOP_ALL = every idle thread shown, the default; 0 = none);
+          sliding down hides the dimmest (oldest) idle threads first. Session
+          state, never persisted. */}
+      {tab === "treemap" ? (
+        <div
+          data-attn-idle-slider=""
+          className="pointer-events-auto absolute bottom-[52px] right-3 z-40 rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm"
+        >
+          <div className="mb-1 text-[10px] text-muted-foreground">Idle threads</div>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={IDLE_STOP_ALL}
+              step={1}
+              value={idleStop}
+              onChange={(e) => setIdleStop(Number(e.target.value))}
+              aria-label="Idle thread visibility"
+              title="How much of the idle age range the treemap represents"
+              style={{ width: 120, accentColor: "var(--attn-working)" }}
+            />
+            <span className="text-[10px] text-muted-foreground" data-attn-idle-slider-caption="">
+              {idleStopCaption(idleStop)}
+            </span>
+          </div>
+        </div>
+      ) : null}
       {tab !== "tokenflow" ? (
         <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
           <LegendRow counts={counts} />

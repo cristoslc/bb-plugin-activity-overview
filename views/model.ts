@@ -70,6 +70,20 @@ export function ageMs(t: AttnThread, nowMs: number): number {
   return typeof at === "number" ? nowMs - at : Number.MAX_SAFE_INTEGER;
 }
 
+/**
+ * The grey-ramp bucket an age in days lands in: 0 is the freshest shade
+ * (`--attn-grey-0`, full idle ink) and `GREYS.length - 1` the dimmest
+ * (`--attn-grey-5`, near-background). The index grows with age — the ramp's
+ * dim end is the high end — so "hide the dimmest first" and "hide the highest
+ * bucket first" are the same sentence. One lookup for everything keyed to the
+ * ramp: cellColor, the idle-visibility slider, and the token-flow lane's
+ * age-grey all read this, so a stop can never disagree with a rendered shade.
+ */
+export function greyBucketForDays(days: number): number {
+  const i = GREYS.findIndex((g) => days <= g[0]);
+  return i === -1 ? GREYS.length - 1 : i;
+}
+
 export function ageLabel(t: AttnThread, nowMs: number): string {
   const m = ageMs(t, nowMs) / 60000;
   if (m < 1) return "now";
@@ -82,8 +96,58 @@ export function ageLabel(t: AttnThread, nowMs: number): string {
 export function cellColor(t: AttnThread, nowMs: number): string {
   const st = classify(t);
   if (st !== "idle") return HOT_COLORS[st];
-  const d = ageMs(t, nowMs) / 86400000;
-  return (GREYS.find((g) => d <= g[0]) ?? GREYS[GREYS.length - 1])[1];
+  return GREYS[greyBucketForDays(ageMs(t, nowMs) / 86400000)]![1];
+}
+
+// ---------- treemap idle-visibility slider ----------
+
+/**
+ * The idle-visibility slider's top stop: every grey-ramp shade shown (the
+ * default). One stop sits below it per ramp shade — stop `s` shows only the
+ * shades with bucket index `< s`, so stepping down from the top hides the
+ * dimmest (oldest) shade first — and stop 0 hides every idle thread. The stop
+ * count is derived from `GREYS` itself, so the slider can never disagree with
+ * a rendered shade: add a shade to the ramp and the slider grows a stop.
+ */
+export const IDLE_STOP_ALL = GREYS.length;
+
+/** Fail loud on a stop outside the ramp: a junk stop must never silently read
+ *  as "show all" (or "hide all"). */
+function assertIdleStop(stop: number): void {
+  if (!Number.isInteger(stop) || stop < 0 || stop > IDLE_STOP_ALL) {
+    throw new RangeError(
+      `idle stop must be an integer in [0, ${IDLE_STOP_ALL}], got ${stop}`,
+    );
+  }
+}
+
+/**
+ * Whether one thread is represented at the idle-visibility slider's `stop`:
+ * hot threads (needs-you/error/working/unread) at every stop, and idle threads
+ * only while their grey-ramp bucket index is `< stop` — the dimmest (oldest)
+ * idle threads are the first to leave. `IDLE_STOP_ALL` shows everything; 0
+ * hides every idle thread.
+ */
+export function idleVisible(t: AttnThread, nowMs: number, stop: number): boolean {
+  assertIdleStop(stop);
+  if (classify(t) !== "idle") return true;
+  if (stop >= IDLE_STOP_ALL) return true;
+  return greyBucketForDays(ageMs(t, nowMs) / 86400000) < stop;
+}
+
+/**
+ * The slider stop's one-line caption, derived from the ramp's own day
+ * thresholds: the top stop reads "all idle shown", the bottom "no idle shown",
+ * and every step between names the freshest age it still shows (stop 2 keeps
+ * the buckets below grey-2, i.e. idle up to 6 days old).
+ */
+export function idleStopCaption(stop: number): string {
+  assertIdleStop(stop);
+  if (stop >= IDLE_STOP_ALL) return "all idle shown";
+  if (stop <= 0) return "no idle shown";
+  const days = GREYS[stop - 1]![0];
+  const span = days < 1 ? `${Math.round(days * 24)}h` : `${days}d`;
+  return `idle ≤ ${span} shown`;
 }
 
 export function tip(t: AttnThread, nowMs: number): string {
@@ -205,13 +269,26 @@ export function buildAgentTree(threads: readonly AttnThread[]): Family {
 /**
  * Group visible threads by project, parents before their children, both
  * attention-ascending; projects sorted hottest-first.
+ *
+ * The optional `idleStop` (the treemap's idle-visibility slider) gates the
+ * roster at the same point the archived filter does: idle threads dimmer than
+ * the stop never enter the family tree, so they leave the layout entirely —
+ * a project left with zero visible threads vanishes and every total
+ * re-scales to the visible set. A hidden idle parent promotes its visible
+ * children to roots, exactly like an archived parent. The default stop
+ * (`IDLE_STOP_ALL`) is a no-op pass-through.
  */
 export function buildProjects(
   threads: readonly AttnThread[],
   projects: readonly AttnProject[],
   nowMs: number,
+  opts: { idleStop?: number } = {},
 ): { projects: ProjectModel[]; total: number } {
-  const family = buildAgentTree(threads);
+  const idleStop = opts.idleStop ?? IDLE_STOP_ALL;
+  assertIdleStop(idleStop);
+  const family = buildAgentTree(
+    idleStop >= IDLE_STOP_ALL ? threads : threads.filter((t) => idleVisible(t, nowMs, idleStop)),
+  );
   const visible = family.visible;
   const childrenOf = family.childrenOf;
   const roots = family.roots;

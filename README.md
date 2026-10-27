@@ -35,7 +35,7 @@
 One dot is one thread. Its color reads status, the number of dots reads volume, and a project's health emerges from the pattern of colors rather than any painted verdict. The panel lives in bb's sidebar as a nav panel and updates live as your threads change.
 
 - **Board** — one card per project with fixed dot slots, so an empty slot keeps a project's shape as threads come and go.
-- **Unit treemap** — region area reads thread count (squarified): at the fitted view each thread fills its unit area as one full-fill status tile, and zoomed past the fit it becomes one constant-size dot per thread. Projects separate by a thin void, with no strokes.
+- **Unit treemap** — region area reads thread count (squarified): at the fitted view each thread fills its unit area as one full-fill status tile, and zoomed past the fit it becomes one constant-size dot per thread. Projects separate by a thin void, with no strokes. An idle-visibility slider in the treemap's chrome steps down through the grey ramp — every idle thread by default, the dimmest (oldest) shade hidden first, down to none — and the layout re-squarifies around the visible set.
 - **Strip tiles** — one tile per project: the name over a strip with one 4px unit per thread, hottest statuses at the left edge; tiles flow-wrap.
 - **Token flow** — projects pile vertically, one wide row each; expanding a row tiles its status tiers as four lanes (Working, Needs You, Unread, Idle) and every card's river fans from the project's one mouth. The plugin's `flow` RPC serves it.
 

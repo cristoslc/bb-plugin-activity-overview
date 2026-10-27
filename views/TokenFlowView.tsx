@@ -19,6 +19,7 @@ import { rpcContract, type Flow } from "../server";
 import { FLOW_CHANGED } from "../shared";
 import {
   GREYS,
+  greyBucketForDays,
   SWIMLANE,
   SWIMLANES,
   cardPaintOrder,
@@ -51,11 +52,12 @@ const MIN_W = 1240; // below this the four lanes would be too narrow to read
 const laneClipId = (rowId: string, laneId: string): string =>
   `swim-${rowId}-${laneId}`.replace(/[^a-zA-Z0-9_-]/g, "-");
 
-/** An idle dot's grey, by age (fresh muted ink → near-background). */
+/** An idle dot's grey, by age (fresh muted ink → near-background). The bucket
+ *  lookup is the model's one ramp reader, shared with the treemap's slider. */
 function idleGrey(t: FlowThread, nowMs: number): string {
   const at = t.updatedAt ?? t.createdAt;
   const days = at === null ? Number.POSITIVE_INFINITY : (nowMs - at) / 86_400_000;
-  return (GREYS.find((g) => days <= g[0]) ?? GREYS[GREYS.length - 1])![1];
+  return GREYS[greyBucketForDays(days)]![1];
 }
 
 /** The dot color for a card: its lane hue, or the age ramp when idle. */

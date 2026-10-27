@@ -93,6 +93,11 @@ export function ThreadHoverCard({
         left: placement?.left ?? 0,
         top: placement?.top ?? 0,
         width: CARD_W,
+        // Border-box so the painted width IS CARD_W: hoverCardPlacement clamps
+        // against the card's size constant, and a content-box card would overhang
+        // the panel by its padding (24px) + border (2px) whenever it is pushed
+        // to the right edge.
+        boxSizing: "border-box",
         // Invisible until seated: never a one-frame flash at 0,0.
         visibility: placement === null ? "hidden" : "visible",
         zIndex: 60,
