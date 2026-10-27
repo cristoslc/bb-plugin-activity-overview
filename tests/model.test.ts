@@ -6,6 +6,8 @@ import {
   squarify, makeCards, shelfPack, attentionScore,
   familyTints, FAMILY_TINTS, zoomToRect, clampPan, clampPanEdges,
   treemapMarkMode, tileForSlot, tileGutter, TILE_GUTTER, ZOOMED_IN_SCALE,
+  greyBucketForDays, idleVisible, idleStopCaption, IDLE_STOP_ALL,
+  cellColor, GREYS,
   type AttnThread, type AttnProject,
 } from "../views/model.ts";
 
@@ -277,4 +279,136 @@ test("a slot smaller than the gutter degenerates to a zero-size tile", () => {
   const t = tileForSlot(1, 1, 100);
   assert.equal(t.w, 0);
   assert.equal(t.h, 0);
+});
+
+// ---------- treemap idle-visibility slider (the grey-ramp gate) ----------
+
+const idleAgeDays = (days: number): AttnThread => ({
+  ...thread(),
+  latestAttentionAt: NOW - days * 86_400_000,
+  updatedAt: NOW - days * 86_400_000,
+});
+
+test("greyBucketForDays maps ages onto the grey ramp's buckets, dimmest last", () => {
+  // The ramp's own thresholds (GREYS): 0.75d, 6d, 24d, 72d, 168d, then ∞.
+  assert.equal(greyBucketForDays(0), 0); // fresh idle → grey-0
+  assert.equal(greyBucketForDays(0.5), 0);
+  assert.equal(greyBucketForDays(2), 1); // grey-1
+  assert.equal(greyBucketForDays(10), 2); // grey-2
+  assert.equal(greyBucketForDays(30), 3); // grey-3
+  assert.equal(greyBucketForDays(100), 4); // grey-4
+  assert.equal(greyBucketForDays(200), 5); // grey-5: the dimmest end
+  assert.equal(greyBucketForDays(Number.POSITIVE_INFINITY), GREYS.length - 1);
+  // The bucket index grows with age: the dimmest shade is the last one.
+  assert.ok(greyBucketForDays(200) > greyBucketForDays(0));
+});
+
+test("idleVisible: the default stop shows every thread, hot threads always", () => {
+  const ages = [0.1, 2, 10, 30, 100, 200];
+  for (const d of ages) {
+    assert.equal(idleVisible(idleAgeDays(d), NOW, IDLE_STOP_ALL), true, `${d}d at stop ALL`);
+  }
+  // No stop ever hides a hot thread.
+  const hot = [
+    thread({ id: "h1", runtimeStatus: "active" }),
+    thread({ id: "h2", runtimeStatus: "error" }),
+    thread({ id: "h3", hasPendingInteraction: true }),
+    thread({ id: "h4", isUnread: true }),
+  ];
+  for (let stop = 0; stop <= IDLE_STOP_ALL; stop++) {
+    for (const t of hot) assert.equal(idleVisible(t, NOW, stop), true, `stop ${stop}`);
+  }
+});
+
+test("idleVisible: sliding down hides the dimmest (oldest) shade first, ending at none", () => {
+  const fresh = idleAgeDays(0.1); // grey-0
+  const week = idleAgeDays(2); // grey-1
+  const month = idleAgeDays(30); // grey-3
+  const year = idleAgeDays(200); // grey-5
+  // Stop 6 (ALL): all four visible.
+  for (const t of [fresh, week, month, year]) assert.equal(idleVisible(t, NOW, 6), true);
+  // Stop 5: hides only the dimmest shade present (grey-5, the year-old one).
+  assert.equal(idleVisible(year, NOW, 5), false);
+  assert.equal(idleVisible(month, NOW, 5), true);
+  assert.equal(idleVisible(week, NOW, 5), true);
+  assert.equal(idleVisible(fresh, NOW, 5), true);
+  // Stop 2: grey-0 and grey-1 survive; grey-3 and grey-5 are hidden.
+  assert.equal(idleVisible(fresh, NOW, 2), true);
+  assert.equal(idleVisible(week, NOW, 2), true);
+  assert.equal(idleVisible(month, NOW, 2), false);
+  assert.equal(idleVisible(year, NOW, 2), false);
+  // Stop 0: every idle thread hidden — none.
+  for (const t of [fresh, week, month, year]) assert.equal(idleVisible(t, NOW, 0), false);
+});
+
+test("idleVisible throws on a junk stop (fail loud, never a silent show-all)", () => {
+  assert.throws(() => idleVisible(thread(), NOW, -1));
+  assert.throws(() => idleVisible(thread(), NOW, IDLE_STOP_ALL + 1));
+  assert.throws(() => idleVisible(thread(), NOW, 1.5));
+  assert.throws(() => idleVisible(thread(), NOW, Number.NaN));
+});
+
+test("cellColor and greyBucketForDays agree on the bucket (one ramp, one lookup)", () => {
+  for (const d of [0.1, 2, 10, 30, 100, 200]) {
+    const t = idleAgeDays(d);
+    assert.equal(cellColor(t, NOW), GREYS[greyBucketForDays(d / 1)]![1]);
+  }
+});
+
+test("idleStopCaption names each stop from the ramp's own thresholds", () => {
+  assert.equal(idleStopCaption(IDLE_STOP_ALL), "all idle shown");
+  assert.equal(idleStopCaption(0), "no idle shown");
+  assert.equal(idleStopCaption(1), "idle ≤ 18h shown");
+  assert.equal(idleStopCaption(2), "idle ≤ 6d shown");
+  assert.equal(idleStopCaption(3), "idle ≤ 24d shown");
+  assert.equal(idleStopCaption(4), "idle ≤ 72d shown");
+  assert.equal(idleStopCaption(5), "idle ≤ 168d shown");
+  assert.throws(() => idleStopCaption(-1));
+  assert.throws(() => idleStopCaption(IDLE_STOP_ALL + 1));
+});
+
+test("buildProjects idleStop: hidden idle threads leave the layout and totals re-scale", () => {
+  const threads = [
+    thread({ id: "hot", projectId: "proj_a", runtimeStatus: "active" }),
+    thread({ id: "fresh", projectId: "proj_a", latestAttentionAt: NOW - 0.1 * 86_400_000 }),
+    thread({ id: "week", projectId: "proj_a", latestAttentionAt: NOW - 2 * 86_400_000 }),
+    thread({ id: "year", projectId: "proj_b", latestAttentionAt: NOW - 200 * 86_400_000 }),
+  ];
+  const projects = [
+    { id: "proj_a", name: "A" },
+    { id: "proj_b", name: "B" },
+  ];
+  // Default (no opts): everything, unchanged by the feature.
+  const all = buildProjects(threads, projects, NOW);
+  assert.equal(all.total, 4);
+  assert.equal(all.projects.length, 2);
+  // Stop ALL (explicit): identical to the default.
+  const atAll = buildProjects(threads, projects, NOW, { idleStop: IDLE_STOP_ALL });
+  assert.equal(atAll.total, 4);
+  assert.deepEqual(atAll.projects.map((p) => [p.pid, p.n]), all.projects.map((p) => [p.pid, p.n]));
+  // Stop 2: the year-old thread leaves proj_b entirely; proj_a keeps the
+  // hot thread plus its fresh and week-old idle ones.
+  const cut = buildProjects(threads, projects, NOW, { idleStop: 2 });
+  assert.equal(cut.total, 3);
+  assert.equal(cut.projects.length, 1);
+  assert.equal(cut.projects[0]!.pid, "proj_a");
+  assert.equal(cut.projects[0]!.n, 3);
+  // Stop 0: only the hot thread survives anywhere.
+  const none = buildProjects(threads, projects, NOW, { idleStop: 0 });
+  assert.equal(none.total, 1);
+  assert.equal(none.projects.length, 1);
+  assert.equal(none.projects[0]!.n, 1);
+  // Junk stops fail loud.
+  assert.throws(() => buildProjects(threads, projects, NOW, { idleStop: 9 }));
+});
+
+test("buildProjects idleStop: a hidden idle parent promotes its visible children", () => {
+  const threads = [
+    thread({ id: "parent", projectId: "proj_a", latestAttentionAt: NOW - 200 * 86_400_000 }),
+    thread({ id: "child", projectId: "proj_a", parentThreadId: "parent", runtimeStatus: "active" }),
+  ];
+  const { projects } = buildProjects(threads, [{ id: "proj_a", name: "A" }], NOW, { idleStop: 0 });
+  // The parent is hidden, so the child promotes to a root and stays drawn.
+  assert.equal(projects[0]!.n, 1);
+  assert.equal(projects[0]!.cells[0]!.t.id, "child");
 });

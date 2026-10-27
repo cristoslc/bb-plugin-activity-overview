@@ -37,8 +37,20 @@ tabs: three aggregate tabs rendered live from the host's sidebar thread data, pl
   the project fills the fit box with its family tints locked on. Tapping
   anything else — the dimmed neighbors or a void — re-fits the zoomed-out
   world and clears the focus (the corner ⤢ re-fits the camera only; one tap
-  then leaves the focus). Helpers are pure (`familyTints`, `treemapLayout`,
-  `placeRegionLabels`, `zoomToRect`, `clampPan`, `fillScale`) with tests in
+  then leaves the focus). The tab's floating chrome also carries an
+  **idle-visibility slider** keyed to the grey ramp (`idleVisible`,
+  `idleStopCaption`, `IDLE_STOP_ALL` in views/model.ts): the default top stop
+  shows every idle thread, one stop sits below per grey shade, and the bottom
+  stop shows none — sliding down hides the dimmest (oldest) idle threads
+  first (`greyBucketForDays` is the ramp's one bucket lookup, shared with
+  `cellColor` and the token-flow lane's age grey). Hidden threads leave the
+  layout entirely: the treemap re-squarifies, totals and the shared legend
+  re-scale to the visible set, and a project left with zero visible threads
+  vanishes (the project filter's behavior); hot threads are never hidden. The
+  stop is view-local session state, not persisted. UAT in
+  `tests/manual/uat-treemap-idle-slider.yaml`. Helpers are pure
+  (`familyTints`, `treemapLayout`, `placeRegionLabels`, `zoomToRect`,
+  `clampPan`, `fillScale`, `idleVisible`) with tests in
   tests/model.test.ts and tests/board-fill-labels.test.ts.
 - **Strip tiles** — one small tile per project: name over a strip, one 4px
   unit per thread (4px + 1px gap), hottest statuses at the left edge. Tiles

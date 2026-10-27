@@ -34,9 +34,9 @@ test_cases:
         action: assertCount
         params:
           selector: '[data-attn-mark="tile"]'
-          equals: 4
-        instruction: Assert one full-fill tile per fixture thread.
-        expected: Four tiles mounted, one per thread.
+          equals: 7
+        instruction: Assert one full-fill tile per fixture thread (seven base threads).
+        expected: Seven tiles mounted, one per thread.
       - order: 4
         action: assertCount
         params:
@@ -76,9 +76,9 @@ test_cases:
         action: assertCount
         params:
           selector: '[data-attn-mark="dot"]'
-          equals: 4
+          equals: 7
         instruction: Assert one status dot per fixture thread while zoomed in.
-        expected: Four dots mounted.
+        expected: Seven dots mounted.
       - order: 5
         action: assertCount
         params:
@@ -120,9 +120,9 @@ test_cases:
         action: assertCount
         params:
           selector: '[data-attn-mark="tile"]'
-          equals: 4
+          equals: 7
         instruction: Assert the tiles are back after the downward crossing.
-        expected: Four tiles mounted again.
+        expected: Seven tiles mounted again.
       - order: 6
         action: assertCount
         params:

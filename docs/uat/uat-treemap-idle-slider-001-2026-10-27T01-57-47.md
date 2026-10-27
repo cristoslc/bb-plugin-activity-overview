@@ -1,0 +1,132 @@
+# Test Report: The treemap's idle-visibility slider steps down through the grey ramp from all to none
+
+**Suite ID:** uat-treemap-idle-slider-001
+**Date:** 2026-10-27T01:57:47.332Z
+**Mode:** headless (vite harness + system Chrome)
+
+## Summary
+
+| Total | Passed | Failed |
+|-------|--------|--------|
+| 7 | 7 | 0 |
+
+## Results
+
+### TC-01: The default stop shows every idle thread (all seven base threads) — PASSED
+
+**Criticality:** blocker
+
+| Step | Action | Result | Evidence | Notes |
+|------|--------|--------|----------|-------|
+| 1 | goto | p | — | ready (tabs) |
+| 2 | clickTab | p | — | clicked "Unit treemap" |
+| 3 | assertExists | p | — | [data-attn-idle-slider] input[type="range"] present |
+| 4 | assertCount | p | — | 7 matches for [data-attn-mark="tile"] (want 7) |
+| 5 | waitFor | p | — | tree text "7 visible" painted; spinner unmounted |
+| 6 | profile | p | docs/uat//evidence/uat-treemap-idle-slider-001/TC-01-step6-final.png |  |
+
+**Paint profile:**
+
+- marks (performance.now, ms): {"gone:[span[style*=\"attn-spin\"]]":732.9000000357628,"harness-opened":736.6000000238419,"click-flow-tab":744.1000000238419,"flow-tree-found":763.8000000119209}
+- paint entries: [{"name":"first-paint","startTime":48},{"name":"first-contentful-paint","startTime":212}]
+- longtasks (first 10): []
+- Chrome metrics Δ across the case: Layout 0.0ms · Script 0.1ms · Task 0.1ms
+
+### TC-02: A mid stop hides the dimmest idle threads first (stop 2 keeps grey-0 and grey-1) — PASSED
+
+**Criticality:** blocker
+
+| Step | Action | Result | Evidence | Notes |
+|------|--------|--------|----------|-------|
+| 1 | goto | p | — | ready (tabs) |
+| 2 | clickTab | p | — | clicked "Unit treemap" |
+| 3 | type | p | — | typed "2" into [data-attn-idle-slider] input[type="range"] |
+| 4 | assertCount | p | — | 0 matches for [data-attn-unit][data-thread-id="thr_idle_month"] (want 0) |
+| 5 | assertCount | p | — | 0 matches for [data-attn-unit][data-thread-id="thr_idle_year"] (want 0) |
+| 6 | assertCount | p | — | 1 match for [data-attn-unit][data-thread-id="thr_idle_week"] (want 1) |
+| 7 | assertCount | p | — | 5 matches for [data-attn-mark="tile"] (want 5) |
+| 8 | waitFor | p | — | tree text "5 visible" painted; spinner unmounted |
+
+### TC-03: The bottom stop hides every idle thread — none — PASSED
+
+**Criticality:** blocker
+
+| Step | Action | Result | Evidence | Notes |
+|------|--------|--------|----------|-------|
+| 1 | goto | p | — | ready (tabs) |
+| 2 | clickTab | p | — | clicked "Unit treemap" |
+| 3 | type | p | — | typed "0" into [data-attn-idle-slider] input[type="range"] |
+| 4 | assertCount | p | — | 0 matches for [data-attn-unit][data-thread-id="thr_idle"] (want 0) |
+| 5 | assertCount | p | — | 3 matches for [data-attn-unit] (want 3) |
+| 6 | waitFor | p | — | tree text "3 visible" painted; spinner unmounted |
+| 7 | profile | p | docs/uat//evidence/uat-treemap-idle-slider-001/TC-03-step7-final.png |  |
+
+**Paint profile:**
+
+- marks (performance.now, ms): {"gone:[span[style*=\"attn-spin\"]]":547,"harness-opened":547.5,"click-flow-tab":552.6999999880791,"flow-tree-found":572}
+- paint entries: [{"name":"first-paint","startTime":28},{"name":"first-contentful-paint","startTime":48}]
+- longtasks (first 10): []
+- Chrome metrics Δ across the case: Layout 0.0ms · Script -0.0ms · Task -0.0ms
+
+### TC-04: The caption names each stop from the ramp's own thresholds — PASSED
+
+**Criticality:** high
+
+| Step | Action | Result | Evidence | Notes |
+|------|--------|--------|----------|-------|
+| 1 | goto | p | — | ready (tabs) |
+| 2 | clickTab | p | — | clicked "Unit treemap" |
+| 3 | type | p | — | typed "2" into [data-attn-idle-slider] input[type="range"] |
+| 4 | waitFor | p | — | tree text "idle ≤ 6d shown" painted; spinner unmounted |
+| 5 | type | p | — | typed "0" into [data-attn-idle-slider] input[type="range"] |
+| 6 | waitFor | p | — | tree text "no idle shown" painted; spinner unmounted |
+| 7 | type | p | — | typed "6" into [data-attn-idle-slider] input[type="range"] |
+| 8 | waitFor | p | — | tree text "all idle shown" painted; spinner unmounted |
+
+### TC-05: An empty shade's stop hides nothing extra — PASSED
+
+**Criticality:** high
+
+| Step | Action | Result | Evidence | Notes |
+|------|--------|--------|----------|-------|
+| 1 | goto | p | — | ready (tabs) |
+| 2 | clickTab | p | — | clicked "Unit treemap" |
+| 3 | type | p | — | typed "5" into [data-attn-idle-slider] input[type="range"] |
+| 4 | assertCount | p | — | 6 matches for [data-attn-unit] (want 6) |
+| 5 | type | p | — | typed "4" into [data-attn-idle-slider] input[type="range"] |
+| 6 | assertCount | p | — | 6 matches for [data-attn-unit] (want 6) |
+| 7 | type | p | — | typed "3" into [data-attn-idle-slider] input[type="range"] |
+| 8 | assertCount | p | — | 5 matches for [data-attn-unit] (want 5) |
+| 9 | type | p | — | typed "2" into [data-attn-idle-slider] input[type="range"] |
+| 10 | assertCount | p | — | 5 matches for [data-attn-unit] (want 5) |
+
+### TC-06: The slider works in dot mode too, and sliding back up restores the dimmest last — PASSED
+
+**Criticality:** blocker
+
+| Step | Action | Result | Evidence | Notes |
+|------|--------|--------|----------|-------|
+| 1 | goto | p | — | ready (tabs) |
+| 2 | clickTab | p | — | clicked "Unit treemap" |
+| 3 | type | p | — | typed "0" into [data-attn-idle-slider] input[type="range"] |
+| 4 | click | p | — | clicked [data-attn-control="+"] |
+| 5 | assertCount | p | — | 3 matches for [data-attn-mark="dot"] (want 3) |
+| 6 | type | p | — | typed "6" into [data-attn-idle-slider] input[type="range"] |
+| 7 | assertCount | p | — | 7 matches for [data-attn-mark="dot"] (want 7) |
+| 8 | assertCount | p | — | 1 match for [data-attn-unit][data-thread-id="thr_idle_year"] (want 1) |
+
+### TC-07: Working tiles keep their burn pulse at a filtered stop — PASSED
+
+**Criticality:** high
+
+| Step | Action | Result | Evidence | Notes |
+|------|--------|--------|----------|-------|
+| 1 | goto | p | — | ready (tabs) |
+| 2 | clickTab | p | — | clicked "Unit treemap" |
+| 3 | type | p | — | typed "1" into [data-attn-idle-slider] input[type="range"] |
+| 4 | assertCount | p | — | 4 matches for [data-attn-unit] (want 4) |
+| 5 | assertPulse | p | — | 2 pulsing units, 2 periods · ✔ every pulsing unit animates (2/2) · ✔ periods are positive · ✔ rates produce distinct periods (2 distinct period(s)) · ✔ 10× burn is 10× the pulse (ratio 10.000) |
+
+## Console capture
+
+- error: Failed to load resource: the server responded with a status of 404 (Not Found)

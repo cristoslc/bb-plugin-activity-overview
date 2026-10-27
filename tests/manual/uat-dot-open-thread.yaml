@@ -146,9 +146,9 @@ test_cases:
         action: assertCount
         params:
           selector: '[data-attn-unit]'
-          equals: 4
-        instruction: Assert the fixture's four thread units are mounted.
-        expected: Four units present.
+          equals: 7
+        instruction: Assert the fixture's seven thread units are mounted.
+        expected: Seven units present.
       - order: 3
         action: click
         params:

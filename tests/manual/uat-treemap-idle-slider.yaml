@@ -1,0 +1,392 @@
+test_suite:
+  id: uat-treemap-idle-slider-001
+  title: The treemap's idle-visibility slider steps down through the grey ramp from all to none
+  description: >
+    Headless suite for the treemap's idle-visibility slider. The slider lives
+    in the treemap's floating chrome, defaults to showing every idle thread,
+    and carries one stop per grey-ramp shade plus the top "all" stop: sliding
+    down hides the dimmest (oldest) idle threads first, ending at none. Hidden
+    threads leave the layout entirely — the treemap re-squarifies and the
+    legend's visible total re-scales — hot threads are never hidden, the
+    slider works in both mark modes (full-fill tiles at fit, dots zoomed in),
+    and an empty shade's stop hides nothing extra. The fixture ladder:
+    thr_idle is grey-0 (2h), thr_idle_week grey-1 (2d), thr_idle_month grey-3
+    (30d), thr_idle_year grey-5 (200d); three hot threads never leave.
+  tags: [rendering, treemap, idle, slider, grey-ramp, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: The default stop shows every idle thread (all seven base threads)
+    criticality: blocker
+    preconditions:
+      - dist/ has been built (`npm run build`); the harness serves it from vite
+      - Headless Chrome is available at CHROME_PATH (default: system Chrome)
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Open the panel.
+        expected: The tab bar paints and the harness is live.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the fitted view with the slider chrome mounted.
+      - order: 3
+        action: assertExists
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+        instruction: Assert the idle-visibility slider is present in the floating chrome.
+        expected: The slider input is mounted.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="tile"]'
+          equals: 7
+        instruction: Assert every fixture thread renders a tile at the default stop.
+        expected: Seven tiles — three hot plus four idle across the grey ramp.
+      - order: 5
+        action: waitFor
+        params:
+          text: 7 visible
+        instruction: Assert the legend's visible total describes the full roster.
+        expected: The legend reads "7 visible".
+      - order: 6
+        action: profile
+        instruction: Capture a screenshot of the default all-idle board as evidence.
+        expected: Evidence saved under docs/uat/.
+
+  - id: TC-02
+    title: A mid stop hides the dimmest idle threads first (stop 2 keeps grey-0 and grey-1)
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the default stop.
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "2"
+        instruction: Slide the idle-visibility stop down to 2 (keep buckets below grey-2).
+        expected: The treemap re-squarifies around the visible set.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle_month"]'
+          equals: 0
+        instruction: Assert the grey-3 thread (30d) left the layout.
+        expected: No unit for thr_idle_month.
+      - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle_year"]'
+          equals: 0
+        instruction: Assert the dimmest thread (grey-5, 200d) left the layout.
+        expected: No unit for thr_idle_year.
+      - order: 6
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle_week"]'
+          equals: 1
+        instruction: Assert the grey-1 thread (2d) survives the cut.
+        expected: One tile for thr_idle_week.
+      - order: 7
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="tile"]'
+          equals: 5
+        instruction: Assert exactly five tiles remain (three hot, two idle).
+        expected: Five tiles mounted.
+      - order: 8
+        action: waitFor
+        params:
+          text: 5 visible
+        instruction: Assert the legend's total re-scaled to the visible set.
+        expected: The legend reads "5 visible".
+
+  - id: TC-03
+    title: The bottom stop hides every idle thread — none
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the default stop.
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "0"
+        instruction: Slide the stop to the bottom (none).
+        expected: Every idle thread leaves the layout.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle"]'
+          equals: 0
+        instruction: Assert the freshest idle thread (grey-0, 2h) is gone too.
+        expected: No unit for thr_idle.
+      - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 3
+        instruction: Assert only the three hot threads remain.
+        expected: Three tiles mounted.
+      - order: 6
+        action: waitFor
+        params:
+          text: 3 visible
+        instruction: Assert the legend's total re-scaled to the hot set.
+        expected: The legend reads "3 visible".
+      - order: 7
+        action: profile
+        instruction: Capture a screenshot of the idle-free board as evidence.
+        expected: Evidence saved under docs/uat/.
+
+  - id: TC-04
+    title: The caption names each stop from the ramp's own thresholds
+    criticality: high
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the default stop ("all idle shown").
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "2"
+        instruction: Slide to stop 2.
+        expected: The caption names the freshest age still shown.
+      - order: 4
+        action: waitFor
+        params:
+          text: idle ≤ 6d shown
+        instruction: Assert the caption reads the grey-2 bucket's own threshold.
+        expected: The caption reads "idle ≤ 6d shown".
+      - order: 5
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "0"
+        instruction: Slide to the bottom stop.
+        expected: The caption flips to the none state.
+      - order: 6
+        action: waitFor
+        params:
+          text: no idle shown
+        instruction: Assert the bottom stop's caption.
+        expected: The caption reads "no idle shown".
+      - order: 7
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "6"
+        instruction: Slide back to the top stop.
+        expected: The caption flips to the all state.
+      - order: 8
+        action: waitFor
+        params:
+          text: all idle shown
+        instruction: Assert the top stop's caption.
+        expected: The caption reads "all idle shown".
+
+  - id: TC-05
+    title: An empty shade's stop hides nothing extra
+    criticality: high
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the default stop (7 units).
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "5"
+        instruction: Stop 5 hides the grey-5 thread (200d).
+        expected: Six units remain.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 6
+        instruction: Assert the grey-5 cut took.
+        expected: Six units mounted.
+      - order: 5
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "4"
+        instruction: Stop 4 names the grey-4 shade, which has no fixture member.
+        expected: Nothing else hides — the stop keys to the ramp, not the population.
+      - order: 6
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 6
+        instruction: Assert the empty shade's stop changed nothing.
+        expected: Still six units.
+      - order: 7
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "3"
+        instruction: Stop 3 hides the grey-3 thread (30d).
+        expected: Five units remain.
+      - order: 8
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 5
+        instruction: Assert the grey-3 cut took.
+        expected: Five units mounted.
+      - order: 9
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "2"
+        instruction: Stop 2 names the grey-2 shade, which also has no fixture member.
+        expected: Nothing else hides.
+      - order: 10
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 5
+        instruction: Assert the second empty shade's stop changed nothing.
+        expected: Still five units.
+
+  - id: TC-06
+    title: The slider works in dot mode too, and sliding back up restores the dimmest last
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the default stop (tiles).
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "0"
+        instruction: Slide to none at the fitted view.
+        expected: Only the three hot threads remain.
+      - order: 4
+        action: click
+        params:
+          selector: '[data-attn-control="+"]'
+        instruction: Zoom in past the mark-mode threshold.
+        expected: The marks swap to dots.
+      - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="dot"]'
+          equals: 3
+        instruction: Assert the idle gate holds in dot mode.
+        expected: Three dots — the hot threads only.
+      - order: 6
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "6"
+        instruction: Slide back to all while zoomed in.
+        expected: The dimmest threads return as dots.
+      - order: 7
+        action: assertCount
+        params:
+          selector: '[data-attn-mark="dot"]'
+          equals: 7
+        instruction: Assert all seven threads render as dots again.
+        expected: Seven dots mounted.
+      - order: 8
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle_year"]'
+          equals: 1
+        instruction: Assert the dimmest thread came back with the top stop.
+        expected: One dot for thr_idle_year.
+
+  - id: TC-07
+    title: Working tiles keep their burn pulse at a filtered stop
+    criticality: high
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Unit treemap
+        instruction: Switch to the Unit treemap tab.
+        expected: The treemap paints at the default stop.
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-idle-slider] input[type="range"]'
+          value: "1"
+        instruction: Slide to stop 1 (only grey-0 idle survives).
+        expected: Four units remain; the hot tiles stay.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 4
+        instruction: Assert the stop-1 cut (three hot plus the freshest idle).
+        expected: Four units mounted.
+      - order: 5
+        action: assertPulse
+        instruction: Assert the working tiles still pulse at their measured burn.
+        expected: Every pulsing unit animates; thr_running keeps its fast period.
