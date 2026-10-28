@@ -61,8 +61,5 @@
     "release-safety": "npm run build && npm run uat && npm run release-shots",
     "store:check": "node scripts/store/build-listing.ts",
     "store:build": "node scripts/store/build-listing.ts --write"
-  },
-  "allowScripts": {
-    "better-sqlite3@12.11.1": true
   }
 }
