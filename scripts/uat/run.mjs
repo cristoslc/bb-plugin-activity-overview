@@ -35,6 +35,216 @@ const suiteFiles =
         .sort()
         .map((name) => `${repo}/tests/manual/${name}`);
 
+/**
+ * The viewport a suite runs at: the shared desktop default (the runner's
+ * launch viewport), or a suite-declared override — phone suites set
+ * `viewport: {width: 390, height: 844}` (the screenshot automation's phone
+ * viewport) at the suite level. A case may override it per-case with the same
+ * shape; overrides are applied at page/case start, before the first step.
+ */
+/**
+ * The floating chrome's coherence probe, run in the page. Checks, per the
+ * phone-viewport contract:
+ *
+ * 1. every floating chrome box (tab bar, legend, idle slider, zoom controls)
+ *    sits fully inside the panel — nothing cropped by the viewport;
+ * 2. no two chrome bands overlap — the narrow stacked column keeps the
+ *    legend, slider, and zoom row apart; the desktop floating bands never
+ *    cover one another;
+ * 3. each required element (`params.reachable` selectors) is fully inside the
+ *    viewport AND hit-testable at its center (a chrome overlay painting over
+ *    it or dragging it off-screen makes the control unusable whatever the
+ *    geometry says);
+ * 4. `params.unitsClear !== false`: at the fitted view no layout mark
+ *    (`[data-attn-mark]`, `[data-attn-region]`) intersects a chrome band —
+ *    the chrome-free fit box really reserved the band.
+ *
+ * The probe reads paint geometry, not React state, so it tracks what the
+ * operator can actually reach; pointer-events-none chrome is not exempted
+ * from the overlap or intersection checks (the throbber suite's probe is the
+ * precedent: elementFromPoint is blind to pointer-events:none overlays).
+ */
+async function assertChromeLayout(page, evidenceDir, slug, params = {}) {
+  const outcome = await page.evaluate((params) => {
+    const checks = [];
+    const add = (name, ok, detail) => checks.push({ name, ok, detail });
+    const panel = document.querySelector("[data-bb-plugin]");
+    const panelRect = panel?.getBoundingClientRect();
+    if (panelRect === undefined) {
+      return { pass: false, checks, detail: "no [data-bb-plugin] scope mounted" };
+    }
+    const chromeEls = [
+      ...document.querySelectorAll(
+        "[data-attn-tabbar], [data-attn-legend], [data-attn-idle-slider], [data-attn-zoom-controls]",
+      ),
+    ];
+    if (chromeEls.length === 0) {
+      return { pass: false, checks: [{ name: "chrome present", ok: false }], detail: "no floating chrome bands found" };
+    }
+    const boxOf = (el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        id:
+          el.getAttribute("data-attn-tabbar") !== null ? "tabbar"
+          : el.getAttribute("data-attn-legend") !== null ? "legend"
+          : el.getAttribute("data-attn-idle-slider") !== null ? "slider"
+          : "zoom-controls",
+        el,
+        l: r.left, t: r.top, r: r.right, b: r.bottom,
+        w: r.width, h: r.height,
+      };
+    };
+    const boxes = chromeEls.map(boxOf);
+    // 1. Every band fully inside the panel viewport (nothing cropped).
+    for (const b of boxes) {
+      add(
+        `the ${b.id} band sits fully inside the viewport`,
+        b.l >= panelRect.left - 0.5 && b.t >= panelRect.top - 0.5 &&
+          b.r <= panelRect.right + 0.5 && b.b <= panelRect.bottom + 0.5,
+        `[${Math.round(b.l)},${Math.round(b.t)}]→[${Math.round(b.r)},${Math.round(b.b)}] (panel ${Math.round(panelRect.width)}×${Math.round(panelRect.height)})`,
+      );
+    }
+    // 2. No two bands overlap (siblings; pairs sharing an element's subtree
+    //    would be parent-child and none of these are).
+    const overlapArea = (a, b) =>
+      Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) *
+      Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i], b = boxes[j];
+        const area = overlapArea(a, b);
+        add(`the ${a.id} band does not cover the ${b.id} band`, area <= 0.5, `${area.toFixed(0)}px² overlap`);
+      }
+    }
+    // 3. Required controls: fully inside the viewport and hit-testable.
+    for (const selector of params.reachable ?? []) {
+      const el = document.querySelector(selector);
+      if (el === null) {
+        add(`${selector} present`, false, "absent");
+        continue;
+      }
+      const b = boxOf(el);
+      add(
+        `${selector} sits fully inside the viewport`,
+        b.l >= panelRect.left - 0.5 && b.t >= panelRect.top - 0.5 &&
+          b.r <= panelRect.right + 0.5 && b.b <= panelRect.bottom + 0.5,
+        `[${Math.round(b.l)},${Math.round(b.t)}]→[${Math.round(b.r)},${Math.round(b.b)}]`,
+      );
+      const at = document.elementFromPoint((b.l + b.r) / 2, (b.t + b.b) / 2);
+      add(
+        `${selector} is hit-testable at its center`,
+        at !== null && (at === b.el || b.el.contains(at)),
+        at === null ? "no element at point" : at === b.el || b.el.contains(at) ? "reached" : `${at.tagName}.${String(at.className ?? "").slice(0, 40)}`,
+      );
+    }
+    // 4. No layout mark intersects a chrome band at the fitted view.
+    if (params.unitsClear !== false) {
+      const units = [...document.querySelectorAll("[data-attn-mark], [data-attn-region]")];
+      if (units.length === 0) {
+        add("layout marks present", false, "no [data-attn-mark]/[data-attn-region] found");
+      } else {
+        const covered = [];
+        for (const unit of units) {
+          const b = boxOf(unit);
+          const label =
+            unit.getAttribute("data-thread-id") ??
+            unit.getAttribute("data-attn-region") ??
+            unit.getAttribute("data-attn-mark") ??
+            "unit";
+          for (const cb of boxes) {
+            if (overlapArea(b, cb) > 0.5) {
+              covered.push(
+                `${label} ∩ ${cb.id} ([${Math.round(b.l)},${Math.round(b.t)}]→[${Math.round(b.r)},${Math.round(b.b)}])`,
+              );
+              break;
+            }
+          }
+        }
+        add("no card or control sits under the floating chrome", covered.length === 0,
+          covered.length === 0 ? `${units.length} marks all clear of ${boxes.length} chrome bands` : covered.slice(0, 4).join(", "));
+      }
+    }
+    return {
+      pass: checks.every((c) => c.ok),
+      checks,
+      detail: checks.every((c) => c.ok)
+        ? `${boxes.length} chrome bands coherent${params.reachable?.length ? `, ${params.reachable.length} control(s) reachable` : ""}`
+        : checks.filter((c) => !c.ok).map((c) => c.name).join("; "),
+    };
+  }, params);
+  const shot = `${evidenceDir}/${slug}.png`;
+  await page.screenshot({ path: shot });
+  return { ...outcome, evidence: shot.replace(`${repo}/`, "") };
+}
+
+/**
+ * The viewport a suite runs at: the shared desktop default (the runner's
+ * launch viewport), or a suite-declared override — phone suites set
+ * `viewport: {width: 390, height: 844}` (the screenshot automation's phone
+ * viewport) at the suite level. A case may override it per-case with the same
+ * shape; overrides are applied at page/case start, before the first step.
+ */
+const DESKTOP_VIEWPORT = { width: 1280, height: 800 };
+
+function viewportLabel(viewport) {
+  return `${viewport.width}×${viewport.height}`;
+}
+
+/**
+ * Keyboard-operability probe: focus an element and press a key through the
+ * real browser (Cdp keyboard, not a synthetic event), then report the
+ * element's post-press value. Used to prove the idle slider works without a
+ * pointer (the suite pairs it with a caption/counts `waitFor`).
+ */
+/**
+ * The runner-side assertChrome case: the chrome layout settles on the map's
+ * opening (click → render → world report → fit), so the probe polls until it
+ * passes or the deadline expires — the runner's other layout assertions are
+ * bounded waits, and an instant probe would read a pre-fit frame as failure.
+ * The last outcome wins the screenshot and the detail.
+ */
+async function runAssertChrome(page, evidenceDir, slug, params) {
+  const deadline = Date.now() + 8000;
+  let outcome = null;
+  while (Date.now() < deadline) {
+    outcome = await assertChromeLayout(page, evidenceDir, slug, params);
+    if (outcome.pass) break;
+    await sleep(150);
+  }
+  return outcome;
+}
+
+/**
+ * Keyboard-operability probe: focus an element and press a key through the
+ * real browser (CDP keyboard, not a synthetic event), then report the
+ * element's post-press value. Used to prove the idle slider works without a
+ * pointer (the suite pairs it with a caption/counts `waitFor`).
+ */
+async function pressKey(page, params) {
+  const selector = params.selector;
+  const key = params.key ?? "ArrowDown";
+  const focused = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!(el instanceof HTMLElement)) return false;
+    el.focus();
+    return document.activeElement === el;
+  }, selector);
+  if (!focused) {
+    return { pass: false, detail: `no focusable element for ${selector}` };
+  }
+  await page.keyboard.press(key);
+  const value = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    return el instanceof HTMLInputElement ? el.value : null;
+  }, selector);
+  const want = params.expectValue ?? null;
+  const pass = want === null ? true : String(value) === String(want);
+  return {
+    pass,
+    detail: `focused ${selector}, pressed ${key}, value now ${value === null ? "n/a" : JSON.stringify(value)}${want === null ? "" : ` (want ${JSON.stringify(want)})`}`,
+  };
+}
+
 /** The hover card's authored width (mirrors CARD_W in views/HoverCard.tsx). */
 const CARD_W = 300;
 
@@ -670,8 +880,14 @@ async function assertBeadsAnimate(page, segment, selectorOverride) {
 
 // ---------- execution ----------
 
-async function runCase(page, evidenceDir, kase) {
+async function runCase(page, evidenceDir, kase, suiteViewport) {
   const results = [];
+  // The case's own viewport overrides the suite's (phone suites run the suite
+  // viewport; a mixed-viewport suite marks the one case that differs).
+  const viewport = kase.viewport ?? suiteViewport;
+  if (viewport.width !== page.viewport().width || viewport.height !== page.viewport().height) {
+    await page.setViewport({ width: viewport.width, height: viewport.height });
+  }
   for (const step of kase.steps) {
     const entry = { order: step.order, action: step.action, pass: false, evidence: "", detail: "" };
     const slug = `${kase.id}-step${step.order}`;
@@ -806,6 +1022,20 @@ async function runCase(page, evidenceDir, kase) {
           entry.checks = outcome.checks;
           break;
         }
+        case "assertChrome": {
+          const outcome = await runAssertChrome(page, evidenceDir, slug, step.params ?? {});
+          entry.pass = outcome.pass;
+          entry.detail = outcome.detail;
+          entry.checks = outcome.checks;
+          entry.evidence = outcome.evidence ?? "";
+          break;
+        }
+        case "pressKey": {
+          const outcome = await pressKey(page, step.params ?? {});
+          entry.pass = outcome.pass;
+          entry.detail = outcome.detail;
+          break;
+        }
         case "pointerAway": {
           // Move the real mouse off every unit so hover state can be asserted
           // to clear. A synthetic click would not move the pointer.
@@ -907,7 +1137,13 @@ await mkdir(REPORT_DIR, { recursive: true });
 for (const suiteFile of suiteFiles) {
   const doc = parse(await readFile(suiteFile, "utf8"));
   const suite = doc.test_suite;
+  // Viewport: the suite's declaration, else the desktop default the launch
+  // viewport already provides — applied to the page before the first case.
+  const suiteViewport = suite.viewport ?? DESKTOP_VIEWPORT;
   const page = await browser.newPage();
+  if (suiteViewport.width !== page.viewport().width || suiteViewport.height !== page.viewport().height) {
+    await page.setViewport({ width: suiteViewport.width, height: suiteViewport.height });
+  }
   const consoleLines = consoleCapture(page);
   const evidenceDir = `${REPORT_DIR}/evidence/${suite.id}`;
   await mkdir(evidenceDir, { recursive: true });
@@ -915,7 +1151,7 @@ for (const suiteFile of suiteFiles) {
   const caseOutputs = [];
   for (const kase of doc.test_cases) {
     const before = await page.metrics();
-    const caseResult = await runCase(page, evidenceDir, kase);
+    const caseResult = await runCase(page, evidenceDir, kase, suiteViewport);
     const after = await page.metrics();
     caseOutputs.push({ kase, caseResult, before, after });
     if (!caseResult.passed) anyFailed = true;
@@ -929,6 +1165,7 @@ for (const suiteFile of suiteFiles) {
     `**Suite ID:** ${suite.id}`,
     `**Date:** ${new Date().toISOString()}`,
     "**Mode:** headless (vite harness + system Chrome)",
+    `**Viewport:** ${viewportLabel(suiteViewport)}`,
     "",
     "## Summary",
     "",

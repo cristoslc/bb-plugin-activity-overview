@@ -7,6 +7,7 @@ import {
   familyTints, FAMILY_TINTS, zoomToRect, clampPan, clampPanEdges,
   treemapMarkMode, tileForSlot, tileGutter, TILE_GUTTER, ZOOMED_IN_SCALE,
   greyBucketForDays, idleVisible, idleStopCaption, IDLE_STOP_ALL,
+  chromeStacks, chromeBottomReserve, NARROW_CHROME_W, CHROME_STACK_BASE_PX,
   cellColor, GREYS,
   type AttnThread, type AttnProject,
 } from "../views/model.ts";
@@ -411,4 +412,39 @@ test("buildProjects idleStop: a hidden idle parent promotes its visible children
   // The parent is hidden, so the child promotes to a root and stays drawn.
   assert.equal(projects[0]!.n, 1);
   assert.equal(projects[0]!.cells[0]!.t.id, "child");
+});
+
+// ---------- floating chrome: the narrow-panel stacked band ----------
+// The phone-width bug: at narrow panels the floating chrome bands meet — the
+// legend card (capped at its 420px max-width from the left) runs into the
+// idle-slider card (fixed size from the right) and paints over its track, so
+// the slider cannot be seen or used. Past the threshold the chrome stacks
+// into one bottom column and the map's fit reserves the column's real height.
+
+test("chromeStacks flips exactly at the narrow threshold", () => {
+  // Phone widths sit deep inside the stacked zone.
+  assert.equal(chromeStacks(320), true);
+  assert.equal(chromeStacks(390), true);
+  assert.equal(chromeStacks(430), true);
+  // Boundary: at the threshold itself the floating layout still holds (the
+  // two floating bands keep a clear edge there); one pixel narrower stacks.
+  assert.equal(chromeStacks(NARROW_CHROME_W), false);
+  assert.equal(chromeStacks(NARROW_CHROME_W - 1), true);
+  // Desktop widths never stack.
+  assert.equal(chromeStacks(1280), false);
+  assert.equal(chromeStacks(1920), false);
+});
+
+test("chromeBottomReserve is the zoom band plus the stacked column plus breathing", () => {
+  // The fixed floor: the zoom-control row (32px) its 12px bottom inset, and
+  // the 8px clearance the column keeps above it.
+  assert.equal(CHROME_STACK_BASE_PX, 52);
+  // The reserve grows with the measured column (legend + slider cards) and
+  // one breathing ring for the fit box; a zero-height band collapses to the
+  // base floor.
+  assert.equal(chromeBottomReserve(0, 16), CHROME_STACK_BASE_PX);
+  assert.equal(chromeBottomReserve(150, 16), 52 + 150 + 16);
+  assert.equal(chromeBottomReserve(138, 16), 52 + 138 + 16);
+  // Negative bands clamp to zero and collapse to the floor the same way.
+  assert.equal(chromeBottomReserve(-5, 16), CHROME_STACK_BASE_PX);
 });

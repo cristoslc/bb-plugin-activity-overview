@@ -55,6 +55,9 @@ import {
   tileForSlot,
   IDLE_STOP_ALL,
   idleStopCaption,
+  chromeStacks,
+  chromeBottomReserve,
+  NARROW_BAND_SEED_PX,
   type AttnProject,
   type AttnThread,
   type Cell,
@@ -83,12 +86,14 @@ const MIN_STAGE_W = 320; // pack floor for very narrow panels
 const SAFE = { top: 60, bottom: 88, left: 12, right: 12 };
 /** Breathing room between the content block and the chrome/view edges. */
 const GAP = 16;
-/** The rect the opening fit and fit-button target: safe area plus gap. */
-const fitBox = (vw: number, vh: number) => ({
+/** The rect the opening fit and fit-button target: safe area plus gap. The
+ * bottom margin comes from the caller: the desktop chrome's fixed figure, or
+ * the stacked narrow-column band's measured height. */
+const fitBox = (vw: number, vh: number, bottom: number = SAFE.bottom) => ({
   x: SAFE.left + GAP,
   y: SAFE.top + GAP,
   w: Math.max(1, vw - SAFE.left - SAFE.right - GAP * 2),
-  h: Math.max(1, vh - SAFE.top - SAFE.bottom - GAP * 2),
+  h: Math.max(1, vh - SAFE.top - bottom - GAP * 2),
 });
 const ZOOM_MIN = 0.2; // zoom-out floor
 const ZOOM_MAX = 5; // zoom-in ceiling
@@ -250,12 +255,19 @@ function MapCanvas({
   world,
   apiRef,
   persistKey,
+  safeBottom,
   children,
 }: {
   world: WorldSize | null;
   apiRef: RefObject<MapApi | null>;
   /** Session key this canvas's camera persists under (the tab id). */
   persistKey?: string;
+  /**
+   * How much of the viewport's bottom the floating chrome can occupy: the
+   * fit box keeps it clear. Defaults to the desktop chrome's fixed figure;
+   * a narrow panel passes the stacked chrome band's measured height.
+   */
+  safeBottom?: number;
   children: ReactNode;
 }) {
   const viewRef = useRef<HTMLDivElement>(null);
@@ -279,6 +291,11 @@ function MapCanvas({
   const resetSubsRef = useRef<Set<() => void>>(new Set());
   /** View-pinned close-control visibility (the treemap's focus state). */
   const [resetPinned, setResetPinned] = useState(false);
+  /** The prop mirrored into a ref: the callbacks read the current figure at
+   * call time, so a band measurement that lands after mount corrects the fit
+   * without wiring every callback to the prop. */
+  const safeBottomRef = useRef<number>(safeBottom ?? SAFE.bottom);
+  safeBottomRef.current = safeBottom ?? SAFE.bottom;
 
   /** The operator took the camera: stop the opening auto-fit permanently. */
   const ownCamera = useCallback(() => {
@@ -309,7 +326,7 @@ function MapCanvas({
     if (sz === null || sz.W <= 0 || sz.H <= 0 || vw <= 0 || vh <= 0) return;
     // The opening fit never blows a small world up past legibility (1×) and
     // centers it inside the chrome-free fit box, not the raw viewport.
-    const box = fitBox(vw, vh);
+    const box = fitBox(vw, vh, safeBottomRef.current);
     const k = clampT(Math.min(box.w / sz.W, box.h / sz.H, 1), ZOOM_MIN, 1);
     applyT({
       k,
@@ -343,7 +360,7 @@ function MapCanvas({
   const openRect = useCallback(
     (rect: { x: number; y: number; w: number; h: number }) => {
       ownCamera();
-      const box = fitBox(sizeRef.current.vw, sizeRef.current.vh);
+      const box = fitBox(sizeRef.current.vw, sizeRef.current.vh, safeBottomRef.current);
       if (box.w <= 1 || box.h <= 1) return;
       const { scale, tx, ty } = zoomToRect(rect, box.w, box.h, { pad: FOCUS_PAD, maxScale: ZOOM_MAX });
       applyT({ k: scale, tx: box.x + tx, ty: box.y + ty });
@@ -395,7 +412,7 @@ function MapCanvas({
   const applyOpening = useCallback(() => {
     const { vw, vh } = sizeRef.current;
     if (vw <= 0 || vh <= 0) return;
-    const box = fitBox(vw, vh);
+    const box = fitBox(vw, vh, safeBottomRef.current);
     const result = reportWorld(
       latchRef.current,
       worldRef.current,
@@ -536,7 +553,7 @@ function MapCanvas({
             ✕
           </button>
         ) : null}
-        <div className="absolute bottom-3 right-3 z-20 flex gap-1">
+        <div data-attn-zoom-controls="" className="absolute bottom-3 right-3 z-20 flex gap-1">
           {(
             [
               ["Fit to view", "⤢", fit],
@@ -1429,6 +1446,58 @@ function WhatsNewModal({
 
 type TabId = (typeof TABS)[number]["id"];
 
+/**
+ * The treemap's idle-visibility slider card, shared by both chrome layouts.
+ * Stops are keyed to the grey ramp (`IDLE_STOP_ALL` = every idle thread shown,
+ * the default; 0 = none); sliding down hides the dimmest (oldest) idle
+ * threads first, session state, never persisted (`idleVisible` in
+ * views/model.ts). `stacked` seats the card in the narrow chrome's bottom
+ * column: the row stretches, the track grows a touch height, and the caption
+ * holds its ground instead of riding the card's width.
+ */
+function IdleSliderCard({
+  stop,
+  onSlide,
+  stacked = false,
+}: {
+  stop: number;
+  onSlide: (stop: number) => void;
+  stacked?: boolean;
+}) {
+  return (
+    <div
+      data-attn-idle-slider=""
+      className={
+        (stacked ? "" : "absolute bottom-[52px] right-3 z-40 ") +
+        "pointer-events-auto rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm"
+      }
+    >
+      <div className="mb-1 text-[10px] text-muted-foreground">Idle threads</div>
+      <div className="flex items-center gap-2">
+        <input
+          type="range"
+          min={0}
+          max={IDLE_STOP_ALL}
+          step={1}
+          value={stop}
+          onChange={(e) => onSlide(Number(e.target.value))}
+          aria-label="Idle thread visibility"
+          aria-valuetext={idleStopCaption(stop)}
+          title="How much of the idle age range the treemap represents"
+          className={stacked ? "min-w-0 flex-1 cursor-pointer" : undefined}
+          style={stacked ? { height: 28, accentColor: "var(--attn-working)" } : { width: 120, accentColor: "var(--attn-working)" }}
+        />
+        <span
+          className={(stacked ? "shrink-0 " : "") + "text-[10px] text-muted-foreground"}
+          data-attn-idle-slider-caption=""
+        >
+          {idleStopCaption(stop)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function OverviewPage() {
   const live = useLiveModel();
   // What's new: two "seen" models, picked by the running build. A stable
@@ -1510,6 +1579,27 @@ export function OverviewPage() {
   const openThread = useCallback((id: string) => nav.toThread(id), [nav]);
   // Panel viewport: views pack to its width; the treemap fills its height.
   const [panelRef, vw, vh] = usePanelSize(MIN_STAGE_W);
+  // Floating chrome at narrow widths (phones, narrow desktop sidebars): the
+  // desktop floating bands — legend bottom-left, the treemap's slider above
+  // the zoom controls — meet and the legend paints over the slider's track,
+  // so below the threshold the chrome stacks into one bottom column and the
+  // map's fit reserves the column's real measured height.
+  const narrow = chromeStacks(vw);
+  const bandRef = useRef<HTMLDivElement | null>(null);
+  const [bandH, setBandH] = useState<number>(NARROW_BAND_SEED_PX);
+  useLayoutEffect(() => {
+    // The column only exists while stacked (the ref binds to it in that
+    // branch), so a flip between layouts just disconnects the observer.
+    const el = bandRef.current;
+    if (el === null || !narrow) return;
+    const read = () => {
+      if (el.clientHeight > 0) setBandH(Math.ceil(el.clientHeight));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [narrow]);
   // Hover card and burn-rate pulse: one card and one rate feed serve every
   // view, so a dot behaves identically in the board, treemap, and tiles.
   const snippets = useCardSnippets();
@@ -1524,8 +1614,17 @@ export function OverviewPage() {
   // the canvas only once the panel has a real height. The measuring layout
   // effect runs before paint, so this gate is synchronous — no flash.
   const measured = vh > 0;
+  // The bottom chrome's reservation: the desktop figure, or — while the chrome
+  // stacks (narrow, and the panel is measured so the column exists) — the
+  // stacked column's real height above the zoom band, never below the desktop
+  // figure (the seed bounds the pre-measurement frame; the column's observer
+  // corrects it within the first frame).
+  const safeBottom =
+    narrow && measured
+      ? Math.max(SAFE.bottom, chromeBottomReserve(bandH, GAP))
+      : SAFE.bottom;
   const w = Math.max(MIN_STAGE_W, vw - SAFE.left - GAP - SAFE.right - GAP);
-  const hBudget = Math.max(200, vh - SAFE.top - GAP - SAFE.bottom - GAP);
+  const hBudget = Math.max(200, vh - SAFE.top - GAP - safeBottom - GAP);
   if (live.state === "loading") {
     return <p className="p-4 text-sm text-muted-foreground">Loading threads…</p>;
   }
@@ -1562,7 +1661,7 @@ export function OverviewPage() {
       {tab === "tokenflow" ? (
         <TokenFlowView />
       ) : measured ? (
-        <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab}>
+        <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab} safeBottom={safeBottom}>
           {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
           {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} idleStop={idleStop} /> : null}
           {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
@@ -1581,7 +1680,7 @@ export function OverviewPage() {
         />
       ) : null}
       <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%_-_1.5rem)] flex-col items-start gap-2">
-        <div className="pointer-events-auto flex gap-1 rounded-md border border-border/60 bg-card p-1 shadow-sm">
+        <div data-attn-tabbar="" className="pointer-events-auto flex gap-1 rounded-md border border-border/60 bg-card p-1 shadow-sm">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -1621,37 +1720,42 @@ export function OverviewPage() {
         </div>
       </div>
       <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
-      {/* The treemap's idle-visibility slider: floating chrome above the zoom
-          controls, on the treemap tab only. Stops are keyed to the grey ramp
-          (IDLE_STOP_ALL = every idle thread shown, the default; 0 = none);
-          sliding down hides the dimmest (oldest) idle threads first. Session
-          state, never persisted. */}
-      {tab === "treemap" ? (
+      {/* The floating chrome. At narrow widths (phones, narrow sidebars) the
+          bands — legend, the treemap's idle slider — meet the zoom controls
+          and the legend paints over the slider's track, so the chrome stacks
+          into one bottom column with the slider reachable and nothing riding
+          under it; at desktop widths the classic floating layout is
+          unchanged. */}
+      {narrow ? (
         <div
-          data-attn-idle-slider=""
-          className="pointer-events-auto absolute bottom-[52px] right-3 z-40 rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm"
+          data-attn-chrome-column=""
+          ref={bandRef}
+          className="pointer-events-none absolute inset-x-3 bottom-[52px] z-40 flex flex-col gap-2"
         >
-          <div className="mb-1 text-[10px] text-muted-foreground">Idle threads</div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={0}
-              max={IDLE_STOP_ALL}
-              step={1}
-              value={idleStop}
-              onChange={(e) => setIdleStop(Number(e.target.value))}
-              aria-label="Idle thread visibility"
-              title="How much of the idle age range the treemap represents"
-              style={{ width: 120, accentColor: "var(--attn-working)" }}
-            />
-            <span className="text-[10px] text-muted-foreground" data-attn-idle-slider-caption="">
-              {idleStopCaption(idleStop)}
-            </span>
-          </div>
+          {tab !== "tokenflow" ? (
+            <div
+              data-attn-legend=""
+              className="pointer-events-none rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm text-muted-foreground"
+            >
+              <LegendRow counts={counts} />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                one dot = one thread · {total} visible · color = status, volume = count · drag to pan, scroll to zoom
+              </p>
+            </div>
+          ) : null}
+          {tab === "treemap" ? <IdleSliderCard stacked stop={idleStop} onSlide={setIdleStop} /> : null}
         </div>
       ) : null}
-      {tab !== "tokenflow" ? (
-        <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
+      {!narrow ? (
+        tab === "treemap" ? (
+          <IdleSliderCard stop={idleStop} onSlide={setIdleStop} />
+        ) : null
+      ) : null}
+      {!narrow && tab !== "tokenflow" ? (
+        <div
+          data-attn-legend=""
+          className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[420px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm"
+        >
           <LegendRow counts={counts} />
           <p className="mt-1 text-[10px] text-muted-foreground">
             one dot = one thread · {total} visible · color = status, volume = count · drag to pan, scroll to zoom
