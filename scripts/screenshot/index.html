@@ -2,6 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- A real phone browser lays the page out at the device width; without
+         this meta an emulated phone page renders at the ~980px desktop
+         fallback width and never exercises the narrow layout. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Activity Overview — UAT harness</title>
     <style>
       /* Harness chrome, inline (dist/app.css only carries the plugin's own

@@ -150,6 +150,59 @@ export function idleStopCaption(stop: number): string {
   return `idle ≤ ${span} shown`;
 }
 
+// ---------- floating chrome: the narrow-panel stacked band ----------
+
+/**
+ * Panel width where the floating chrome leaves the floating layout. Above it
+ * the never meet: the legend card caps at its 420px max-width (left edge at
+ * 12px, so its right edge stops at 432px) and the slider card is ~214px wide
+ * measured from the right edge (its left edge at panelW − 226), so the two
+ * floating bands first touch around 658px. Below it the bands — legend, the
+ * treemap's idle slider, and the corner zoom controls — stack into one bottom
+ * column. Phone panels (~320–430px) sit deep inside that range, and narrow
+ * desktop sidebars graze it there too.
+ */
+export const NARROW_CHROME_W = 660;
+
+/** Whether a panel is narrow enough to stack the floating chrome into one column. */
+export function chromeStacks(panelW: number): boolean {
+  return panelW < NARROW_CHROME_W;
+}
+
+/**
+ * Height below the stacked column that is not the column: the zoom-control
+ * row (32px) plus its 12px bottom inset, plus the 8px clearance the column
+ * keeps above the row. The column's own measured height rides in separately
+ * (`chromeBottomReserve`), so this constant never has to chase the legend's
+ * text wrapping.
+ */
+export const CHROME_STACK_BASE_PX = 52;
+
+/**
+ * First-frame seed for the stacked column's measured height (the legend and
+ * slider cards): the column's layout measurement replaces it within the first
+ * frame, so the seed only bounds how far the opening can land under the band
+ * before the correction — it covers the narrow legend's realistic worst wrap
+ * (two chip lines + two caption lines) plus the slider card, with headroom.
+ */
+export const NARROW_BAND_SEED_PX = 150;
+
+/**
+ * The bottom reserve the stacked chrome claims from the map: the fixed
+ * zoom-band floor plus the stacked column's own (measured) height plus one
+ * breathing ring. The map canvas subtracts it from the viewport when it sizes
+ * the chrome-free fit box and when it clamps fitted content, so at narrow
+ * widths no tile or label hides under the band. A zero bandHeight (the
+ * pre-measurement frame) collapses to the floor; negative bands clamp the
+ * same way — the reserve never shrinks below the zoom band.
+ */
+export function chromeBottomReserve(bandH: number, breathe: number): number {
+  const col = Math.max(0, bandH);
+  // A not-yet-measured (or genuinely empty) column claims only the fixed
+  // zoom-band floor — never a breathing ring for nothing.
+  return col > 0 ? CHROME_STACK_BASE_PX + col + breathe : CHROME_STACK_BASE_PX;
+}
+
 export function tip(t: AttnThread, nowMs: number): string {
   return `${t.title || t.id} · ${classify(t)} · ${ageLabel(t, nowMs)}`;
 }

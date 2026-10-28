@@ -56,6 +56,10 @@ export const UNRELEASED_ITEMS: readonly { text: string; children: string[] }[] =
     "children": []
   },
   {
+    "text": "**The treemap's idle-visibility slider is usable at phone widths now.** Narrow panels (the threshold is ~660px, so narrow desktop sidebars are in on it too) stack the floating chrome into one bottom column — legend, then the slider, then the corner zoom controls — and the map's fit box reserves the column's measured height, so the legend no longer paints over the slider's track and no tile or label hides under the band; desktop keeps the floating layout, and the slider keeps its grey-ramp stops, dimmest-first order, and keyboard use (arrow keys move the stop).",
+    "children": []
+  },
+  {
     "text": "**The hover card no longer overhangs the panel edge by its own padding.** The card's laid-out width was its content width while the seat math clamped against that same constant, so a card pushed to the right edge painted 26px past the panel and clipped; the card is border-box now, so the painted width is the width the seat math assumes.",
     "children": []
   },

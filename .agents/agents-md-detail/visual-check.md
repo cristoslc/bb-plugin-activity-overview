@@ -27,7 +27,11 @@ treemap tints and the chrome-occlusion bugs hid.
    take a fresh screenshot to locate targets first.
 4. **Check each of the five tabs**: open every tab at fit and screenshot it
    — no card, label or dot may sit under the floating chrome (top tab bar
-   ≈ top 60px; legend bottom-left; corner zoom controls).
+   ≈ top 60px; legend and, on the treemap tab, the idle slider — bottom
+   band; corner zoom controls). At narrow widths the bottom bands stack
+   into one column and the fit reserves its measured height, so re-check
+   the same rule at the phone viewport (390×844) for any landing that
+   touches the chrome.
 5. **Check the treemap loop specifically**: wheel-zoom into a region
    (`p.mouse.move(x, y)` over a region center, `p.mouse.wheel({ deltaY:
    -N })`) — the project title must stay clear of the top nav; click a

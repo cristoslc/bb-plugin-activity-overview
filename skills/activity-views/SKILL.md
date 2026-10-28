@@ -47,8 +47,13 @@ tabs: three aggregate tabs rendered live from the host's sidebar thread data, pl
   layout entirely: the treemap re-squarifies, totals and the shared legend
   re-scale to the visible set, and a project left with zero visible threads
   vanishes (the project filter's behavior); hot threads are never hidden. The
-  stop is view-local session state, not persisted. UAT in
-  `tests/manual/uat-treemap-idle-slider.yaml`. Helpers are pure
+  stop is view-local session state, not persisted. The slider is a native
+  range input carrying `aria-label` "Idle thread visibility" and the stop
+  caption as its `aria-valuetext`, so the keyboard moves the stop (arrow
+  keys) without a pointer; at narrow widths its track grows to a 28px touch
+  height. UAT in `tests/manual/uat-treemap-idle-slider.yaml` and, at the
+  phone viewport, `tests/manual/uat-treemap-idle-slider-phone.yaml` (the
+  runner takes a suite-level `viewport`). Helpers are pure
   (`familyTints`, `treemapLayout`, `placeRegionLabels`, `zoomToRect`,
   `clampPan`, `fillScale`, `idleVisible`) with tests in
   tests/model.test.ts and tests/board-fill-labels.test.ts.
@@ -160,19 +165,34 @@ zooms with the mouse wheel (around the cursor, 0.2×–5×) or the floating
 +/−/fit controls at the bottom-right, and "⤢" fits the whole world into the
 view (never zooming past 1×). Dragging never lands as a click: a pan within
 the last 200ms suppresses card clicks and double-clicks. All chrome floats
-above the canvas:
+above the canvas in one of two layouts picked by the panel width
+(`chromeStacks` in views/model.ts, threshold `NARROW_CHROME_W` = 660px —
+phones and narrow sidebars stack):
 
-- Tab switcher — floating card top-left, with the What's-new gift button at
-  its end (always present; pulses after an update until opened).
-- Legend + caption — floating card bottom-left, pointer-events-none so
-  tooltips pass through.
-- Dragging captures the pointer only after a real drag starts (moved >3px);
-  capturing before that retargets card clicks to the canvas root and eats
-  the cards' click and double-click handlers.
+- Tab switcher — floating card top-left, with the What's-new gift button
+  in its end (always present; pulses after an update until opened).
+  It is the one band unchanged by width.
+- Desktop widths — the legend + caption card floats bottom-left
+  (pointer-events-none so tooltips pass through) and the treemap tab's
+  idle-visibility slider card floats at the bottom-right, above the
+  corner zoom controls.
+- Narrow widths — the three bottom bands (legend, slider, corner zoom
+  controls) stack into one bottom column (`data-attn-chrome-column`):
+  legend on top, the slider beneath it at a 28px touch height stretched
+  to the column's width, the zoom controls at the bottom. The column's
+  measured height is the map's bottom reserve (`chromeBottomReserve`):
+  the chrome-free fit box and the opening fit keep the map's content out
+  of the band, so no tile or label hides under the chrome at phone
+  width either.
+- Dragging captures the pointer only after a real drag starts (moved
+  >3px); capturing before that retargets card clicks to the canvas root
+  and eats the cards' click and double-click handlers.
 
 Openings: aggregate tabs open with the whole world fitted and centered
-inside a chrome-free fit box (`SAFE` top 60 / bottom 88 / side 12px, plus a
-16px `GAP` breathing ring); the Unit treemap is sized to exactly fill the
+inside a chrome-free fit box (`SAFE` top 60 / side 12px, plus a 16px
+`GAP` breathing ring; the bottom is 88px on desktop or the stacked
+column's measured band plus the zoom row on narrow panels); the Unit
+treemap is sized to exactly fill the
 fit box, and the Board solves for the largest slot scale whose shelf pack
 still fits the fit box's height (capped 2×) and re-shelves at that scale, so
 its opening camera also lands at 1× — the whole roster fills the viewport the
