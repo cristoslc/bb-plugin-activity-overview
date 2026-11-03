@@ -3,23 +3,24 @@ test_suite:
   title: The treemap's idle-visibility slider is usable at phone width (390×844)
   description: >
     The phone-width twin of uat-treemap-idle-slider, guarding the reported
-    bug: at narrow panels the desktop floating chrome bands meet — the
-    legend card runs into the idle-slider card and paints over its track —
-    so the slider could not be seen or used on a phone. Past the narrow
-    threshold the chrome stacks into one bottom column (legend, then the
-    slider card, with the corner zoom controls beneath it) and the map's fit
-    box reserves the column's measured band. The suite-level `viewport`
-    runs the whole suite at 390×844 — the same phone viewport
-    scripts/screenshot/shoot.mjs captures — with no other per-case overrides.
-    At minimum: the slider renders fully inside the viewport on the treemap
-    tab and is hit-testable; it responds to a mid stop and to none (the
-    visible set re-scales, the dimmest idle threads leave first); no card or
-    control sits under the floating chrome at phone width. The slider keeps
-    its ramp-derived stops and dimmest-first semantics; hot threads never
-    leave. Same base fixture as the desktop suite: seven threads, four idle
-    on the grey ramp (thr_idle grey-0 2h, thr_idle_week grey-1 2d,
-    thr_idle_month grey-3 30d, thr_idle_year grey-5 200d), three hot.
-  tags: [rendering, treemap, idle, slider, phone, narrow-chrome, uat, headless]
+    bug: at narrow panels the desktop floating chrome bands met and painted
+    over each other, so the slider could not be seen or used on a phone.
+    Past the narrow threshold the chrome stacks into one bottom column
+    (legend, then the filters card — tier 2 of the control surface, with the
+    idle slider and the project filter — and the corner zoom controls
+    beneath it) and the map's fit box reserves the column's measured band.
+    The suite-level `viewport` runs the whole suite at 390×844 — the same
+    phone viewport scripts/screenshot/shoot.mjs captures — with no other
+    per-case overrides. At minimum: the slider renders fully inside the
+    viewport on the treemap tab and is hit-testable; it responds to a mid
+    stop and to none (the visible set re-scales, the dimmest idle threads
+    leave first); no card or control sits under the floating chrome at phone
+    width. The slider keeps its ramp-derived duration ticks and
+    dimmest-first semantics; hot threads never leave. Same base fixture as
+    the desktop suite: seven threads, four idle on the grey ramp (thr_idle
+    bucket 0 at 2h, thr_idle_week bucket 2 at 2d, thr_idle_month bucket 3 at
+    20d, thr_idle_year bucket 5 at 200d), three hot.
+  tags: [rendering, treemap, idle, slider, phone, narrow-chrome, filters, uat, headless]
   viewport:
     width: 390
     height: 844
@@ -47,7 +48,7 @@ test_cases:
         action: assertChrome
         params:
           reachable:
-            - "[data-attn-idle-slider] input[type='range']"
+            - '[data-attn-filters] input[type=''range'']'
           unitsClear: true
         instruction: Assert every chrome band sits fully inside the phone viewport, no two bands overlap, the slider is hit-testable at its center, and no tile or region hides under a band.
         expected: All bands coherent; the slider reachable; nothing under the chrome.
@@ -57,7 +58,7 @@ test_cases:
         expected: Evidence saved under docs/uat/.
 
   - id: TC-02
-    title: A mid stop responds at phone width (stop 2 keeps the freshest shades)
+    title: A mid stop responds at phone width (stop 3, <7 d, keeps the freshest shades)
     criticality: blocker
     preconditions:
       - Same harness session expectations as TC-01.
@@ -76,23 +77,23 @@ test_cases:
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
-          value: "2"
-        instruction: Slide the idle-visibility stop down to 2 (dimmest-first semantics).
+          selector: '[data-attn-filters] input[type="range"]'
+          value: "3"
+        instruction: Slide the idle-visibility stop down to 3 (<7 d; dimmest-first semantics).
         expected: The treemap re-squarifies around the visible set.
       - order: 4
         action: assertCount
         params:
           selector: '[data-attn-unit][data-thread-id="thr_idle_month"]'
           equals: 0
-        instruction: Assert the grey-3 thread (30d) left the layout.
+        instruction: Assert the 20d thread (bucket 3) left the layout.
         expected: No unit for thr_idle_month.
       - order: 5
         action: assertCount
         params:
           selector: '[data-attn-unit][data-thread-id="thr_idle_week"]'
           equals: 1
-        instruction: Assert the freshest idle of the mid cut (grey-1, 2d) survives.
+        instruction: Assert the freshest idle of the mid cut (2d, under the bound) survives.
         expected: One tile for thr_idle_week.
       - order: 6
         action: waitFor
@@ -102,7 +103,7 @@ test_cases:
         expected: The legend reads "5 visible".
 
   - id: TC-03
-    title: The bottom stop hides every idle thread — none — and the counts respond
+    title: The bottom stop (No idle) hides every idle thread — none — and the counts respond
     criticality: blocker
     preconditions:
       - Same harness session expectations as TC-01.
@@ -121,9 +122,9 @@ test_cases:
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "0"
-        instruction: Slide the stop to the bottom (none).
+        instruction: Slide the stop to the bottom (No idle).
         expected: Every idle thread leaves the layout.
       - order: 4
         action: assertCount
@@ -164,7 +165,7 @@ test_cases:
         action: assertChrome
         params:
           reachable:
-            - "[data-attn-idle-slider] input[type='range']"
+            - '[data-attn-filters] input[type=''range'']'
             - "[data-attn-zoom-controls]"
           unitsClear: true
         instruction: Assert the slider and the zoom controls are reachable and no tile or region intersects any chrome band at the fitted view.
@@ -196,21 +197,22 @@ test_cases:
       - order: 3
         action: pressKey
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           key: ArrowDown
           expectValue: "5"
         instruction: Focus the slider and press ArrowDown (no pointer involved); the value must step down one stop.
         expected: The input reads 5.
       - order: 4
-        action: waitFor
+        action: assertCount
         params:
-          text: idle ≤ 168d shown
-        instruction: Assert the caption names the freest age still shown at stop 5.
-        expected: The caption reads "idle ≤ 168d shown".
+          selector: '[data-attn-idle-tick="<90 d"][data-attn-idle-tick-active]'
+          equals: 1
+        instruction: Assert the <90 d tick is the emphasized one at stop 5.
+        expected: the <90 d tick is the active one.
       - order: 5
         action: assertCount
         params:
           selector: "[data-attn-mark='tile']"
           equals: 6
-        instruction: Assert the keyboard-driven stop hid only the dimmest idle thread (grey-5, 200d).
+        instruction: Assert the keyboard-driven stop hid only the dimmest idle thread (200d).
         expected: Six tiles — three hot plus three idle.

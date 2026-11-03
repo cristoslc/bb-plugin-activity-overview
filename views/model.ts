@@ -41,18 +41,32 @@ export const STATUS_NAMES: Record<Status, string> = {
 };
 
 /**
+ * The idle ramp's named bounds — the slider's ticks and the grey shades' age
+ * bounds in one array, youngest → oldest. `days` is a bucket's upper bound in
+ * days; `label` is the slider tick that shows that bucket and every younger
+ * one. The dimmest shade (everything past the last bound) has no tick of its
+ * own: it exists so the top stop's "everything" stays honest.
+ */
+export const IDLE_TICKS: ReadonlyArray<{ days: number; label: string }> = [
+  { days: 8 / 24, label: "<8 h" },
+  { days: 1, label: "<24 h" },
+  { days: 7, label: "<7 d" },
+  { days: 30, label: "<30 d" },
+  { days: 90, label: "<90 d" },
+];
+
+/**
  * Idle dots fade with age into the stage: fresh muted ink through five mixes
- * toward near-background. The tokens (views/theme.ts) resolve against
- * whatever stage color the active theme hands over, so the fade is
- * theme-relative in both light and dark.
+ * toward near-background. The bounds and their order are IDLE_TICKS's — the
+ * single source the slider's ticks read too, so a stop can never disagree
+ * with a rendered shade — and the tokens are index-derived
+ * (`--attn-grey-<i>`, views/theme.ts). The tokens resolve against whatever
+ * stage color the active theme hands over, so the fade is theme-relative in
+ * both light and dark.
  */
 export const GREYS: Array<[number, string]> = [
-  [0.75, "var(--attn-grey-0)"],
-  [6, "var(--attn-grey-1)"],
-  [24, "var(--attn-grey-2)"],
-  [72, "var(--attn-grey-3)"],
-  [168, "var(--attn-grey-4)"],
-  [Number.POSITIVE_INFINITY, "var(--attn-grey-5)"],
+  ...IDLE_TICKS.map((tick, i) => [tick.days, `var(--attn-grey-${i})`] as [number, string]),
+  [Number.POSITIVE_INFINITY, `var(--attn-grey-${IDLE_TICKS.length})`],
 ];
 
 export function classify(t: AttnThread): Status {
@@ -99,15 +113,16 @@ export function cellColor(t: AttnThread, nowMs: number): string {
   return GREYS[greyBucketForDays(ageMs(t, nowMs) / 86400000)]![1];
 }
 
-// ---------- treemap idle-visibility slider ----------
+// ---------- the idle-visibility slider (every dot board's roster gate) ----------
 
 /**
  * The idle-visibility slider's top stop: every grey-ramp shade shown (the
- * default). One stop sits below it per ramp shade — stop `s` shows only the
+ * default). One stop sits below it per named tick — stop `s` shows only the
  * shades with bucket index `< s`, so stepping down from the top hides the
- * dimmest (oldest) shade first — and stop 0 hides every idle thread. The stop
- * count is derived from `GREYS` itself, so the slider can never disagree with
- * a rendered shade: add a shade to the ramp and the slider grows a stop.
+ * dimmest (oldest) idle threads first — and stop 0 hides every idle thread.
+ * The stop count is derived from the ramp itself, so the slider can never
+ * disagree with a rendered shade: add a tick to IDLE_TICKS and the slider
+ * grows a stop.
  */
 export const IDLE_STOP_ALL = GREYS.length;
 
@@ -136,18 +151,17 @@ export function idleVisible(t: AttnThread, nowMs: number, stop: number): boolean
 }
 
 /**
- * The slider stop's one-line caption, derived from the ramp's own day
- * thresholds: the top stop reads "all idle shown", the bottom "no idle shown",
- * and every step between names the freshest age it still shows (stop 2 keeps
- * the buckets below grey-2, i.e. idle up to 6 days old).
+ * The slider stop's label — the operator's ticks, read straight off
+ * IDLE_TICKS: "No idle" at the bottom stop, "All Idle" at the top, and each
+ * intermediate stop named by its bound ("<8 h", "<24 h", "<7 d", "<30 d",
+ * "<90 d"). One function feeds the tick row, the input's `aria-valuetext`,
+ * and any caption, so a label can never drift from the bucket it keys.
  */
 export function idleStopCaption(stop: number): string {
   assertIdleStop(stop);
-  if (stop >= IDLE_STOP_ALL) return "all idle shown";
-  if (stop <= 0) return "no idle shown";
-  const days = GREYS[stop - 1]![0];
-  const span = days < 1 ? `${Math.round(days * 24)}h` : `${days}d`;
-  return `idle ≤ ${span} shown`;
+  if (stop <= 0) return "No idle";
+  if (stop >= IDLE_STOP_ALL) return "All Idle";
+  return IDLE_TICKS[stop - 1]!.label;
 }
 
 // ---------- floating chrome: the narrow-panel stacked band ----------
@@ -180,12 +194,13 @@ export const CHROME_STACK_BASE_PX = 52;
 
 /**
  * First-frame seed for the stacked column's measured height (the legend and
- * slider cards): the column's layout measurement replaces it within the first
- * frame, so the seed only bounds how far the opening can land under the band
- * before the correction — it covers the narrow legend's realistic worst wrap
- * (two chip lines + two caption lines) plus the slider card, with headroom.
+ * the filters cards): the column's layout measurement replaces it within the
+ * first frame, so the seed only bounds how far the opening can land under the
+ * band before the correction — it covers the narrow legend's realistic worst
+ * wrap (two chip lines + two caption lines) plus the filters card (slider
+ * row, tick row, project input) with headroom.
  */
-export const NARROW_BAND_SEED_PX = 150;
+export const NARROW_BAND_SEED_PX = 230;
 
 /**
  * The bottom reserve the stacked chrome claims from the map: the fixed
@@ -323,29 +338,46 @@ export function buildAgentTree(threads: readonly AttnThread[]): Family {
  * Group visible threads by project, parents before their children, both
  * attention-ascending; projects sorted hottest-first.
  *
- * The optional `idleStop` (the treemap's idle-visibility slider) gates the
- * roster at the same point the archived filter does: idle threads dimmer than
- * the stop never enter the family tree, so they leave the layout entirely —
- * a project left with zero visible threads vanishes and every total
- * re-scales to the visible set. A hidden idle parent promotes its visible
- * children to roots, exactly like an archived parent. The default stop
- * (`IDLE_STOP_ALL`) is a no-op pass-through.
+ * The optional `idleStop` (the dot boards' idle-visibility slider) and
+ * `projectFilter` (the cross-view project text filter) gate the roster at the
+ * same point the archived filter does: a gated thread never enters the family
+ * tree, so it leaves the layout entirely — a project left with zero visible
+ * threads vanishes and every total re-scales to the visible set. A hidden
+ * idle parent promotes its visible children to roots, exactly like an
+ * archived parent. The idle stop never hides a hot thread; the project filter
+ * is a roster scope (which projects the operator is looking at) and hides a
+ * non-matching project's hot threads with it. The defaults (`IDLE_STOP_ALL`,
+ * no query) are a no-op pass-through.
  */
 export function buildProjects(
   threads: readonly AttnThread[],
   projects: readonly AttnProject[],
   nowMs: number,
-  opts: { idleStop?: number } = {},
+  opts: { idleStop?: number; projectFilter?: string } = {},
 ): { projects: ProjectModel[]; total: number } {
   const idleStop = opts.idleStop ?? IDLE_STOP_ALL;
   assertIdleStop(idleStop);
-  const family = buildAgentTree(
-    idleStop >= IDLE_STOP_ALL ? threads : threads.filter((t) => idleVisible(t, nowMs, idleStop)),
-  );
+  const nameOf = new Map(projects.map((p) => [p.id, p.name]));
+  // A thread with no project groups under "Projectless"; the filter matches
+  // that name like any other project's.
+  const projectName = (pid: string): string =>
+    nameOf.get(pid) ?? (pid === "projectless" ? "Projectless" : pid);
+  const projectFilter = opts.projectFilter?.trim() ?? "";
+  const gated =
+    idleStop < IDLE_STOP_ALL || projectFilter !== ""
+      ? threads.filter(
+          (t) =>
+            idleVisible(t, nowMs, idleStop) &&
+            projectMatchesQuery(
+              { id: t.projectId ?? "projectless", name: projectName(t.projectId ?? "projectless") },
+              projectFilter,
+            ),
+        )
+      : threads;
+  const family = buildAgentTree(gated);
   const visible = family.visible;
   const childrenOf = family.childrenOf;
   const roots = family.roots;
-  const nameOf = new Map(projects.map((p) => [p.id, p.name]));
   const byPid = new Map<string, AttnThread[]>();
   for (const t of visible) {
     const pid = t.projectId ?? "projectless";
@@ -372,7 +404,7 @@ export function buildProjects(
     const hot = cells.filter((c) => classify(c.t) !== "idle").length;
     models.push({
       pid,
-      name: nameOf.get(pid) ?? (pid === "projectless" ? "Projectless" : pid),
+      name: projectName(pid),
       cells,
       n: cells.length,
       best,

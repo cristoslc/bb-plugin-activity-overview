@@ -37,21 +37,28 @@ tabs: three aggregate tabs rendered live from the host's sidebar thread data, pl
   the project fills the fit box with its family tints locked on. Tapping
   anything else — the dimmed neighbors or a void — re-fits the zoomed-out
   world and clears the focus (the corner ⤢ re-fits the camera only; one tap
-  then leaves the focus). The tab's floating chrome also carries an
-  **idle-visibility slider** keyed to the grey ramp (`idleVisible`,
-  `idleStopCaption`, `IDLE_STOP_ALL` in views/model.ts): the default top stop
-  shows every idle thread, one stop sits below per grey shade, and the bottom
-  stop shows none — sliding down hides the dimmest (oldest) idle threads
-  first (`greyBucketForDays` is the ramp's one bucket lookup, shared with
+  then leaves the focus). Every dot board's floating chrome carries the
+  shared **filters card** (layer 2 of the control surface), whose
+  **idle-visibility slider** keys to the ramp's named duration bounds
+  (`idleVisible`, `idleStopCaption`, `IDLE_STOP_ALL`, `IDLE_TICKS` in
+  views/model.ts): the ticks read No idle → <8 h → <24 h → <7 d → <30 d →
+  <90 d → All Idle, an intermediate tick shows the idle threads under its
+  bound, and sliding down hides the dimmest (oldest) idle threads first
+  (`greyBucketForDays` is the ramp's one bucket lookup, shared with
   `cellColor` and the token-flow lane's age grey). Hidden threads leave the
-  layout entirely: the treemap re-squarifies, totals and the shared legend
-  re-scale to the visible set, and a project left with zero visible threads
-  vanishes (the project filter's behavior); hot threads are never hidden. The
-  stop is view-local session state, not persisted. The slider is a native
-  range input carrying `aria-label` "Idle thread visibility" and the stop
-  caption as its `aria-valuetext`, so the keyboard moves the stop (arrow
-  keys) without a pointer; at narrow widths its track grows to a 28px touch
-  height. UAT in `tests/manual/uat-treemap-idle-slider.yaml` and, at the
+  layout entirely: the view re-packs (the treemap re-squarifies), totals
+  and the shared legend re-scale to the visible set, and a project left
+  with zero visible threads vanishes; hot threads are never hidden. The
+  stop is one shared session state across the three dot boards, not
+  persisted — the Board, treemap, and tiles answer one roster question
+  together. The slider is a native range input carrying `aria-label` "Idle
+  thread visibility" and the tick label as its `aria-valuetext`, so the
+  keyboard moves the stop (arrow keys) without a pointer; the tick row
+  renders all seven labels (`data-attn-idle-tick`, the active one marked
+  `data-attn-idle-tick-active`); at narrow widths its track grows to a 28px
+  touch height. UAT in `tests/manual/uat-treemap-idle-slider.yaml`, the
+  cross-view suite `tests/manual/uat-filters-cross-view.yaml` (Board and
+  Strip tiles, shared state, and a phone chrome case), and, at the
   phone viewport, `tests/manual/uat-treemap-idle-slider-phone.yaml` (the
   runner takes a suite-level `viewport`). Helpers are pure
   (`familyTints`, `treemapLayout`, `placeRegionLabels`, `zoomToRect`,
@@ -103,13 +110,18 @@ may need to act on."*
   then total tokens, then name/id — so the project burning right now leads the
   stack and a big-but-quiet project sinks; rows re-sort on flow refreshes,
   riding the bead animation. A toolbar text filter matches a project's name or
-  id (trimmed, case-insensitive; empty = show all, view-local session state,
-  not persisted): a miss **vanishes from the stack** (never dimmed) and every
+  id (trimmed, case-insensitive; empty = show all): a miss **vanishes from
+  the stack** (never dimmed) and every
   total — spine boxes, rivers, sparkline maxima, the tok/min readout —
   re-scales to the visible set; a query matching nothing shows a "No projects
   match …" note with a clear control (`projectMatchesQuery`,
   `swimlaneLayout`'s `projectFilter` opt in views/model.ts; UAT in
-  `tests/manual/uat-token-flow-filter.yaml`).
+  `tests/manual/uat-token-flow-filter.yaml`). The toolbar input binds the
+  panel's one shared project query — the same state the dot boards'
+  filters card edits (layer 2 of the control surface) — so the roster
+  question is answered once, not per tab; the query is session state, not
+  persisted. The idle-visibility slider never gates Token flow: its lane
+  counts are the roster, not a subset.
 - **A flow path is two rivers, and both are drawn the same way.** A Tier-1
   outer box feeds each project row with a filled band in the gutter between the
   column and the row, sized by that group's flow in that project; then the
@@ -165,32 +177,41 @@ zooms with the mouse wheel (around the cursor, 0.2×–5×) or the floating
 +/−/fit controls at the bottom-right, and "⤢" fits the whole world into the
 view (never zooming past 1×). Dragging never lands as a click: a pan within
 the last 200ms suppresses card clicks and double-clicks. All chrome floats
-above the canvas in one of two layouts picked by the panel width
+above the canvas as a four-layer control surface, the same tiers on every
+dot board: layer 1 chooses the rendering (the tab bar, top-left, with the
+What's-new gift button in its end — always present; pulses after an update
+until opened); layer 2 chooses the filters (the shared filters card,
+`data-attn-filters`: the idle-visibility slider with the ramp's duration
+ticks plus the cross-view project filter — one shared stop and query across
+the Board, Unit treemap, and Strip tiles, session state, never persisted);
+layer 3 holds the render-specific controls (the corner zoom band, and each
+view's own canvas affordances); layer 4 is the rendering itself. Two
+layouts picked by the panel width
 (`chromeStacks` in views/model.ts, threshold `NARROW_CHROME_W` = 660px —
 phones and narrow sidebars stack):
 
-- Tab switcher — floating card top-left, with the What's-new gift button
-  in its end (always present; pulses after an update until opened).
-  It is the one band unchanged by width.
 - Desktop widths — the legend + caption card floats bottom-left
-  (pointer-events-none so tooltips pass through) and the treemap tab's
-  idle-visibility slider card floats at the bottom-right, above the
-  corner zoom controls.
-- Narrow widths — the three bottom bands (legend, slider, corner zoom
-  controls) stack into one bottom column (`data-attn-chrome-column`):
-  legend on top, the slider beneath it at a 28px touch height stretched
-  to the column's width, the zoom controls at the bottom. The column's
-  measured height is the map's bottom reserve (`chromeBottomReserve`):
-  the chrome-free fit box and the opening fit keep the map's content out
-  of the band, so no tile or label hides under the chrome at phone
-  width either.
+  (pointer-events-none so tooltips pass through) and the filters card
+  floats at the bottom-right, above the corner zoom controls. The card's
+  measured height joins the map's bottom reserve (`chromeBottomReserve`),
+  so the chrome-free fit box clears the filters tier at desktop widths
+  too.
+- Narrow widths — the bottom tiers stack into one bottom column
+  (`data-attn-chrome-column`): legend on top, the filters card beneath it
+  (the slider at a 28px touch height stretched to the column's width, the
+  project filter full-width), the zoom controls at the bottom. The
+  column's measured height is the map's bottom reserve
+  (`chromeBottomReserve`): the chrome-free fit box and the opening fit
+  keep the map's content out of the band, so no tile or label hides under
+  the chrome at phone width either.
 - Dragging captures the pointer only after a real drag starts (moved
   >3px); capturing before that retargets card clicks to the canvas root
   and eats the cards' click and double-click handlers.
 
 Openings: aggregate tabs open with the whole world fitted and centered
 inside a chrome-free fit box (`SAFE` top 60 / side 12px, plus a 16px
-`GAP` breathing ring; the bottom is 88px on desktop or the stacked
+`GAP` breathing ring; the bottom is the measured bottom-chrome reserve —
+the desktop filters card's seat, or the stacked
 column's measured band plus the zoom row on narrow panels); the Unit
 treemap is sized to exactly fill the
 fit box, and the Board solves for the largest slot scale whose shelf pack

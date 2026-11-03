@@ -127,7 +127,18 @@ function useFlow(): { flow: Flow | null; error: string | null; retry: () => void
 
 const scrollKey = (rowId: string, laneId: string): string => `${rowId}::${laneId}`;
 
-export function TokenFlowView() {
+export function TokenFlowView({
+  projectQuery,
+  onProjectQueryChange,
+}: {
+  /**
+   * The panel's shared project query — the same state the dot boards'
+   * filters card binds (one roster question answered once; the toolbar input
+   * is this view's entry point to it). An empty query shows every project.
+   */
+  projectQuery: string;
+  onProjectQueryChange: (query: string) => void;
+}) {
   const { flow, error, retry } = useFlow();
   const [openProjects, setOpenProjects] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [openThreads, setOpenThreads] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -138,12 +149,6 @@ export function TokenFlowView() {
   const [width, setWidth] = useState<number>(SWIMLANE.W);
   /** Tier-1 grouping: the subscription (default) or the ACP provider. */
   const [mode, setMode] = useState<FlowMode>("subscription");
-  /**
-   * The project text filter — view-local session state (not persisted, unlike
-   * Focus Board's localStorage-backed filters). An empty query shows every
-   * project; a miss removes its row from the stack entirely.
-   */
-  const [projectQuery, setProjectQuery] = useState("");
 
   const threads = useMemo((): FlowThread[] => (flow === null ? [] : flow.threads), [flow]);
   /** How many projects the roster holds (the filter count's denominator). */
@@ -322,7 +327,7 @@ export function TokenFlowView() {
               data-attn-project-filter=""
               type="text"
               value={projectQuery}
-              onChange={(e) => setProjectQuery(e.target.value)}
+              onChange={(e) => onProjectQueryChange(e.target.value)}
               placeholder="Filter projects…"
               aria-label="Filter projects"
               spellCheck={false}
@@ -335,7 +340,7 @@ export function TokenFlowView() {
                 data-attn-project-filter-clear=""
                 aria-label="Clear project filter"
                 title="Clear project filter"
-                onClick={() => setProjectQuery("")}
+                onClick={() => onProjectQueryChange("")}
                 className="absolute right-1 text-[11px] leading-none text-muted-foreground hover:text-foreground"
               >
                 ×
@@ -442,7 +447,7 @@ export function TokenFlowView() {
               <button
                 type="button"
                 data-attn-empty-state-clear=""
-                onClick={() => setProjectQuery("")}
+                onClick={() => onProjectQueryChange("")}
                 className="mt-2 rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
               >
                 Clear filter
