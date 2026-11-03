@@ -27,8 +27,9 @@ treemap tints and the chrome-occlusion bugs hid.
    take a fresh screenshot to locate targets first.
 4. **Check each of the five tabs**: open every tab at fit and screenshot it
    — no card, label or dot may sit under the floating chrome (top tab bar
-   ≈ top 60px; legend and, on the treemap tab, the idle slider — bottom
-   band; corner zoom controls). At narrow widths the bottom bands stack
+   ≈ top 60px; legend bottom-left and, on every dot board, the shared
+   filters card — idle slider plus project filter — above the bottom-right
+   zoom band; corner zoom controls). At narrow widths the bottom bands stack
    into one column and the fit reserves its measured height, so re-check
    the same rule at the phone viewport (390×844) for any landing that
    touches the chrome.

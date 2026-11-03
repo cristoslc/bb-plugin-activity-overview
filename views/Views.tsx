@@ -84,6 +84,10 @@ const MIN_STAGE_W = 320; // pack floor for very narrow panels
 /** Chrome-free zone the opening fit keeps visible content inside: tab bar
  * (top), the zoom-control row and legend (bottom). */
 const SAFE = { top: 60, bottom: 88, left: 12, right: 12 };
+/** First-frame seed for the desktop filters card's measured height (the same
+ * lesson the narrow column's seed teaches: the opening must not land under a
+ * card whose height is not measured yet). */
+const FILTERS_SEED_PX = 140;
 /** Breathing room between the content block and the chrome/view edges. */
 const GAP = 16;
 /** The rect the opening fit and fit-button target: safe area plus gap. The
@@ -789,6 +793,8 @@ export function BoardView({
   apiRef,
   onOpenThread,
   wiring,
+  idleStop,
+  projectFilter,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -801,9 +807,13 @@ export function BoardView({
   onOpenThread: (id: string) => void;
   /** Hover card + burn-rate pulse, shared with the other views. */
   wiring: DotWiring;
+  /** The shared filters (the control surface's layer 2): the board's roster
+   * is the gated set, so shelves re-pack and the legend re-scales. */
+  idleStop: number;
+  projectFilter: string;
 }) {
   const model = useMemo(() => {
-    const { projects } = buildProjects(data.threads, data.projects, nowMs);
+    const { projects } = buildProjects(data.threads, data.projects, nowMs, { idleStop, projectFilter });
     // Fill the fit box the way the treemap fills its rect: solve for the
     // largest slot scale whose shelf pack still fits the chrome-free height,
     // then re-shelve at that scale. Capped at 2× so one or two projects don't
@@ -816,7 +826,7 @@ export function BoardView({
         : 1;
     const packed = shelfPack(makeCards(projects, P * scale, LBL * scale, BOARD_MIN_CARD_W * scale), w, 14, 14);
     return { packed, scale, world: worldOf(w, packed.H) };
-  }, [data, nowMs, w, h]);
+  }, [data, nowMs, w, h, idleStop, projectFilter]);
   useEffect(() => {
     onWorld(model.world);
   }, [model.world, onWorld]);
@@ -945,6 +955,7 @@ export function UnitTreemapView({
   onOpenThread,
   wiring,
   idleStop = IDLE_STOP_ALL,
+  projectFilter = "",
 }: {
   data: SidebarData;
   nowMs: number;
@@ -958,19 +969,22 @@ export function UnitTreemapView({
   /** Hover card + burn-rate pulse, shared with the other views. */
   wiring: DotWiring;
   /**
-   * The idle-visibility slider's stop (OverviewPage owns the session state):
-   * idle threads dimmer than this leave the layout entirely — the treemap
-   * re-squarifies and every total re-scales to the visible set.
+   * The idle-visibility slider's stop (OverviewPage owns the session state,
+   * shared with the other dot boards): idle threads dimmer than this leave
+   * the layout entirely — the treemap re-squarifies and every total
+   * re-scales to the visible set.
    */
   idleStop?: number;
+  /** The cross-view project filter (the same shared session state). */
+  projectFilter?: string;
 }) {
   const world = useMemo(() => worldOf(w, h), [w, h]);
   useEffect(() => {
     onWorld(world);
   }, [world, onWorld]);
   const { projects } = useMemo(
-    () => buildProjects(data.threads, data.projects, nowMs, { idleStop }),
-    [data, nowMs, idleStop],
+    () => buildProjects(data.threads, data.projects, nowMs, { idleStop, projectFilter }),
+    [data, nowMs, idleStop, projectFilter],
   );
   const model = useMemo(() => treemapLayout(projects, w, h), [projects, w, h]);
 
@@ -1013,7 +1027,13 @@ export function UnitTreemapView({
   };
 
   if (!model) {
-    return <p className="text-sm text-muted-foreground">No visible threads.</p>;
+    return (
+      <p className="text-sm text-muted-foreground">
+        {projectFilter.trim() !== ""
+          ? `No projects match "${projectFilter.trim()}".`
+          : "No visible threads."}
+      </p>
+    );
   }
 
   // The always-visible title layer. Chips are projected into the chrome-free
@@ -1213,6 +1233,8 @@ export function StripTilesView({
   apiRef,
   onOpenThread,
   wiring,
+  idleStop,
+  projectFilter,
 }: {
   data: SidebarData;
   nowMs: number;
@@ -1225,9 +1247,13 @@ export function StripTilesView({
   onOpenThread: (id: string) => void;
   /** Hover card + burn-rate pulse, shared with the other views. */
   wiring: DotWiring;
+  /** The shared filters (the control surface's layer 2): the tiles' roster
+   * is the gated set, so tiles re-wrap and the legend re-scales. */
+  idleStop: number;
+  projectFilter: string;
 }) {
   const model = useMemo(() => {
-    const { projects } = buildProjects(data.threads, data.projects, nowMs);
+    const { projects } = buildProjects(data.threads, data.projects, nowMs, { idleStop, projectFilter });
     const byN = [...projects].sort((a, b) => b.n - a.n);
     const base = byN.map((p) => ({ p, units: p.cells, w: Math.max(120, p.n * 5 + 20), h: 34 }));
     // Fill the fit box the way the treemap fills its rect: grow the tile
@@ -1247,7 +1273,7 @@ export function StripTilesView({
       }
     }
     return { packed, scale, world: worldOf(w, packed.H) };
-  }, [data, nowMs, w, h]);
+  }, [data, nowMs, w, h, idleStop, projectFilter]);
   useEffect(() => {
     onWorld(model.world);
   }, [model.world, onWorld]);
@@ -1447,52 +1473,123 @@ function WhatsNewModal({
 type TabId = (typeof TABS)[number]["id"];
 
 /**
- * The treemap's idle-visibility slider card, shared by both chrome layouts.
- * Stops are keyed to the grey ramp (`IDLE_STOP_ALL` = every idle thread shown,
- * the default; 0 = none); sliding down hides the dimmest (oldest) idle
- * threads first, session state, never persisted (`idleVisible` in
- * views/model.ts). `stacked` seats the card in the narrow chrome's bottom
- * column: the row stretches, the track grows a touch height, and the caption
- * holds its ground instead of riding the card's width.
+ * Layer 2 of the control surface — choose filters. One card served to every
+ * dot board (Board, Unit treemap, Strip tiles): the idle-visibility slider,
+ * its stops keyed to the grey ramp with the operator's duration ticks laid
+ * under the track (the current one emphasized — the labels come from
+ * `idleStopCaption`, the same constants the buckets key to), and the
+ * cross-view project filter beside it. The stop and the query are the panel's
+ * shared session state (OverviewPage owns them), never persisted. `stacked`
+ * seats the card in the narrow chrome's bottom column: the rows stretch, the
+ * slider grows a 28px touch height, and nothing rides on the card's width.
  */
-function IdleSliderCard({
-  stop,
-  onSlide,
+function FiltersCard({
+  idleStop,
+  onIdleSlide,
+  projectQuery,
+  onProjectQuery,
+  projectCount,
+  totalProjects,
   stacked = false,
+  measureRef,
 }: {
-  stop: number;
-  onSlide: (stop: number) => void;
+  idleStop: number;
+  onIdleSlide: (stop: number) => void;
+  projectQuery: string;
+  onProjectQuery: (query: string) => void;
+  /** Projects shown vs projects held — the filter's x/y count. */
+  projectCount: number;
+  totalProjects: number;
   stacked?: boolean;
+  /** Attached by the page so the desktop fit box can reserve the card's
+   * measured height (the narrow column measures the whole band instead). */
+  measureRef?: RefObject<HTMLDivElement | null>;
 }) {
+  const filterActive = projectQuery.trim() !== "";
   return (
     <div
-      data-attn-idle-slider=""
+      ref={measureRef}
+      data-attn-filters=""
       className={
-        (stacked ? "" : "absolute bottom-[52px] right-3 z-40 ") +
+        (stacked ? "" : "absolute bottom-[52px] right-3 z-40 w-60 ") +
         "pointer-events-auto rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm"
       }
     >
-      <div className="mb-1 text-[10px] text-muted-foreground">Idle threads</div>
+      <div className="mb-1 text-[10px] text-muted-foreground">Filters</div>
       <div className="flex items-center gap-2">
+        <span className="shrink-0 text-[10px] text-muted-foreground">Idle threads</span>
         <input
           type="range"
           min={0}
           max={IDLE_STOP_ALL}
           step={1}
-          value={stop}
-          onChange={(e) => onSlide(Number(e.target.value))}
+          value={idleStop}
+          onChange={(e) => onIdleSlide(Number(e.target.value))}
           aria-label="Idle thread visibility"
-          aria-valuetext={idleStopCaption(stop)}
-          title="How much of the idle age range the treemap represents"
-          className={stacked ? "min-w-0 flex-1 cursor-pointer" : undefined}
-          style={stacked ? { height: 28, accentColor: "var(--attn-working)" } : { width: 120, accentColor: "var(--attn-working)" }}
+          aria-valuetext={idleStopCaption(idleStop)}
+          title="How much of the idle age range the board represents"
+          className="min-w-0 flex-1 cursor-pointer"
+          style={
+            stacked
+              ? { height: 28, accentColor: "var(--attn-working)" }
+              : { accentColor: "var(--attn-working)" }
+          }
         />
-        <span
-          className={(stacked ? "shrink-0 " : "") + "text-[10px] text-muted-foreground"}
-          data-attn-idle-slider-caption=""
-        >
-          {idleStopCaption(stop)}
+      </div>
+      {/* The ticks, youngest → oldest, the current one emphasized. Each label
+          is the constant its stop keys to; the active marker is what the UAT
+          reads (the static row always carries every label's text). */}
+      <div
+        className="mt-1 grid gap-0.5 text-center text-[9px] leading-tight"
+        style={{ gridTemplateColumns: `repeat(${IDLE_STOP_ALL + 1}, 1fr)` }}
+      >
+        {Array.from({ length: IDLE_STOP_ALL + 1 }, (_, stop) => (
+          <span
+            key={stop}
+            data-attn-idle-tick={idleStopCaption(stop)}
+            data-attn-idle-tick-active={stop === idleStop ? "" : undefined}
+            className={stop === idleStop ? "font-medium text-foreground" : "text-muted-foreground"}
+          >
+            {idleStopCaption(stop)}
+          </span>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center gap-2 border-t border-border/40 pt-2">
+        <span className="shrink-0 text-[10px] text-muted-foreground">Project</span>
+        <span className="relative inline-flex min-w-0 flex-1 items-center">
+          <input
+            data-attn-project-filter=""
+            type="text"
+            value={projectQuery}
+            onChange={(e) => onProjectQuery(e.target.value)}
+            placeholder="Filter projects…"
+            aria-label="Filter projects"
+            spellCheck={false}
+            className={`w-full min-w-0 rounded border border-border/60 bg-transparent py-0.5 text-[11px] outline-none focus:border-border ${filterActive ? "pr-5" : ""}`}
+            style={{ color: "var(--attn-label)" }}
+          />
+          {filterActive ? (
+            <button
+              type="button"
+              data-attn-project-filter-clear=""
+              aria-label="Clear project filter"
+              title="Clear project filter"
+              onClick={() => onProjectQuery("")}
+              className="absolute right-1 text-[11px] leading-none text-muted-foreground hover:text-foreground"
+            >
+              ×
+            </button>
+          ) : null}
         </span>
+        {filterActive ? (
+          <span
+            data-attn-filter-count=""
+            className="shrink-0 text-[10px]"
+            style={{ color: "var(--attn-faint)" }}
+          >
+            {projectCount}/{totalProjects}
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -1547,11 +1644,18 @@ export function OverviewPage() {
     const stored = readCameraStore().tab;
     return TABS.some((t) => t.id === stored) ? (stored as TabId) : "board";
   });
-  // The treemap's idle-visibility slider: session state (like the cameras'
-  // pre-persistence days), never persisted — a fresh panel opens showing every
-  // idle thread. Owned here so the shared legend's counts re-scale with the
-  // treemap's visible set while the tab is active.
+  // Layer 2 of the control surface — choose filters. One shared idle stop and
+  // one shared project query across the three dot boards (session state, like
+  // the cameras' pre-persistence days; never persisted — a fresh panel opens
+  // showing every idle thread and every project). The two answer one honest
+  // roster question each — how much of the idle age range is represented, and
+  // which projects the roster scopes to — so the boards answer them together
+  // and the shared legend describes the same set everywhere; per-view state
+  // would let two boards disagree. Token flow's toolbar input binds to the
+  // same query (its other controls stay view-local); the idle stop never
+  // gates Token flow (its lane counts are the roster, not a subset).
   const [idleStop, setIdleStop] = useState<number>(IDLE_STOP_ALL);
+  const [projectQuery, setProjectQuery] = useState<string>("");
   // World bounds of the active aggregate view, reported through onWorld.
   // The report is cached per tab: re-clicking the active tab (or landing on a
   // view that re-reports nothing new) must never leave `world` null, or the
@@ -1600,6 +1704,25 @@ export function OverviewPage() {
     ro.observe(el);
     return () => ro.disconnect();
   }, [narrow]);
+  // Desktop's tier-2 card (the filters card, every dot board): measured, not
+  // fixed — the tick row's wrapping and the input's height are content, and a
+  // fixed figure cannot chase them (the narrow column's measured reserve is
+  // the precedent). The seed bounds frame one; the observer corrects within
+  // the first frame. The ref is null on the Token flow tab (no card), which
+  // just disconnects the observer.
+  const desktopFiltersRef = useRef<HTMLDivElement | null>(null);
+  const [filtersH, setFiltersH] = useState<number>(FILTERS_SEED_PX);
+  useLayoutEffect(() => {
+    const el = desktopFiltersRef.current;
+    if (el === null || narrow) return; // narrow measures the whole column
+    const read = () => {
+      if (el.clientHeight > 0) setFiltersH(Math.ceil(el.clientHeight));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [narrow, tab]);
   // Hover card and burn-rate pulse: one card and one rate feed serve every
   // view, so a dot behaves identically in the board, treemap, and tiles.
   const snippets = useCardSnippets();
@@ -1614,15 +1737,17 @@ export function OverviewPage() {
   // the canvas only once the panel has a real height. The measuring layout
   // effect runs before paint, so this gate is synchronous — no flash.
   const measured = vh > 0;
-  // The bottom chrome's reservation: the desktop figure, or — while the chrome
-  // stacks (narrow, and the panel is measured so the column exists) — the
-  // stacked column's real height above the zoom band, never below the desktop
-  // figure (the seed bounds the pre-measurement frame; the column's observer
-  // corrects it within the first frame).
+  // The bottom chrome's reservation: on the dot boards the tallest bottom band
+  // is measured — the stacked column (narrow) or the floating filters card
+  // (desktop) — plus its seat above the zoom row, never below the fixed
+  // desktop figure (the seeds bound the pre-measurement frames; the observers
+  // correct within the first one).
   const safeBottom =
     narrow && measured
       ? Math.max(SAFE.bottom, chromeBottomReserve(bandH, GAP))
-      : SAFE.bottom;
+      : measured
+        ? Math.max(SAFE.bottom, chromeBottomReserve(filtersH, GAP))
+        : SAFE.bottom;
   const w = Math.max(MIN_STAGE_W, vw - SAFE.left - GAP - SAFE.right - GAP);
   const hBudget = Math.max(200, vh - SAFE.top - GAP - safeBottom - GAP);
   if (live.state === "loading") {
@@ -1632,15 +1757,21 @@ export function OverviewPage() {
     return <p className="p-4 text-sm text-muted-foreground">Could not read thread data.</p>;
   }
   const nowMs = Date.now();
-  // The legend describes what the active view shows: on the treemap tab that
-  // is the idle-visibility slider's visible set, everywhere else the whole
-  // roster (the other views have no idle gate).
+  // The legend describes what the active dot board shows: the shared filters'
+  // visible set on every dot board (the idle stop and the project filter gate
+  // all three alike), everywhere else the whole roster. Token flow reads the
+  // roster through its own RPC and keeps its own chrome.
   const built = buildProjects(
     live.data.threads,
     live.data.projects,
     nowMs,
-    tab === "treemap" ? { idleStop } : undefined,
+    tab === "tokenflow" ? undefined : { idleStop, projectFilter: projectQuery },
   );
+  // The filters card's x/y: projects held by the non-archived roster,
+  // independent of both gates (a filter that matches nothing reads "0/N").
+  const rosterProjects = new Set(
+    live.data.threads.filter((t) => !t.archivedAt).map((t) => t.projectId ?? "projectless"),
+  ).size;
   const counts = statusCounts(built.projects, nowMs);
   const total = built.total;
   const switchTab = (id: TabId) => {
@@ -1659,12 +1790,12 @@ export function OverviewPage() {
           "\n.attn-pulse { animation: attn-pulse 2.2s ease-in-out infinite; } @keyframes attn-pulse { 50% { opacity: 0.55; } } @keyframes attn-spin { to { transform: rotate(360deg); } }"}
       </style>
       {tab === "tokenflow" ? (
-        <TokenFlowView />
+        <TokenFlowView projectQuery={projectQuery} onProjectQueryChange={setProjectQuery} />
       ) : measured ? (
         <MapCanvas key={tab} world={world ?? worldCache.current.get(tab) ?? null} apiRef={apiRef} persistKey={tab} safeBottom={safeBottom}>
-          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
-          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} idleStop={idleStop} /> : null}
-          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} /> : null}
+          {tab === "board" ? <BoardView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} idleStop={idleStop} projectFilter={projectQuery} /> : null}
+          {tab === "treemap" ? <UnitTreemapView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} idleStop={idleStop} projectFilter={projectQuery} /> : null}
+          {tab === "tiles" ? <StripTilesView data={live.data} nowMs={nowMs} w={w} h={hBudget} onWorld={onWorld} apiRef={apiRef} onOpenThread={openThread} wiring={wiring} idleStop={idleStop} projectFilter={projectQuery} /> : null}
         </MapCanvas>
       ) : null}
       {/* The hover card lives above the canvas (portal on the panel root), so
@@ -1680,6 +1811,10 @@ export function OverviewPage() {
         />
       ) : null}
       <div className="absolute left-3 top-3 z-40 flex max-w-[calc(100%_-_1.5rem)] flex-col items-start gap-2">
+        {/* Layer 1 of the control surface — choose rendering. The tab bar is
+            the surface's first tier: one roster, four renderings, picked
+            here; the filters (layer 2) and the render-specific controls
+            (layer 3) float below it. */}
         <div data-attn-tabbar="" className="pointer-events-auto flex gap-1 rounded-md border border-border/60 bg-card p-1 shadow-sm">
           {TABS.map((t) => (
             <button
@@ -1720,12 +1855,18 @@ export function OverviewPage() {
         </div>
       </div>
       <WhatsNewModal open={whatsNewOpen} onOpenChange={setWhatsNewOpen} entries={whatsNewEntries} />
-      {/* The floating chrome. At narrow widths (phones, narrow sidebars) the
-          bands — legend, the treemap's idle slider — meet the zoom controls
-          and the legend paints over the slider's track, so the chrome stacks
-          into one bottom column with the slider reachable and nothing riding
-          under it; at desktop widths the classic floating layout is
-          unchanged. */}
+      {/* The control surface, in four layers on every dot board. Layer 1 —
+          choose rendering — is the tab bar (top-left). Layer 2 — choose
+          filters — is the filters card: the idle-visibility slider with the
+          ramp's duration ticks and the cross-view project filter, one shared
+          stop and query on all three boards. Layer 3 — render-specific
+          controls — is the corner zoom band (and each view's canvas
+          affordances). Layer 4 is the rendering itself: the map canvas. At
+          narrow widths (phones, narrow sidebars) the bottom tiers meet the
+          legend, so tier 2 stacks into one bottom column with the zoom band
+          beneath it and the map's fit reserves the column's measured height;
+          at desktop widths the classic floating layout holds — filters card
+          above the zoom controls at bottom-right, legend bottom-left. */}
       {narrow ? (
         <div
           data-attn-chrome-column=""
@@ -1743,13 +1884,29 @@ export function OverviewPage() {
               </p>
             </div>
           ) : null}
-          {tab === "treemap" ? <IdleSliderCard stacked stop={idleStop} onSlide={setIdleStop} /> : null}
+          {tab !== "tokenflow" ? (
+            <FiltersCard
+              stacked
+              idleStop={idleStop}
+              onIdleSlide={setIdleStop}
+              projectQuery={projectQuery}
+              onProjectQuery={setProjectQuery}
+              projectCount={built.projects.length}
+              totalProjects={rosterProjects}
+            />
+          ) : null}
         </div>
       ) : null}
-      {!narrow ? (
-        tab === "treemap" ? (
-          <IdleSliderCard stop={idleStop} onSlide={setIdleStop} />
-        ) : null
+      {!narrow && tab !== "tokenflow" ? (
+        <FiltersCard
+          idleStop={idleStop}
+          onIdleSlide={setIdleStop}
+          projectQuery={projectQuery}
+          onProjectQuery={setProjectQuery}
+          projectCount={built.projects.length}
+          totalProjects={rosterProjects}
+          measureRef={desktopFiltersRef}
+        />
       ) : null}
       {!narrow && tab !== "tokenflow" ? (
         <div

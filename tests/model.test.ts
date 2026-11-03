@@ -6,7 +6,7 @@ import {
   squarify, makeCards, shelfPack, attentionScore,
   familyTints, FAMILY_TINTS, zoomToRect, clampPan, clampPanEdges,
   treemapMarkMode, tileForSlot, tileGutter, TILE_GUTTER, ZOOMED_IN_SCALE,
-  greyBucketForDays, idleVisible, idleStopCaption, IDLE_STOP_ALL,
+  greyBucketForDays, idleVisible, idleStopCaption, IDLE_STOP_ALL, IDLE_TICKS,
   chromeStacks, chromeBottomReserve, NARROW_CHROME_W, CHROME_STACK_BASE_PX,
   cellColor, GREYS,
   type AttnThread, type AttnProject,
@@ -282,7 +282,11 @@ test("a slot smaller than the gutter degenerates to a zero-size tile", () => {
   assert.equal(t.h, 0);
 });
 
-// ---------- treemap idle-visibility slider (the grey-ramp gate) ----------
+// ---------- the idle ramp: the operator's duration ticks ----------
+// The ramp is keyed to named duration bounds — 8 h / 24 h / 7 d / 30 d / 90 d —
+// so every grey shade has a named bound and the slider's ticks read
+// No idle → <8 h → <24 h → <7 d → <30 d → <90 d → All Idle. The tick labels
+// and the bucket bounds are one array (IDLE_TICKS); GREYS derives from it.
 
 const idleAgeDays = (days: number): AttnThread => ({
   ...thread(),
@@ -291,21 +295,37 @@ const idleAgeDays = (days: number): AttnThread => ({
 });
 
 test("greyBucketForDays maps ages onto the grey ramp's buckets, dimmest last", () => {
-  // The ramp's own thresholds (GREYS): 0.75d, 6d, 24d, 72d, 168d, then ∞.
+  // The ramp's own thresholds (GREYS, from IDLE_TICKS): 8h, 24h, 7d, 30d, 90d, then ∞.
   assert.equal(greyBucketForDays(0), 0); // fresh idle → grey-0
-  assert.equal(greyBucketForDays(0.5), 0);
-  assert.equal(greyBucketForDays(2), 1); // grey-1
-  assert.equal(greyBucketForDays(10), 2); // grey-2
-  assert.equal(greyBucketForDays(30), 3); // grey-3
-  assert.equal(greyBucketForDays(100), 4); // grey-4
+  assert.equal(greyBucketForDays(8 / 24), 0); // exactly 8h: still the <8 h bucket
+  assert.equal(greyBucketForDays(0.5), 1); // 12h → grey-1
+  assert.equal(greyBucketForDays(3), 2); // 3d → grey-2
+  assert.equal(greyBucketForDays(15), 3); // 15d → grey-3
+  assert.equal(greyBucketForDays(60), 4); // 60d → grey-4
   assert.equal(greyBucketForDays(200), 5); // grey-5: the dimmest end
   assert.equal(greyBucketForDays(Number.POSITIVE_INFINITY), GREYS.length - 1);
   // The bucket index grows with age: the dimmest shade is the last one.
   assert.ok(greyBucketForDays(200) > greyBucketForDays(0));
 });
 
+test("IDLE_TICKS and GREYS are one ramp: the shades' bounds are the ticks' bounds", () => {
+  // The slider grows a stop per tick plus the open dimmest bucket; "All Idle"
+  // is the stop that shows that last bucket too.
+  assert.equal(IDLE_STOP_ALL, IDLE_TICKS.length + 1);
+  assert.equal(IDLE_STOP_ALL, GREYS.length);
+  for (let i = 0; i < IDLE_TICKS.length; i++) {
+    assert.equal(GREYS[i]![0], IDLE_TICKS[i]!.days, `bound ${i}`);
+  }
+  assert.equal(GREYS[GREYS.length - 1]![0], Number.POSITIVE_INFINITY);
+  // The bounds ascend and end at the operator's 90d mark.
+  for (let i = 1; i < IDLE_TICKS.length; i++) {
+    assert.ok(IDLE_TICKS[i]!.days > IDLE_TICKS[i - 1]!.days, `bound order ${i}`);
+  }
+  assert.equal(IDLE_TICKS[IDLE_TICKS.length - 1]!.days, 90);
+});
+
 test("idleVisible: the default stop shows every thread, hot threads always", () => {
-  const ages = [0.1, 2, 10, 30, 100, 200];
+  const ages = [0.1, 0.5, 3, 15, 60, 200];
   for (const d of ages) {
     assert.equal(idleVisible(idleAgeDays(d), NOW, IDLE_STOP_ALL), true, `${d}d at stop ALL`);
   }
@@ -321,25 +341,43 @@ test("idleVisible: the default stop shows every thread, hot threads always", () 
   }
 });
 
+test("idleVisible: every tick keeps exactly the idle ages under its bound", () => {
+  // One thread per bucket: 2h (<8 h), 12h (<24 h), 3d (<7 d), 15d (<30 d),
+  // 60d (<90 d), 200d (the open dimmest end).
+  const byBucket = [idleAgeDays(0.1), idleAgeDays(0.5), idleAgeDays(3), idleAgeDays(15), idleAgeDays(60), idleAgeDays(200)];
+  // Stop s shows the buckets below s: stop 1 (<8 h) keeps only the 2h thread,
+  // stop 3 (<7 d) keeps everything younger than 7 days, and so on.
+  for (let stop = 0; stop <= IDLE_STOP_ALL; stop++) {
+    for (let b = 0; b < byBucket.length; b++) {
+      assert.equal(
+        idleVisible(byBucket[b]!, NOW, stop),
+        b < stop,
+        `stop ${stop}, bucket ${b}`,
+      );
+    }
+  }
+});
+
 test("idleVisible: sliding down hides the dimmest (oldest) shade first, ending at none", () => {
-  const fresh = idleAgeDays(0.1); // grey-0
-  const week = idleAgeDays(2); // grey-1
-  const month = idleAgeDays(30); // grey-3
-  const year = idleAgeDays(200); // grey-5
-  // Stop 6 (ALL): all four visible.
-  for (const t of [fresh, week, month, year]) assert.equal(idleVisible(t, NOW, 6), true);
-  // Stop 5: hides only the dimmest shade present (grey-5, the year-old one).
+  const fresh = idleAgeDays(0.1); // bucket 0 (<8 h)
+  const day = idleAgeDays(0.5); // bucket 1 (<24 h)
+  const week = idleAgeDays(3); // bucket 2 (<7 d)
+  const month = idleAgeDays(15); // bucket 3 (<30 d)
+  const season = idleAgeDays(60); // bucket 4 (<90 d)
+  const year = idleAgeDays(200); // bucket 5 (the dimmest end)
+  // Stop ALL: all six visible.
+  for (const t of [fresh, day, week, month, season, year]) assert.equal(idleVisible(t, NOW, 6), true);
+  // Stop 5 (<90 d): hides only the dimmest shade present (the 200d one).
   assert.equal(idleVisible(year, NOW, 5), false);
-  assert.equal(idleVisible(month, NOW, 5), true);
-  assert.equal(idleVisible(week, NOW, 5), true);
-  assert.equal(idleVisible(fresh, NOW, 5), true);
-  // Stop 2: grey-0 and grey-1 survive; grey-3 and grey-5 are hidden.
-  assert.equal(idleVisible(fresh, NOW, 2), true);
-  assert.equal(idleVisible(week, NOW, 2), true);
-  assert.equal(idleVisible(month, NOW, 2), false);
-  assert.equal(idleVisible(year, NOW, 2), false);
+  for (const t of [fresh, day, week, month, season]) assert.equal(idleVisible(t, NOW, 5), true);
+  // Stop 3 (<7 d): the 15d/60d/200d threads are hidden.
+  for (const t of [fresh, day, week]) assert.equal(idleVisible(t, NOW, 3), true);
+  for (const t of [month, season, year]) assert.equal(idleVisible(t, NOW, 3), false);
+  // Stop 1 (<8 h): only the freshest idle survives.
+  assert.equal(idleVisible(fresh, NOW, 1), true);
+  for (const t of [day, week, month, season, year]) assert.equal(idleVisible(t, NOW, 1), false);
   // Stop 0: every idle thread hidden — none.
-  for (const t of [fresh, week, month, year]) assert.equal(idleVisible(t, NOW, 0), false);
+  for (const t of [fresh, day, week, month, season, year]) assert.equal(idleVisible(t, NOW, 0), false);
 });
 
 test("idleVisible throws on a junk stop (fail loud, never a silent show-all)", () => {
@@ -350,20 +388,21 @@ test("idleVisible throws on a junk stop (fail loud, never a silent show-all)", (
 });
 
 test("cellColor and greyBucketForDays agree on the bucket (one ramp, one lookup)", () => {
-  for (const d of [0.1, 2, 10, 30, 100, 200]) {
+  for (const d of [0.1, 0.5, 3, 15, 60, 200]) {
     const t = idleAgeDays(d);
     assert.equal(cellColor(t, NOW), GREYS[greyBucketForDays(d / 1)]![1]);
   }
 });
 
-test("idleStopCaption names each stop from the ramp's own thresholds", () => {
-  assert.equal(idleStopCaption(IDLE_STOP_ALL), "all idle shown");
-  assert.equal(idleStopCaption(0), "no idle shown");
-  assert.equal(idleStopCaption(1), "idle ≤ 18h shown");
-  assert.equal(idleStopCaption(2), "idle ≤ 6d shown");
-  assert.equal(idleStopCaption(3), "idle ≤ 24d shown");
-  assert.equal(idleStopCaption(4), "idle ≤ 72d shown");
-  assert.equal(idleStopCaption(5), "idle ≤ 168d shown");
+test("idleStopCaption reads the operator's ticks, derived from the ramp constants", () => {
+  const want = ["No idle", "<8 h", "<24 h", "<7 d", "<30 d", "<90 d", "All Idle"];
+  assert.equal(want.length, IDLE_STOP_ALL + 1);
+  for (let stop = 0; stop <= IDLE_STOP_ALL; stop++) {
+    assert.equal(idleStopCaption(stop), want[stop], `tick ${stop}`);
+  }
+  // The intermediate labels ARE the tick constants — never re-typed literals.
+  assert.equal(idleStopCaption(1), IDLE_TICKS[0]!.label);
+  assert.equal(idleStopCaption(5), IDLE_TICKS[IDLE_TICKS.length - 1]!.label);
   assert.throws(() => idleStopCaption(-1));
   assert.throws(() => idleStopCaption(IDLE_STOP_ALL + 1));
 });
@@ -387,13 +426,17 @@ test("buildProjects idleStop: hidden idle threads leave the layout and totals re
   const atAll = buildProjects(threads, projects, NOW, { idleStop: IDLE_STOP_ALL });
   assert.equal(atAll.total, 4);
   assert.deepEqual(atAll.projects.map((p) => [p.pid, p.n]), all.projects.map((p) => [p.pid, p.n]));
-  // Stop 2: the year-old thread leaves proj_b entirely; proj_a keeps the
-  // hot thread plus its fresh and week-old idle ones.
-  const cut = buildProjects(threads, projects, NOW, { idleStop: 2 });
+  // Stop 3 (<7 d): the year-old thread leaves proj_b entirely; proj_a keeps
+  // the hot thread plus its fresh and 2d idle ones (bucket 2 < 3).
+  const cut = buildProjects(threads, projects, NOW, { idleStop: 3 });
   assert.equal(cut.total, 3);
   assert.equal(cut.projects.length, 1);
   assert.equal(cut.projects[0]!.pid, "proj_a");
   assert.equal(cut.projects[0]!.n, 3);
+  // Stop 1 (<8 h): the 2d idle leaves proj_a too.
+  const tight = buildProjects(threads, projects, NOW, { idleStop: 1 });
+  assert.equal(tight.total, 2);
+  assert.equal(tight.projects[0]!.n, 2);
   // Stop 0: only the hot thread survives anywhere.
   const none = buildProjects(threads, projects, NOW, { idleStop: 0 });
   assert.equal(none.total, 1);
@@ -412,6 +455,90 @@ test("buildProjects idleStop: a hidden idle parent promotes its visible children
   // The parent is hidden, so the child promotes to a root and stays drawn.
   assert.equal(projects[0]!.n, 1);
   assert.equal(projects[0]!.cells[0]!.t.id, "child");
+});
+
+// ---------- the cross-view project filter (layer 2 of the control surface) ----------
+
+test("buildProjects projectFilter: a miss vanishes whole, totals re-scale", () => {
+  const threads = [
+    thread({ id: "hot_a", projectId: "proj_a", runtimeStatus: "active" }),
+    thread({ id: "idle_a", projectId: "proj_a", latestAttentionAt: NOW - 200 * 86_400_000 }),
+    thread({ id: "hot_b", projectId: "proj_b", runtimeStatus: "error" }),
+    // projectId null on purpose (the ?? default would mask it): a projectless
+    // thread, matched by the "Projectless" fallback name.
+    { ...thread({ id: "solo", runtimeStatus: "active" }), projectId: null },
+  ];
+  const projects = [
+    { id: "proj_a", name: "Alpha work" },
+    { id: "proj_b", name: "Beta infra" },
+  ];
+  const all = buildProjects(threads, projects, NOW);
+  assert.equal(all.total, 4);
+  // By name, case-insensitive substring.
+  const byName = buildProjects(threads, projects, NOW, { projectFilter: "ALPH" });
+  assert.equal(byName.total, 2);
+  assert.equal(byName.projects.length, 1);
+  assert.equal(byName.projects[0]!.pid, "proj_a");
+  // By id.
+  const byId = buildProjects(threads, projects, NOW, { projectFilter: "proj_b" });
+  assert.equal(byId.total, 1);
+  assert.equal(byId.projects[0]!.pid, "proj_b");
+  // Projectless threads group under "Projectless" and filter by it.
+  const solo = buildProjects(threads, projects, NOW, { projectFilter: "projectless" });
+  assert.equal(solo.total, 1);
+  assert.equal(solo.projects[0]!.pid, "projectless");
+  // Empty (or blank) query = show all.
+  assert.equal(buildProjects(threads, projects, NOW, { projectFilter: "  " }).total, 4);
+  // A no-match hides everything — hot threads included: the filter is a
+  // roster scope ("which projects am I looking at"), not an attention gate.
+  const none = buildProjects(threads, projects, NOW, { projectFilter: "zzz" });
+  assert.equal(none.total, 0);
+  assert.equal(none.projects.length, 0);
+});
+
+test("buildProjects: the idle stop and the project filter gate together", () => {
+  const threads = [
+    thread({ id: "hot_a", projectId: "proj_a", runtimeStatus: "active" }),
+    thread({ id: "year_a", projectId: "proj_a", latestAttentionAt: NOW - 200 * 86_400_000 }),
+    thread({ id: "fresh_b", projectId: "proj_b", latestAttentionAt: NOW - 0.1 * 86_400_000 }),
+  ];
+  const projects = [
+    { id: "proj_a", name: "Alpha" },
+    { id: "proj_b", name: "Beta" },
+  ];
+  // proj_a survives the filter; its year-old idle thread dies at stop 1 (<8 h).
+  const both = buildProjects(threads, projects, NOW, { idleStop: 1, projectFilter: "alpha" });
+  assert.equal(both.total, 1);
+  assert.equal(both.projects[0]!.pid, "proj_a");
+  assert.equal(both.projects[0]!.cells[0]!.t.id, "hot_a");
+  // The same stop with the other project keeps its fresh idle thread.
+  const other = buildProjects(threads, projects, NOW, { idleStop: 1, projectFilter: "beta" });
+  assert.equal(other.total, 1);
+  assert.equal(other.projects[0]!.cells[0]!.t.id, "fresh_b");
+});
+
+test("the filtered roster is the board's packing input (layout consequence)", () => {
+  // The Board's pipeline is buildProjects → makeCards → shelfPack: the filter
+  // must shrink the card set the Board shelves, never dim it.
+  const threads = [
+    thread({ id: "a1", projectId: "proj_a" }),
+    thread({ id: "a2", projectId: "proj_a" }),
+    thread({ id: "b1", projectId: "proj_b" }),
+  ];
+  const projects = [
+    { id: "proj_a", name: "Alpha" },
+    { id: "proj_b", name: "Beta" },
+  ];
+  const built = buildProjects(threads, projects, NOW, { projectFilter: "beta" });
+  const cards = makeCards(built.projects, 13, 13, 120);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]!.name, "Beta");
+  assert.equal(cards[0]!.n, 1);
+  const packed = shelfPack(cards, 400, 14, 14);
+  assert.equal(packed.placed.length, 1);
+  // A no-match packs nothing — an empty board, not a dimmed one.
+  const emptyBuilt = buildProjects(threads, projects, NOW, { projectFilter: "zzz" });
+  assert.equal(makeCards(emptyBuilt.projects, 13, 13, 120).length, 0);
 });
 
 // ---------- floating chrome: the narrow-panel stacked band ----------

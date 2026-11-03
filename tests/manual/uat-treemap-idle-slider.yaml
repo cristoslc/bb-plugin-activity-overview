@@ -1,18 +1,24 @@
 test_suite:
   id: uat-treemap-idle-slider-001
-  title: The treemap's idle-visibility slider steps down through the grey ramp from all to none
+  title: The treemap's idle-visibility slider steps down through the operator's duration ticks from all to none
   description: >
-    Headless suite for the treemap's idle-visibility slider. The slider lives
-    in the treemap's floating chrome, defaults to showing every idle thread,
-    and carries one stop per grey-ramp shade plus the top "all" stop: sliding
-    down hides the dimmest (oldest) idle threads first, ending at none. Hidden
+    Headless suite for the treemap's idle-visibility slider, now one tier of
+    the shared filters card on every dot board. The slider's stops key to the
+    ramp's named duration bounds and read No idle → <8 h → <24 h → <7 d →
+    <30 d → <90 d → All Idle: the default top stop shows every idle thread,
+    an intermediate stop shows idle threads under its bound, sliding down
+    hides the dimmest (oldest) idle threads first, ending at none. Hidden
     threads leave the layout entirely — the treemap re-squarifies and the
     legend's visible total re-scales — hot threads are never hidden, the
     slider works in both mark modes (full-fill tiles at fit, dots zoomed in),
-    and an empty shade's stop hides nothing extra. The fixture ladder:
-    thr_idle is grey-0 (2h), thr_idle_week grey-1 (2d), thr_idle_month grey-3
-    (30d), thr_idle_year grey-5 (200d); three hot threads never leave.
-  tags: [rendering, treemap, idle, slider, grey-ramp, uat, headless]
+    and an empty bucket's stop hides nothing extra. The tick row renders all
+    seven labels from the ramp constants; the active one carries the active
+    marker (the static row always carries every label's text, so the suite
+    asserts the marker, not the page text). Fixture ladder under the new
+    buckets: thr_idle is bucket 0 (2h), thr_idle_week bucket 2 (2d),
+    thr_idle_month bucket 3 (20d, mid-bucket), thr_idle_year bucket 5 (200d);
+    buckets 1 (<24 h) and 4 (<90 d) are empty; three hot threads never leave.
+  tags: [rendering, treemap, idle, slider, grey-ramp, filters, ticks, uat, headless]
 
 test_cases:
   - id: TC-01
@@ -32,12 +38,12 @@ test_cases:
         params:
           label: Unit treemap
         instruction: Switch to the Unit treemap tab.
-        expected: The treemap paints at the fitted view with the slider chrome mounted.
+        expected: The treemap paints at the fitted view with the filters card mounted.
       - order: 3
         action: assertExists
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
-        instruction: Assert the idle-visibility slider is present in the floating chrome.
+          selector: '[data-attn-filters] input[type="range"]'
+        instruction: Assert the idle-visibility slider is present in the filters card.
         expected: The slider input is mounted.
       - order: 4
         action: assertCount
@@ -53,12 +59,22 @@ test_cases:
         instruction: Assert the legend's visible total describes the full roster.
         expected: The legend reads "7 visible".
       - order: 6
-        action: profile
-        instruction: Capture a screenshot of the default all-idle board as evidence.
-        expected: Evidence saved under docs/uat/.
+        action: assertCount
+        params:
+          selector: "[data-attn-idle-tick]"
+          equals: 7
+        instruction: Assert the tick row renders all seven duration labels.
+        expected: Seven ticks — No idle, <8 h, <24 h, <7 d, <30 d, <90 d, All Idle.
+      - order: 7
+        action: assertCount
+        params:
+          selector: '[data-attn-idle-tick="All Idle"][data-attn-idle-tick-active]'
+          equals: 1
+        instruction: Assert the top tick is the emphasized one at the default stop.
+        expected: the All Idle tick is the active one.
 
   - id: TC-02
-    title: A mid stop hides the dimmest idle threads first (stop 2 keeps grey-0 and grey-1)
+    title: A mid stop hides the idle threads at or past its bound (stop 3, <7 d)
     criticality: blocker
     preconditions:
       - Same harness session expectations as TC-01.
@@ -77,30 +93,30 @@ test_cases:
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
-          value: "2"
-        instruction: Slide the idle-visibility stop down to 2 (keep buckets below grey-2).
+          selector: '[data-attn-filters] input[type="range"]'
+          value: "3"
+        instruction: Slide to stop 3 (<7 d) — only idle threads under 7 days stay.
         expected: The treemap re-squarifies around the visible set.
       - order: 4
         action: assertCount
         params:
           selector: '[data-attn-unit][data-thread-id="thr_idle_month"]'
           equals: 0
-        instruction: Assert the grey-3 thread (30d) left the layout.
+        instruction: Assert the 20d thread (bucket 3) left the layout.
         expected: No unit for thr_idle_month.
       - order: 5
         action: assertCount
         params:
           selector: '[data-attn-unit][data-thread-id="thr_idle_year"]'
           equals: 0
-        instruction: Assert the dimmest thread (grey-5, 200d) left the layout.
+        instruction: Assert the dimmest thread (200d) left the layout.
         expected: No unit for thr_idle_year.
       - order: 6
         action: assertCount
         params:
           selector: '[data-attn-unit][data-thread-id="thr_idle_week"]'
           equals: 1
-        instruction: Assert the grey-1 thread (2d) survives the cut.
+        instruction: Assert the 2d thread (bucket 2, under the bound) survives.
         expected: One tile for thr_idle_week.
       - order: 7
         action: assertCount
@@ -117,7 +133,7 @@ test_cases:
         expected: The legend reads "5 visible".
 
   - id: TC-03
-    title: The bottom stop hides every idle thread — none
+    title: The bottom stop (No idle) hides every idle thread — none
     criticality: blocker
     preconditions:
       - Same harness session expectations as TC-01.
@@ -136,16 +152,16 @@ test_cases:
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "0"
-        instruction: Slide the stop to the bottom (none).
+        instruction: Slide the stop to the bottom (No idle).
         expected: Every idle thread leaves the layout.
       - order: 4
         action: assertCount
         params:
           selector: '[data-attn-unit][data-thread-id="thr_idle"]'
           equals: 0
-        instruction: Assert the freshest idle thread (grey-0, 2h) is gone too.
+        instruction: Assert the freshest idle thread (2h) is gone too.
         expected: No unit for thr_idle.
       - order: 5
         action: assertCount
@@ -166,7 +182,7 @@ test_cases:
         expected: Evidence saved under docs/uat/.
 
   - id: TC-04
-    title: The caption names each stop from the ramp's own thresholds
+    title: The tick row names every stop from the ramp constants, the active one marked
     criticality: high
     preconditions:
       - Same harness session expectations as TC-01.
@@ -181,49 +197,59 @@ test_cases:
         params:
           label: Unit treemap
         instruction: Switch to the Unit treemap tab.
-        expected: The treemap paints at the default stop ("all idle shown").
+        expected: The treemap paints at the default stop ("All Idle" active).
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "2"
-        instruction: Slide to stop 2.
-        expected: The caption names the freshest age still shown.
+        instruction: Slide to stop 2 (<24 h).
+        expected: The active marker moves to the <24 h tick.
       - order: 4
-        action: waitFor
+        action: assertCount
         params:
-          text: idle ≤ 6d shown
-        instruction: Assert the caption reads the grey-2 bucket's own threshold.
-        expected: The caption reads "idle ≤ 6d shown".
+          selector: '[data-attn-idle-tick="<24 h"][data-attn-idle-tick-active]'
+          equals: 1
+        instruction: Assert the <24 h tick is the emphasized one.
+        expected: the <24 h tick is the active one.
       - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-idle-tick-active]'
+          equals: 1
+        instruction: Assert exactly one tick is active at a time.
+        expected: One active tick.
+      - order: 6
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "0"
         instruction: Slide to the bottom stop.
-        expected: The caption flips to the none state.
-      - order: 6
-        action: waitFor
-        params:
-          text: no idle shown
-        instruction: Assert the bottom stop's caption.
-        expected: The caption reads "no idle shown".
+        expected: The active marker moves to No idle.
       - order: 7
+        action: assertCount
+        params:
+          selector: '[data-attn-idle-tick="No idle"][data-attn-idle-tick-active]'
+          equals: 1
+        instruction: Assert the bottom stop's tick.
+        expected: the No idle tick is the active one.
+      - order: 8
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "6"
         instruction: Slide back to the top stop.
-        expected: The caption flips to the all state.
-      - order: 8
-        action: waitFor
+        expected: The active marker moves to All Idle.
+      - order: 9
+        action: assertCount
         params:
-          text: all idle shown
-        instruction: Assert the top stop's caption.
-        expected: The caption reads "all idle shown".
+          selector: '[data-attn-idle-tick="All Idle"][data-attn-idle-tick-active]'
+          equals: 1
+        instruction: Assert the top stop's tick.
+        expected: the All Idle tick is the active one.
 
   - id: TC-05
-    title: An empty shade's stop hides nothing extra
+    title: An empty bucket's stop hides nothing extra
     criticality: high
     preconditions:
       - Same harness session expectations as TC-01.
@@ -242,59 +268,59 @@ test_cases:
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "5"
-        instruction: Stop 5 hides the grey-5 thread (200d).
+        instruction: Stop 5 (<90 d) hides the 200d thread (bucket 5).
         expected: Six units remain.
       - order: 4
         action: assertCount
         params:
           selector: '[data-attn-unit]'
           equals: 6
-        instruction: Assert the grey-5 cut took.
+        instruction: Assert the dimmest cut took.
         expected: Six units mounted.
       - order: 5
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "4"
-        instruction: Stop 4 names the grey-4 shade, which has no fixture member.
+        instruction: Stop 4 (<30 d) names bucket 4, which has no fixture member.
         expected: Nothing else hides — the stop keys to the ramp, not the population.
       - order: 6
         action: assertCount
         params:
           selector: '[data-attn-unit]'
           equals: 6
-        instruction: Assert the empty shade's stop changed nothing.
+        instruction: Assert the empty bucket's stop changed nothing.
         expected: Still six units.
       - order: 7
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "3"
-        instruction: Stop 3 hides the grey-3 thread (30d).
+        instruction: Stop 3 (<7 d) hides the 20d thread (bucket 3).
         expected: Five units remain.
       - order: 8
         action: assertCount
         params:
           selector: '[data-attn-unit]'
           equals: 5
-        instruction: Assert the grey-3 cut took.
+        instruction: Assert the bucket-3 cut took.
         expected: Five units mounted.
       - order: 9
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "2"
-        instruction: Stop 2 names the grey-2 shade, which also has no fixture member.
-        expected: Nothing else hides.
+        instruction: Stop 2 (<24 h) hides the 2d thread (bucket 2); bucket 1 has no fixture member.
+        expected: Four units remain, the empty bucket adding nothing.
       - order: 10
         action: assertCount
         params:
           selector: '[data-attn-unit]'
-          equals: 5
-        instruction: Assert the second empty shade's stop changed nothing.
-        expected: Still five units.
+          equals: 4
+        instruction: Assert the second cut and the empty bucket's no-op.
+        expected: Four units — three hot plus the 2h thread.
 
   - id: TC-06
     title: The slider works in dot mode too, and sliding back up restores the dimmest last
@@ -316,9 +342,9 @@ test_cases:
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "0"
-        instruction: Slide to none at the fitted view.
+        instruction: Slide to No idle at the fitted view.
         expected: Only the three hot threads remain.
       - order: 4
         action: click
@@ -336,9 +362,9 @@ test_cases:
       - order: 6
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "6"
-        instruction: Slide back to all while zoomed in.
+        instruction: Slide back to All Idle while zoomed in.
         expected: The dimmest threads return as dots.
       - order: 7
         action: assertCount
@@ -375,9 +401,9 @@ test_cases:
       - order: 3
         action: type
         params:
-          selector: '[data-attn-idle-slider] input[type="range"]'
+          selector: '[data-attn-filters] input[type="range"]'
           value: "1"
-        instruction: Slide to stop 1 (only grey-0 idle survives).
+        instruction: Slide to stop 1 (<8 h) — only the 2h idle survives.
         expected: Four units remain; the hot tiles stay.
       - order: 4
         action: assertCount

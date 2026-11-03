@@ -1,0 +1,317 @@
+test_suite:
+  id: uat-filters-cross-view-001
+  title: The shared filters card works on every dot board — Board and Strip tiles included
+  description: >
+    The idle-visibility slider is no longer treemap-only: the filters card
+    (tier 2 of the control surface) mounts on all three dot boards with the
+    same shared session state — one idle stop and one project query — so the
+    boards answer one roster question together. The slider's stops key to the
+    ramp's duration bounds (No idle → <8 h → <24 h → <7 d → <30 d → <90 d →
+    All Idle); the project filter matches a project's name or id as a
+    trimmed, case-insensitive substring and a miss vanishes whole (hot
+    threads included — a roster scope, not an attention gate). This suite
+    proves the slider and the filter on the Board and on Strip tiles (the
+    treemap suites cover their own tab), that the state carries across tabs,
+    and that the stacked chrome fits the new tiers at phone width. Fixture
+    roster: Alpha work holds two hot threads (thr_running, thr_error); Beta
+    infra holds one hot (thr_running_slow) plus the four-idle ramp (thr_idle
+    2h, thr_idle_week 2d, thr_idle_month 20d, thr_idle_year 200d).
+  tags: [rendering, board, strip-tiles, idle, slider, filters, cross-view, shared-state, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: The Board carries the filters card — slider and project filter — at the default stop
+    criticality: blocker
+    preconditions:
+      - dist/ has been built (`npm run build`); the harness serves it from vite
+      - Headless Chrome is available at CHROME_PATH (default: system Chrome)
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Open the panel (Board is the default tab).
+        expected: The Board paints at the fitted view.
+      - order: 2
+        action: assertExists
+        params:
+          selector: '[data-attn-filters] input[type="range"]'
+        instruction: Assert the idle-visibility slider is present on the Board.
+        expected: The slider input is mounted in the filters card.
+      - order: 3
+        action: assertExists
+        params:
+          selector: '[data-attn-filters] input[type="text"]'
+        instruction: Assert the project filter is present beside it.
+        expected: The project filter input is mounted.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 7
+        instruction: Assert all seven fixture threads render as dots at the default stop.
+        expected: Seven dots — three hot plus four idle.
+      - order: 5
+        action: waitFor
+        params:
+          text: 7 visible
+        instruction: Assert the legend's visible total describes the full roster.
+        expected: The legend reads "7 visible".
+
+  - id: TC-02
+    title: The slider gates the Board's roster (stop 3, <7 d)
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: type
+        params:
+          selector: '[data-attn-filters] input[type="range"]'
+          value: "3"
+        instruction: Slide to stop 3 (<7 d) on the Board.
+        expected: The board re-packs around the visible set.
+      - order: 3
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle_month"]'
+          equals: 0
+        instruction: Assert the 20d idle thread left the Board.
+        expected: No dot for thr_idle_month.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_idle_week"]'
+          equals: 1
+        instruction: Assert the 2d idle thread survives (under the bound).
+        expected: One dot for thr_idle_week.
+      - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 5
+        instruction: Assert five dots remain (three hot, two idle under the bound).
+        expected: Five dots mounted.
+      - order: 6
+        action: waitFor
+        params:
+          text: 5 visible
+        instruction: Assert the legend's total re-scaled on the Board.
+        expected: The legend reads "5 visible".
+
+  - id: TC-03
+    title: The project filter narrows the Board and clears back
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints with every project.
+      - order: 2
+        action: type
+        params:
+          selector: '[data-attn-filters] input[type="text"]'
+          value: "beta"
+        instruction: Type "beta" into the Board's project filter.
+        expected: The Alpha card vanishes; the board re-packs to Beta infra.
+      - order: 3
+        action: assertCount
+        params:
+          selector: '[data-attn-unit][data-thread-id="thr_running"]'
+          equals: 0
+        instruction: Assert Alpha's hot thread left the Board (a roster scope hides hot threads too).
+        expected: No dot for thr_running.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 5
+        instruction: Assert Beta infra's five threads remain.
+        expected: Five dots mounted.
+      - order: 5
+        action: waitFor
+        params:
+          text: 1/2
+        instruction: Assert the filters card's count reads one of two projects.
+        expected: The count reads "1/2".
+      - order: 6
+        action: click
+        params:
+          selector: '[data-attn-filters] [data-attn-project-filter-clear]'
+        instruction: Clear the filter with the input's clear control.
+        expected: The full roster returns.
+      - order: 7
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 7
+        instruction: Assert all seven threads are back.
+        expected: Seven dots mounted.
+
+  - id: TC-04
+    title: Strip tiles carries the same filters card
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel.
+        expected: Board tab paints.
+      - order: 2
+        action: clickTab
+        params:
+          label: Strip tiles
+        instruction: Switch to the Strip tiles tab.
+        expected: The tiles paint at the fitted view with the filters card mounted.
+      - order: 3
+        action: assertExists
+        params:
+          selector: '[data-attn-filters] input[type="range"]'
+        instruction: Assert the idle-visibility slider is present on Strip tiles.
+        expected: The slider input is mounted.
+      - order: 4
+        action: type
+        params:
+          selector: '[data-attn-filters] input[type="range"]'
+          value: "0"
+        instruction: Slide to No idle on the tiles.
+        expected: Every idle strip unit leaves.
+      - order: 5
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 3
+        instruction: Assert only the three hot units remain.
+        expected: Three strip units mounted.
+      - order: 6
+        action: type
+        params:
+          selector: '[data-attn-filters] input[type="text"]'
+          value: "alpha"
+        instruction: Filter the tiles to Alpha work.
+        expected: The Beta strip vanishes.
+      - order: 7
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 2
+        instruction: Assert Alpha's two hot units remain (stop 0 hides their idles — they have none).
+        expected: Two strip units mounted.
+      - order: 8
+        action: waitFor
+        params:
+          text: 2 visible
+        instruction: Assert the legend's total re-scaled on the tiles.
+        expected: The legend reads "2 visible".
+
+  - id: TC-05
+    title: The stop and the query are shared state — they carry across boards
+    criticality: blocker
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Reopen the panel (Board).
+        expected: Board tab paints.
+      - order: 2
+        action: type
+        params:
+          selector: '[data-attn-filters] input[type="text"]'
+          value: "beta"
+        instruction: Filter the Board to Beta infra.
+        expected: The Alpha card vanishes.
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-filters] input[type="range"]'
+          value: "0"
+        instruction: Slide the Board to No idle.
+        expected: Beta's idle dots leave; only thr_running_slow remains.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 1
+        instruction: Assert the Board shows the one hot Beta thread.
+        expected: One dot mounted.
+      - order: 5
+        action: clickTab
+        params:
+          label: Strip tiles
+        instruction: Switch to Strip tiles without touching the filters.
+        expected: The tiles paint with the same shared state.
+      - order: 6
+        action: pressKey
+        params:
+          selector: '[data-attn-filters] input[type="range"]'
+          key: ArrowLeft
+          expectValue: "0"
+        instruction: Read the slider's value on the tiles (ArrowLeft is a no-op at the bottom stop) — it must still read the Board's stop.
+        expected: The input reads 0 — the stop carried across.
+      - order: 7
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 1
+        instruction: Assert the tiles show the same visible set (Beta, no idle).
+        expected: One strip unit mounted.
+      - order: 8
+        action: waitFor
+        params:
+          text: 1/2
+        instruction: Assert the query carried too (the count is still scoped to one project).
+        expected: The count reads "1/2".
+
+  - id: TC-06
+    title: At phone width the Board's stacked chrome fits the new tiers (390×844)
+    criticality: blocker
+    viewport:
+      width: 390
+      height: 844
+    preconditions:
+      - Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: {}
+        instruction: Open the panel at this case's phone viewport (390×844).
+        expected: The Board paints with the stacked chrome column.
+      - order: 2
+        action: assertChrome
+        params:
+          reachable:
+            - '[data-attn-filters] input[type=''range'']'
+            - '[data-attn-filters] input[type=''text'']'
+            - "[data-attn-zoom-controls]"
+          unitsClear: true
+        instruction: Assert every chrome band sits inside the viewport, no two overlap, the slider, the project filter, and the zoom controls are all hit-testable, and no dot hides under a band.
+        expected: All bands coherent; three controls reachable; nothing under the chrome.
+      - order: 3
+        action: type
+        params:
+          selector: '[data-attn-filters] input[type="range"]'
+          value: "1"
+        instruction: Slide to stop 1 (<8 h) at phone width.
+        expected: The board re-packs to the hot threads plus the 2h idle.
+      - order: 4
+        action: assertCount
+        params:
+          selector: '[data-attn-unit]'
+          equals: 4
+        instruction: Assert four dots remain (three hot, one idle under 8 h).
+        expected: Four dots mounted.
+      - order: 5
+        action: profile
+        instruction: Capture the phone-width Board with its stacked filters card as evidence.
+        expected: Evidence saved under docs/uat/.

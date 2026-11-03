@@ -46,11 +46,11 @@ const suiteFiles =
  * The floating chrome's coherence probe, run in the page. Checks, per the
  * phone-viewport contract:
  *
- * 1. every floating chrome box (tab bar, legend, idle slider, zoom controls)
+ * 1. every floating chrome box (tab bar, legend, filters card, zoom controls)
  *    sits fully inside the panel — nothing cropped by the viewport;
  * 2. no two chrome bands overlap — the narrow stacked column keeps the
- *    legend, slider, and zoom row apart; the desktop floating bands never
- *    cover one another;
+ *    legend, filters card, and zoom row apart; the desktop floating bands
+ *    never cover one another;
  * 3. each required element (`params.reachable` selectors) is fully inside the
  *    viewport AND hit-testable at its center (a chrome overlay painting over
  *    it or dragging it off-screen makes the control unusable whatever the
@@ -75,7 +75,7 @@ async function assertChromeLayout(page, evidenceDir, slug, params = {}) {
     }
     const chromeEls = [
       ...document.querySelectorAll(
-        "[data-attn-tabbar], [data-attn-legend], [data-attn-idle-slider], [data-attn-zoom-controls]",
+        "[data-attn-tabbar], [data-attn-legend], [data-attn-filters], [data-attn-zoom-controls]",
       ),
     ];
     if (chromeEls.length === 0) {
@@ -87,7 +87,7 @@ async function assertChromeLayout(page, evidenceDir, slug, params = {}) {
         id:
           el.getAttribute("data-attn-tabbar") !== null ? "tabbar"
           : el.getAttribute("data-attn-legend") !== null ? "legend"
-          : el.getAttribute("data-attn-idle-slider") !== null ? "slider"
+          : el.getAttribute("data-attn-filters") !== null ? "filters"
           : "zoom-controls",
         el,
         l: r.left, t: r.top, r: r.right, b: r.bottom,

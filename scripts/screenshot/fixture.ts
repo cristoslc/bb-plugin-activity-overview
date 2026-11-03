@@ -85,11 +85,13 @@ export const SIM_THREADS: readonly SimThread[] = [
     createdAt: BOOT - 9000_000,
   },
   {
-    // Three more idle threads, one per deeper grey-ramp shade, so the
-    // treemap's idle-visibility slider has a real ladder to cut: thr_idle
-    // covers grey-0 (2h), and these cover grey-1 (2d), grey-3 (30d) and
-    // grey-5 (200d). The treemap suites assert per-shade visibility through
-    // these ids; the treemap-tiles suite counts all seven base threads.
+    // Three more idle threads, one per deeper grey-ramp shade, so the dot
+    // boards' idle-visibility slider has a real ladder to cut: thr_idle
+    // covers bucket 0 (2h), and these cover bucket 2 (2d), bucket 3 (20d —
+    // mid-bucket, so the harness's boot-to-render delay can never push a
+    // boundary age into the next shade) and bucket 5 (200d). The suites
+    // assert per-shade visibility through these ids; the treemap-tiles suite
+    // counts all seven base threads.
     id: "thr_idle_week",
     projectId: "proj_beta",
     title: null,
@@ -106,8 +108,8 @@ export const SIM_THREADS: readonly SimThread[] = [
     titleFallback: "Quarterly archive",
     status: "idle",
     parentThreadId: null,
-    updatedAt: BOOT - 30 * 86_400_000,
-    createdAt: BOOT - 40 * 86_400_000,
+    updatedAt: BOOT - 20 * 86_400_000,
+    createdAt: BOOT - 30 * 86_400_000,
   },
   {
     id: "thr_idle_year",
