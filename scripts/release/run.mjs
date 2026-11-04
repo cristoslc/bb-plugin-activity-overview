@@ -132,9 +132,14 @@ function gatherState() {
   const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).version;
   const changelog = readFileSync(join(repo, "CHANGELOG.md"), "utf8");
   const suites = discoverSuites(readdirSync(join(repo, "tests", "manual")));
+  // `git config --get` exits 1 when the key is unset — read it raw so a
+  // missing signing config becomes the plan's refusal, not a crash.
+  const configGet = (key) => {
+    const result = gitRaw(["config", "--get", key]);
+    return result.status === 0 ? (result.stdout ?? "").trim() : "";
+  };
   const signingConfigured =
-    git(["config", "--get", "user.signingkey"]) !== "" &&
-    git(["config", "--get", "gpg.ssh.allowedSignersFile"]) !== "";
+    configGet("user.signingkey") !== "" && configGet("gpg.ssh.allowedSignersFile") !== "";
   const mainWorktree = findMainWorktree();
   const mainCanFastForward = gitRaw(["merge-base", "--is-ancestor", "main", "HEAD"]).status === 0;
 
@@ -368,7 +373,7 @@ async function main() {
     const verifyText = `${verify.stdout ?? ""}\n${verify.stderr ?? ""}`;
     if (verify.status !== 0 || !/Good "(gpg|rsa)" signature/.test(verifyText)) {
       throw new Error(
-        `git tag -v v${plan.version} did not verify against the allowed-signers file — the tag must never ship unverified`,
+        `git tag -v v${plan.version} did not verify against the allowed-signers file — the tag must never ship unverified. Verifier output:\n${verifyText.trim()}`,
       );
     }
     const goodLine = verifyText.split("\n").find((line) => line.includes("Good "));
@@ -415,4 +420,7 @@ async function main() {
   process.exit(0);
 }
 
-main();
+main().catch((error) => {
+  console.error(`\n${label}: FAILED: ${error?.message ?? error}`);
+  process.exit(1);
+});
