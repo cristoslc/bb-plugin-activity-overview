@@ -9,7 +9,7 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { executionModel, type Row } from "./views/timeline";
-import { FLOW_BUCKETS, FLOW_WINDOW_MS, burnRate, endSnippet, providerOfModel, resampleWindow } from "./views/model";
+import { FLOW_BUCKETS, FLOW_WINDOW_MS, burnRate, decimateRing, endSnippet, providerOfModel, resampleWindow } from "./views/model";
 import { FLOW_CHANGED, type FlowChangedPayload } from "./shared";
 
 type FlowStatus = z.infer<typeof flowStatusSchema>;
@@ -132,9 +132,15 @@ const CARD_SNIPPET_CAP = 160;
 // wall-clock buckets. `thread/tokenUsage/updated` /
 // `thread/contextWindowUsage/updated` deltas drive extra samples, so a
 // streaming thread's newest bucket grows between builds.
+//
+// The ring is SEGMENTED (decimateRing in views/model.ts — no sampling timer;
+// the event and build paths keep feeding it): every sample in the newest
+// dense window, older samples thinned to a coarse cadence, one per-thread
+// cap. A single cap covered only minutes at build cadence, which left the
+// older part of the hour window flat; the segmented ring keeps full-hour
+// coverage at bounded memory.
 const SAMPLE_MIN_GAP_MS = 3_000;
 const SAMPLE_SPAN_MS = FLOW_WINDOW_MS;
-const SAMPLE_RING_CAP = 600; // ~30 min at the min gap; oldest evicted
 
 type Sample = { at: number; used: number };
 
@@ -179,7 +185,8 @@ export default async function plugin(bb: BbPluginApi) {
     ring.push({ at, used: usedTokens });
     const cutoff = at - SAMPLE_SPAN_MS;
     const fresh = ring.filter((s) => s.at >= cutoff);
-    sampleRings.set(threadId, fresh.slice(-SAMPLE_RING_CAP));
+    // Segment on insert: dense newest window, coarse tail, per-thread cap.
+    sampleRings.set(threadId, decimateRing(fresh, at));
   }
 
   /** Throttled context read: the sampler runs while nothing watches the flow

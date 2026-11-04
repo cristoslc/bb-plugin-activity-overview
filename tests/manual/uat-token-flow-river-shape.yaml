@@ -1,0 +1,112 @@
+test_suite:
+  id: uat-token-flow-river-shape-001
+  title: Rivers read an honest shape — a mid-turn burn spreads across buckets, an hour-old burn keeps the tail non-flat, and the interpolation is declared
+  description: >
+    Headless suite for the sampling fix's display contract. The sampled source
+    only moves at turn boundaries, so the display spreads each measured delta
+    at an assumed-constant rate across the elapsed time between the two
+    measured endpoints — totals stay measured, only their distribution in time
+    is assumed, and the legend says so. The ?flowShape=1 fixture serves two
+    extra projects whose series are the real resampler's output over
+    hand-built sample rings: a turn still running whose measured pair spans
+    the newest 12 minutes (growth must light every bucket that span covers,
+    never one fat newest bucket), and a burn that ended 30 minutes ago whose
+    measured pair spans minutes 40→30 of the hour (the older part of the
+    window must stay non-flat — coverage the old single-cap ring could not
+    retain). The working-dot pulse is untouched by all of this: it keeps the
+    strictly measured rates.
+  tags: [tokenflow, swimlane, rivers, interpolation, sampling, uat, headless]
+
+test_cases:
+  - id: TC-01
+    title: A mid-turn burn spreads its growth across every bucket its span covers
+    criticality: blocker
+    precondition: >
+      dist/ is built (npm run build); the harness serves it; headless Chrome is
+      available at CHROME_PATH (default: system Chrome). The suite boots the
+      harness with ?flowShape=1 so Sigma scans and Tau archive join the stack.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow&flowShape=1" }
+        instruction: Open the Token flow tab with the river-shape fixture.
+        expected: The panel boots with the swimlane stage and the two shape rows.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-row="proj_sigma"]' }
+        instruction: Wait for the shape fixture's rows to paint.
+        expected: Sigma scans (the mid-turn thread's project) is on screen.
+      - order: 3
+        action: swimlane
+        params:
+          check: series
+          rows:
+            - { id: proj_sigma, minElevated: 3, lastElevated: true }
+        instruction: Read the mid-turn row's burn sparkline.
+        expected: The 12-minute turn lights at least three of the four buckets its span covers, the newest bucket still burns, and the growth is not piled into one fat newest bucket.
+
+  - id: TC-02
+    title: An hour-old burn keeps the tail of the window non-flat
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow&flowShape=1" }
+        instruction: Open the Token flow tab with the river-shape fixture.
+        expected: The panel boots with the swimlane stage and the two shape rows.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-row="proj_tau"]' }
+        instruction: Wait for the Tau archive row to paint.
+        expected: Tau archive (the hour-old burn's project) is on screen.
+      - order: 3
+        action: swimlane
+        params:
+          check: series
+          rows:
+            - { id: proj_tau, minElevated: 2, lastElevated: false }
+        instruction: Read the hour-old burn row's burn sparkline.
+        expected: The 40→30-minutes-ago turn lights buckets in the older half of the window while the newest bucket sits at its baseline — the tail of the hour is non-flat, not evicted into a flat line.
+
+  - id: TC-03
+    title: The interpolation assumption is declared in the view's legend
+    criticality: blocker
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow&flowShape=1" }
+        instruction: Open the Token flow tab with the river-shape fixture.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-interpolation-note]' }
+        instruction: Wait for the legend strip and its interpolation note.
+        expected: The legend carries the note that burn is interpolated between measurements — the assumed part of the shape is visible, not silent.
+      - order: 3
+        action: profile
+        params: {}
+        instruction: Capture the stack with the declared legend.
+        expected: A screenshot showing the shape rows and the interpolation note.
+
+  - id: TC-04
+    title: The two-tier boxes still read the newest 30 minutes of the interpolated series
+    criticality: standard
+    precondition: Same harness session expectations as TC-01.
+    steps:
+      - order: 1
+        action: goto
+        params: { query: "?tab=tokenflow&flowShape=1" }
+        instruction: Open the Token flow tab with the river-shape fixture.
+        expected: The panel boots with the swimlane stage.
+      - order: 2
+        action: waitForSelector
+        params: { selector: '[data-attn-tier1]' }
+        instruction: Wait for the Tier-1 boxes.
+        expected: The nested boxes are on screen, including the shape threads' subscriptions.
+      - order: 3
+        action: swimlane
+        params: { check: tiers }
+        instruction: Read every outer box and its inner boxes.
+        expected: Box height stays monotone in active flow across the whole roster — the interpolated series flows through the same tok/min math (the mid-turn thread's spread sums to its measured total over the newest 10 intervals).

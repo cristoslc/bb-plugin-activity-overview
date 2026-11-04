@@ -7,6 +7,7 @@
  * id/projectId/title/titleFallback/status/updatedAt, projects carry id/name,
  * and the Shape is the flat node tree from server.ts's `shapeSchema`.
  */
+import { resampleWindow } from "../../views/model";
 
 export interface SimThread {
   id: string;
@@ -357,3 +358,78 @@ export const SIM_FLOW = {
     flowThread({ id: "thr_archive_b", projectId: "proj_gamma", projectName: "Gamma archive", title: "old sweep two", status: "idle", usedTokens: 120_000, rate: 0, updatedAt: NOW - 8000_000, createdAt: NOW - 9500_000, series: new Array<number>(FLOW_BUCKETS).fill(0) }),
   ],
 };
+
+/**
+ * ?flowShape=1 — the river-shape fixture: two extra projects whose threads'
+ * burn series are the REAL resampler's output (`resampleWindow` in
+ * views/model.ts) over hand-built sample rings. The river-shape UAT asserts
+ * the display contract the sampling fix produces:
+ *
+ * - `thr_midturn` — a turn still running whose only measured pair spans the
+ *   newest 12 minutes. Interpolation spreads its 24k growth across the four
+ *   buckets that span covers; the pre-fix resampler piled all 24k into the
+ *   newest bucket.
+ * - `thr_tail` — a burn that ended 30 minutes ago whose measured pair spans
+ *   minutes 40→30 of the hour. Interpolation keeps the older part of the
+ *   window non-flat and the newest buckets at zero — shape the old single-cap
+ *   ring could not even retain, and the pre-fix resampler landed in one
+ *   middle bucket anyway.
+ *
+ * Both rows stay collapsed, so each row's sparkline carries exactly its
+ * thread's series. Appended only under the flag, so every other suite keeps
+ * its three-project roster and pinned counts.
+ */
+export const FLOW_SHAPE = new URLSearchParams(window.location.search).get("flowShape") === "1";
+
+const midTurnSeries = resampleWindow(
+  [
+    { at: NOW - 12 * 60_000, used: 0 },
+    { at: NOW, used: 24_000 },
+  ],
+  NOW,
+  3_600_000,
+  FLOW_BUCKETS,
+);
+
+const tailSeries = resampleWindow(
+  [
+    { at: NOW - 60 * 60_000, used: 0 },
+    { at: NOW - 40 * 60_000, used: 0 },
+    { at: NOW - 30 * 60_000, used: 5_000 },
+    { at: NOW, used: 5_000 },
+  ],
+  NOW,
+  3_600_000,
+  FLOW_BUCKETS,
+);
+
+const FLOW_SHAPE_THREADS: readonly FlowThreadFixture[] = [
+  flowThread({
+    id: "thr_midturn",
+    projectId: "proj_sigma",
+    projectName: "Sigma scans",
+    title: "quarterly sweep",
+    usedTokens: 24_000,
+    rate: 33,
+    series: midTurnSeries,
+  }),
+  flowThread({
+    id: "thr_tail",
+    projectId: "proj_tau",
+    projectName: "Tau archive",
+    title: "nightly index",
+    status: "idle",
+    usedTokens: 5_000,
+    rate: 1.4,
+    updatedAt: NOW - 30 * 60_000,
+    createdAt: NOW - 4 * 3_600_000,
+    series: tailSeries,
+  }),
+];
+
+/** The flow payload the mock RPC serves, composed per URL flags. */
+export function simFlowPayload(): typeof SIM_FLOW {
+  return FLOW_SHAPE
+    ? { ...SIM_FLOW, threads: [...SIM_FLOW.threads, ...FLOW_SHAPE_THREADS] }
+    : SIM_FLOW;
+}

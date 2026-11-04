@@ -144,6 +144,22 @@ may need to act on."*
   token total; a thread with a real burn still shows tok/min and animates. A
   grandchild with a real burn always draws its own river and its beads drift,
   same as any other depth.
+- **River shape is interpolated between measurements, and the ring covers the
+  full hour.** The sampled source only moves at turn boundaries, so a whole
+  turn's growth used to pile into the one bucket its end reading landed in
+  (one fat newest bucket behind 19 zeros) and the ring's single cap let the
+  older part of the hour window go flat. `resampleWindow` now spreads each
+  measured delta at an assumed-constant rate across the elapsed time between
+  its two measured endpoints — totals stay exactly the measured values, only
+  their distribution in time is assumed, and the legend declares it
+  (`data-attn-interpolation-note` in TokenFlowView.tsx). The sample ring
+  segments (`decimateRing`: every sample in the newest 10 minutes, older
+  samples thinned to a 30-second cadence, one per-thread cap — no sampling
+  timer, the event and build paths keep feeding it), so the hour stays covered
+  at bounded memory. The working-dot pulse never consumes the interpolated
+  series: `burnRate` keeps strictly measured rates
+  (UAT in `tests/manual/uat-token-flow-river-shape.yaml`, `?flowShape=1`
+  harness fixture).
 - **Threads nest inside their parent's card only when they share its lane.**
   A child in the same lane nests inside the parent's card (indented, recursing
   parent → child → grandchild, hard-capped at the grandchild, `MAX_DEPTH = 2`,
@@ -159,8 +175,11 @@ may need to act on."*
   growing the row. Collapsed rows show tokens, live tok/min, thread/working
   counts, the provider-mix strip, and the hottest thread's burn sparkline.
 - **Data**: the `flow` RPC (server.ts) reads each thread's persisted
-  `usedTokens` (the totals) and resamples the plugin's local sample ring of
-  positive context growth into equal wall-clock buckets (the burn profile), and
+  `usedTokens` (the totals) and resamples the plugin's local segmented sample
+  ring of positive context growth into equal wall-clock buckets (the burn
+  profile — each measured delta spread across the elapsed time between
+  readings, so the shape is interpolated between measurements; see the
+  river-shape bullet above), and
   carries each thread's ACP provider id (`agentProvider`, from `threads.list`'s
   `providerId`) — the Tier-1 key when the toggle swaps the axis to the ACP
   provider; the subscription and model

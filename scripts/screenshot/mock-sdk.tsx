@@ -11,7 +11,7 @@
  */
 import { createRoot, type Root } from "react-dom/client";
 import type { ComponentType } from "react";
-import { SHAPE_DELAY_MS, SIM_DEMO_PROJECTS, SIM_DEMO_THREADS, SIM_FLOW, SIM_PROJECTS, SIM_SHAPE, SIM_THREADS } from "./fixture";
+import { SHAPE_DELAY_MS, SIM_DEMO_PROJECTS, SIM_DEMO_THREADS, SIM_PROJECTS, SIM_SHAPE, SIM_THREADS, simFlowPayload } from "./fixture";
 
 /** ?sideDelay= — how long the sidebar data stalls in "loading" before ready. */
 const SIDE_DELAY_MS = Math.max(
@@ -140,8 +140,9 @@ const rpcClient = {
     }
     if (method === "flow") {
       // The swimlane token-flow view's read. A fixed fixture so the suite's
-      // lane/lane-scroll/z-order assertions are deterministic.
-      return { ...SIM_FLOW, generatedAt: Date.now() };
+      // lane/lane-scroll/z-order assertions are deterministic (?flowShape=1
+      // appends the river-shape fixture's two projects).
+      return { ...simFlowPayload(), generatedAt: Date.now() };
     }
     if (method !== "shape") throw new Error(`mock rpc: unknown method ${method}`);
     if (SHAPE_DELAY_MS > 0) await new Promise((resolve) => setTimeout(resolve, SHAPE_DELAY_MS));
