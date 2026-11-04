@@ -38,7 +38,7 @@ One dot is one thread. Its color reads status, the number of dots reads volume, 
 - **Filters on every dot board** — the shared filters card carries an idle-visibility slider keyed to named duration bounds (No idle → <8 h → <24 h → <7 d → <30 d → <90 d → All Idle; the dimmest idle threads hide first, hot threads never leave) and a project filter that vanishes a non-matching project whole. One shared stop and query across the Board, Unit treemap, and Strip tiles; Token flow's toolbar input binds the same query.
 - **Unit treemap** — region area reads thread count (squarified): at the fitted view each thread fills its unit area as one full-fill status tile, and zoomed past the fit it becomes one constant-size dot per thread. Projects separate by a thin void, with no strokes.
 - **Strip tiles** — one tile per project: the name over a strip with one 4px unit per thread, hottest statuses at the left edge; tiles flow-wrap.
-- **Token flow** — projects pile vertically, one wide row each; expanding a row tiles its status tiers as four lanes (Working, Needs You, Unread, Idle) and every card's river fans from the project's one mouth. The plugin's `flow` RPC serves it.
+- **Token flow** — projects pile vertically, one wide row each; expanding a row tiles its status tiers as four lanes (Working, Needs You, Unread, Idle) and every card's river fans from the project's one mouth. The burn history spreads each measured delta across the elapsed time between samples (totals stay measured; the legend says burn is interpolated between measurements), and a segmented sample ring keeps the full hour covered. The plugin's `flow` RPC serves it.
 
 Reading a view:
 

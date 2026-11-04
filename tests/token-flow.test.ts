@@ -7,12 +7,16 @@ import {
   FLOW_BUCKETS,
   FLOW_INTERVALS,
   FLOW_WINDOW_MS,
+  RING_COARSE_MS,
+  RING_DENSE_MS,
+  RING_SAMPLE_CAP,
   SWIMLANE,
   SWIMLANES,
   TIER_BOX,
   agentLabel,
   bandW,
   boxHeight,
+  decimateRing,
   buildForest,
   cardHeight,
   cardPaintOrder,
@@ -97,15 +101,16 @@ test("laneOf folds the statuses into the four lanes, Needs You absorbing error",
 test("resampleWindow buckets positive growth into equal wall-clock intervals", () => {
   const now = 1_000_000;
   const windowMs = 60_000;
-  // Growth of 1000 spread across the newest tenth of the window (newest bucket).
+  // A fresh pair spanning exactly the newest 3s: the growth spreads across
+  // the one bucket that span covers — the newest.
   const samples = [
-    { at: now - windowMs, used: 0 },
-    { at: now - windowMs * 0.05, used: 1000 },
+    { at: now - 3_000, used: 0 },
+    { at: now, used: 1000 },
   ];
   const out = resampleWindow(samples, now, windowMs, FLOW_BUCKETS);
   assert.equal(out.length, FLOW_BUCKETS);
-  assert.equal(out.reduce((s, v) => s + v, 0), 1000, "all growth is attributed");
-  assert.ok(out[FLOW_BUCKETS - 1]! > 0, "newest bucket carries the fresh growth");
+  assert.ok(Math.abs(out.reduce((s, v) => s + v, 0) - 1000) < 1e-6, "all growth is attributed");
+  assert.equal(out[FLOW_BUCKETS - 1], 1000, "newest bucket carries the fresh growth");
   assert.equal(out[0], 0, "oldest bucket is empty");
 });
 
@@ -116,10 +121,16 @@ test("resampleWindow ignores negative (context-shedding) deltas and pre-window s
     { at: now - windowMs * 2, used: 4000 }, // fully before the window
     { at: now - windowMs * 1.5, used: 6000 },
     { at: now - windowMs * 1.2, used: 5000 }, // a drop — not growth
-    { at: now - windowMs * 0.5, used: 5500 }, // +500 inside the window
+    { at: now - windowMs * 0.5, used: 5500 }, // +500, ending inside the window
   ];
   const out = resampleWindow(samples, now, windowMs, FLOW_BUCKETS);
-  assert.equal(out.reduce((s, v) => s + v, 0), 500, "only the positive in-window growth counts");
+  // The +500 pair starts 12s before the window and ends 30s in: only its
+  // in-window share (500 × 30s/42s) spreads, across the first ten buckets.
+  const total = out.reduce((s, v) => s + v, 0);
+  assert.ok(Math.abs(total - 500 * (30 / 42)) < 1e-6, `only the in-window share counts, got ${total}`);
+  for (let k = 10; k < FLOW_BUCKETS; k++) {
+    assert.equal(out[k], 0, `bucket ${k} is past the pair's end`);
+  }
 });
 
 test("resampleWindow: too few samples yields an all-zero series", () => {
@@ -127,6 +138,189 @@ test("resampleWindow: too few samples yields an all-zero series", () => {
   assert.equal(out.length, FLOW_BUCKETS);
   assert.ok(out.every((v) => v === 0));
 });
+
+// ---------- interpolation: growth spreads across the time it took ----------
+//
+// The sampled source only moves at turn boundaries, so attributing a whole
+// turn's growth to the bucket its end reading lands in piles everything into
+// one fat newest bucket. The display layer instead spreads each measured delta
+// at an assumed-constant rate across the elapsed time between the two
+// measured endpoints: totals stay exactly the measured values; only their
+// distribution in time is assumed (and labeled in the view).
+
+test("resampleWindow spreads a turn's growth across every bucket its span covers", () => {
+  const now = 1_000_000_000;
+  const samples = [
+    { at: now - 12 * 60_000, used: 0 }, // turn start
+    { at: now, used: 24_000 }, // still running: the newest reading
+  ];
+  const out = resampleWindow(samples, now, FLOW_WINDOW_MS, FLOW_BUCKETS);
+  assert.equal(out.length, FLOW_BUCKETS);
+  // The 12-minute span covers the newest four 3-minute buckets (indices 16-19),
+  // so an assumed-constant rate puts a quarter of the growth in each.
+  assert.equal(out[15], 0, "the bucket before the turn is empty");
+  for (const k of [16, 17, 18, 19]) {
+    assert.equal(out[k], 6_000, `bucket ${k} carries its quarter of the growth`);
+  }
+  assert.equal(out.reduce((s, v) => s + v, 0), 24_000, "the measured total survives the spread");
+  assert.ok(out[FLOW_BUCKETS - 1]! < 24_000, "growth is not piled into one fat newest bucket");
+});
+
+test("resampleWindow keeps the measured total and only spreads in-window time", () => {
+  const now = 1_000_000_000;
+  const w = 3_600_000;
+  // The first pair starts a full window-width before the window: only its
+  // in-window third may be spread, and the pre-window growth stays excluded.
+  const samples = [
+    { at: now - 2 * w, used: 0 },
+    { at: now - w / 2, used: 10_000 },
+    { at: now, used: 16_000 },
+  ];
+  const out = resampleWindow(samples, now, w, FLOW_BUCKETS);
+  // Pair 1: 10k over 1.5w, of which 0.5w is inside the window → 10k/3 spread
+  // evenly over the first ten 3-minute buckets. Pair 2: 6k over the newest
+  // 0.5w → 600 per bucket across indices 10-19.
+  const total = out.reduce((s, v) => s + v, 0);
+  assert.ok(Math.abs(total - (10_000 / 3 + 6_000)) < 1e-6, `in-window total is 10k/3 + 6k, got ${total}`);
+  for (let k = 10; k < FLOW_BUCKETS; k++) {
+    assert.equal(out[k], 600, `bucket ${k} carries the second pair's constant rate`);
+  }
+  for (let k = 0; k < 10; k++) {
+    assert.ok(Math.abs(out[k]! - 10_000 / 30) < 1e-6, `bucket ${k} carries the first pair's in-window rate, got ${out[k]}`);
+  }
+});
+
+test("resampleWindow: flat rings and same-instant readings never divide by zero", () => {
+  const now = 1_000_000_000;
+  const flat = [
+    { at: now - 2_000, used: 500 },
+    { at: now - 1_000, used: 500 },
+    { at: now, used: 500 },
+  ];
+  const zeros = resampleWindow(flat, now, 60_000, FLOW_BUCKETS);
+  assert.ok(zeros.every((v) => v === 0), "a flat ring has no growth to spread");
+
+  // Two readings stamped the same millisecond but a growing level: the delta
+  // is real, so it must land somewhere — finite, never NaN/Infinity.
+  const sameInstant = [
+    { at: now - 1_000, used: 0 },
+    { at: now - 1_000, used: 400 },
+  ];
+  const out = resampleWindow(sameInstant, now, 60_000, FLOW_BUCKETS);
+  assert.ok(out.every((v) => Number.isFinite(v)), `all finite, got ${JSON.stringify(out)}`);
+  assert.equal(out.reduce((s, v) => s + v, 0), 400, "the same-instant delta is preserved");
+});
+
+test("resampleWindow: a lone first reading and a shedding ring contribute nothing", () => {
+  const now = 1_000_000_000;
+  const single = resampleWindow([{ at: now - 5_000, used: 9_000 }], now, 60_000, FLOW_BUCKETS);
+  assert.ok(single.every((v) => v === 0), "one reading has no delta to spread");
+
+  const shedding = [
+    { at: now - 4_000, used: 9_000 },
+    { at: now, used: 7_000 }, // compaction, not negative burn
+  ];
+  const out = resampleWindow(shedding, now, 60_000, FLOW_BUCKETS);
+  assert.ok(out.every((v) => v === 0), "a shrink is never spread as growth");
+});
+
+// ---------- segmented sample ring: full-hour coverage at bounded memory ----------
+//
+// The ring's single cap covered only minutes at build cadence, so the older
+// part of the hour window rendered flat. The ring now segments: every sample
+// in the newest dense window, older samples thinned to a coarse cadence, all
+// under one per-thread cap. No timer — the event and build paths keep feeding it.
+
+/** 1s-cadence ring over the newest `minutes`, monotone levels. */
+function ringOf(minutes: number, stepMs: number, level = 0): { at: number; used: number }[] {
+  const now = 1_000_000_000;
+  const n = Math.floor((minutes * 60_000) / stepMs);
+  const out: { at: number; used: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    level += 1;
+    out.push({ at: now - (n - 1 - i) * stepMs, used: level });
+  }
+  return out;
+}
+
+test("decimateRing keeps every sample in the dense newest window", () => {
+  const now = 1_000_000_000;
+  const samples = ringOf(15, 1_000);
+  const kept = decimateRing(samples, now);
+  const dense = samples.filter((s) => s.at >= now - RING_DENSE_MS);
+  for (const s of dense) {
+    assert.ok(kept.includes(s), `dense sample at ${s.at} survived`);
+  }
+  assert.ok(kept.length < samples.length, `the coarse tail thinned (${kept.length} of ${samples.length})`);
+});
+
+test("decimateRing thins the coarse tail to the coarse cadence, gaps bounded", () => {
+  const now = 1_000_000_000;
+  const samples = ringOf(60, 1_000);
+  const kept = decimateRing(samples, now);
+  // Monotone order, and every kept sample is a real reading.
+  const ats = kept.map((s) => s.at);
+  assert.deepEqual(ats, [...ats].sort((a, b) => a - b), "kept samples stay in time order");
+  const coarse = kept.filter((s) => s.at < now - RING_DENSE_MS);
+  assert.ok(coarse.length >= 2, "the coarse tail still has readings");
+  for (let i = 1; i < coarse.length; i++) {
+    const gap = coarse[i]!.at - coarse[i - 1]!.at;
+    assert.ok(gap >= RING_COARSE_MS, `coarse gap ${gap}ms is at least one cadence step`);
+    assert.ok(gap < 2 * RING_COARSE_MS, `coarse gap ${gap}ms never doubles the cadence`);
+  }
+});
+
+test("decimateRing preserves the measured total growth for monotone levels", () => {
+  const now = 1_000_000_000;
+  const samples = ringOf(60, 1_000);
+  const growthOf = (ring: readonly { at: number; used: number }[]): number => {
+    let g = 0;
+    for (let i = 1; i < ring.length; i++) {
+      const d = ring[i]!.used - ring[i - 1]!.used;
+      if (d > 0) g += d;
+    }
+    return g;
+  };
+  const kept = decimateRing(samples, now);
+  assert.equal(growthOf(kept), growthOf(samples), "thinning merges deltas into the spanning pair, never loses them");
+});
+
+test("decimateRing caps memory and the newest reading always survives", () => {
+  const now = 1_000_000_000;
+  // 0.5s cadence packs the dense window alone past the cap.
+  const samples = ringOf(10, 500);
+  assert.ok(samples.length > RING_SAMPLE_CAP, "the fixture actually overflows the cap");
+  const kept = decimateRing(samples, now);
+  assert.equal(kept.length, RING_SAMPLE_CAP, "capped at the per-thread ceiling");
+  assert.equal(kept[kept.length - 1], samples[samples.length - 1], "the newest reading is never evicted");
+});
+
+test("decimateRing keeps full-hour coverage: both ends survive under the cap", () => {
+  const now = 1_000_000_000;
+  const samples = ringOf(60, 1_000);
+  const kept = decimateRing(samples, now);
+  assert.ok(kept.length <= RING_SAMPLE_CAP, `${kept.length} within the cap`);
+  assert.equal(kept[0], samples[0], "the oldest reading survives — the hour stays covered");
+  assert.equal(kept[kept.length - 1], samples[samples.length - 1], "the newest reading survives");
+});
+
+test("decimateRing re-decimation never grows the ring (idempotent under any feed)", () => {
+  const now = 1_000_000_000;
+  const samples = ringOf(60, 1_000);
+  const once = decimateRing(samples, now);
+  const twice = decimateRing(once, now + 5_000);
+  assert.ok(twice.length <= once.length, `${twice.length} ≤ ${once.length}`);
+  const thrice = decimateRing(twice, now + 10_000);
+  assert.ok(thrice.length <= twice.length, `${thrice.length} ≤ ${twice.length}`);
+});
+
+test("decimateRing: empty and single-sample rings pass through", () => {
+  const now = 1_000_000_000;
+  assert.deepEqual(decimateRing([], now), []);
+  const single = [{ at: now - 1_000, used: 5 }];
+  assert.deepEqual(decimateRing(single, now), single);
+});
+
 
 test("forest: children attach to their parent; a parentless thread stands alone", () => {
   const parent = fThread({ id: "p" });

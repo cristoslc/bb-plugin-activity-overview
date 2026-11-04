@@ -550,8 +550,8 @@ export function TokenFlowView({
             {lane.label}
           </span>
         ))}
-        <span className="ml-auto opacity-80">
-          {`Tier 1 ${mode === "provider" ? "ACP provider" : "subscription"} → Tier 2 ${mode === "provider" ? "subscription / model" : "model"} · box height = tok/min over the last 10 intervals (taller = hotter) · river = the card's shown flow · beads = live activity`}
+        <span className="ml-auto opacity-80" data-attn-interpolation-note="">
+          {`Tier 1 ${mode === "provider" ? "ACP provider" : "subscription"} → Tier 2 ${mode === "provider" ? "subscription / model" : "model"} · box height = tok/min over the last 10 intervals (taller = hotter) · river = the card's shown flow · beads = live activity · burn is interpolated between measurements (totals measured, spread assumed)`}
         </span>
       </div>
     </div>

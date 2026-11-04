@@ -1125,8 +1125,21 @@ export type FlowSample = { at: number; used: number };
  * Resample a thread's context-growth history into `buckets` equal wall-clock
  * intervals covering the newest `windowMs`, oldest first. Each emitted value
  * is the Σ positive growth inside that interval (context-window use is flat
- * or rising, so growth is the honest burn). A reading spanning an interval
- * boundary contributes its growth to the interval it lands in.
+ * or rising, so growth is the honest burn).
+ *
+ * The sampled source only moves at turn boundaries, so a whole turn's growth
+ * used to land in the single bucket its end reading fell in — one fat newest
+ * bucket behind 19 zeros. Each measured delta is instead spread at an
+ * assumed-constant rate across the elapsed time between its two measured
+ * endpoints (each bucket earns the delta in proportion to how much of the
+ * pair's span overlaps it): the totals stay exactly the measured values, only
+ * their distribution in time is assumed. A pair whose span straddles the
+ * window's start spreads only its in-window share (the window is a viewport,
+ * not a claim about pre-window time), and a same-instant delta — no elapsed
+ * time to spread across — lands whole in the bucket its reading falls in.
+ * The assumption is declared in the
+ * view's legend (`data-attn-interpolation-note`); the working-dot pulse never
+ * consumes this function — it keeps strictly measured rates.
  */
 export function resampleWindow(
   samples: FlowSample[],
@@ -1143,13 +1156,95 @@ export function resampleWindow(
     const prev = ordered[i - 1]!;
     const cur = ordered[i]!;
     const growth = cur.used - prev.used;
-    if (growth <= 0 || cur.at <= start) continue; // only fresh, positive growth
-    // Attribute the interval's growth to the bucket its end reading falls in.
-    const at = Math.min(cur.at, nowMs);
-    const index = Math.min(buckets - 1, Math.max(0, Math.floor((at - start) / width)));
-    out[index] += growth;
+    if (growth <= 0) continue; // only positive growth; a shrink is compaction
+    const spanMs = cur.at - prev.at;
+    if (spanMs <= 0) {
+      // Two readings stamped the same millisecond: no elapsed time to spread
+      // across, so the delta lands in the bucket its reading falls in — the
+      // measured growth is never dropped for lack of a span.
+      if (cur.at <= start) continue;
+      const at = Math.min(cur.at, nowMs);
+      const index = Math.min(buckets - 1, Math.max(0, Math.floor((at - start) / width)));
+      out[index] += growth;
+      continue;
+    }
+    // Clip the pair to the window: only the in-window part of the span may
+    // spread, and pre-window growth stays excluded.
+    const from = Math.max(prev.at, start);
+    const to = Math.min(cur.at, nowMs);
+    if (to <= from) continue;
+    // Spread at the assumed-constant rate: every bucket overlapping
+    // [from, to) earns `growth × its overlap / the full span`.
+    const first = Math.min(buckets - 1, Math.max(0, Math.floor((from - start) / width)));
+    const last = Math.min(buckets - 1, Math.max(0, Math.floor((to - start) / width)));
+    for (let k = first; k <= last; k++) {
+      const bStart = start + k * width;
+      const overlap = Math.min(to, bStart + width) - Math.max(from, bStart);
+      if (overlap <= 0) continue;
+      out[k] += (growth * overlap) / spanMs;
+    }
   }
   return out;
+}
+
+// ---------- segmented sample ring: full-hour coverage at bounded memory ----------
+//
+// The ring's single cap covered only minutes at build cadence (~0.5–2.5
+// samples/s while views are open), so the older part of the hour window
+// rendered flat. The ring now segments: the newest dense window keeps every
+// sample, older samples are thinned to a fixed coarse cadence, and one
+// per-thread cap bounds the whole thing. There is no sampling timer — the
+// existing event and build paths keep feeding the ring; decimation runs on
+// insert, and thinning never loses measured growth (a dropped reading's level
+// lives on in the pair that spans it).
+
+/** Every sample in the newest 10 minutes is kept sample-for-sample. */
+export const RING_DENSE_MS = 600_000;
+/** Samples older than the dense window are thinned to this cadence. */
+export const RING_COARSE_MS = 30_000;
+/**
+ * The per-thread sample ceiling: at worst-case build cadence (~1 sample per
+ * 750ms build memo) the dense window holds ~800 samples and the 50-minute
+ * coarse tail ~100, so 900 bounds the ring without trimming a honestly-fed
+ * dense segment.
+ */
+export const RING_SAMPLE_CAP = 900;
+
+/**
+ * Thin a sample ring to its segmented shape: every reading in the newest
+ * `denseMs` survives, older readings keep a gap of at least `coarseMs` to the
+ * previously kept one (so a coarse gap never exceeds 2×`coarseMs`), the oldest
+ * and newest readings always survive (the ring's coverage ends and its live
+ * edge), and the total is capped at `cap` by evicting from the front. Total
+ * measured growth is preserved for monotone levels: dropping a reading merges
+ * its delta into the kept pair that spans it. Deterministic and idempotent —
+ * re-decimating a decimated ring never grows it.
+ */
+export function decimateRing(
+  samples: FlowSample[],
+  nowMs: number,
+  opts: { denseMs?: number; coarseMs?: number; cap?: number } = {},
+): FlowSample[] {
+  const denseMs = opts.denseMs ?? RING_DENSE_MS;
+  const coarseMs = opts.coarseMs ?? RING_COARSE_MS;
+  const cap = opts.cap ?? RING_SAMPLE_CAP;
+  if (samples.length === 0) return [];
+  const denseStart = nowMs - denseMs;
+  const ordered = [...samples].sort((a, b) => a.at - b.at);
+  const kept: FlowSample[] = [];
+  for (let i = 0; i < ordered.length; i++) {
+    const s = ordered[i]!;
+    const prev = kept[kept.length - 1];
+    if (
+      s.at >= denseStart ||
+      i === ordered.length - 1 ||
+      prev === undefined ||
+      s.at - prev.at >= coarseMs
+    ) {
+      kept.push(s);
+    }
+  }
+  return kept.length > cap ? kept.slice(kept.length - cap) : kept;
 }
 
 export const PROVIDER_ORDER = ["anthropic", "openai", "google", "ollama", "other"] as const;

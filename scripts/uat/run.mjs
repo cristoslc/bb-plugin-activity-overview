@@ -511,8 +511,8 @@ async function assertPulse(page) {
  * check reads the data-attn-* marks the view paints, so the assertions track
  * what actually rendered, not a re-derivation of the model.
  */
-async function swimlaneCheck(page, check, order = null) {
-  const outcome = await page.evaluate(async ({ which, wantOrder }) => {
+async function swimlaneCheck(page, check, order = null, rows = null) {
+  const outcome = await page.evaluate(async ({ which, wantOrder, wantRows }) => {
     const checks = [];
     const add = (name, ok, detail) => checks.push({ name, ok, detail });
     const svg = document.querySelector('svg[aria-label="token flow swimlanes"]');
@@ -773,6 +773,58 @@ async function swimlaneCheck(page, check, order = null) {
       };
     }
 
+    if (which === "series") {
+      // The burn-series display contract (the sampling fix): a measured delta
+      // spreads across every bucket its elapsed span covers — the interpolation
+      // the legend declares — so a mid-turn burn lights several buckets instead
+      // of piling into one fat newest bucket, and a burn that ended long ago
+      // keeps the older part of the window off its baseline (the segmented
+      // ring's coverage). Each row spec names a collapsed project row whose
+      // sparkline carries its thread's series: { id, minElevated, lastElevated }.
+      const specs = Array.isArray(wantRows) ? wantRows : [];
+      if (specs.length === 0) {
+        add("row specs present", false, "series check needs params.rows");
+        return { pass: false, checks, detail: "no row specs" };
+      }
+      for (const spec of specs) {
+        const row = document.querySelector(`[data-attn-row="${spec.id}"]`);
+        if (row === null) {
+          add(`row ${spec.id} mounted`, false, "not in the stack");
+          continue;
+        }
+        const spark = [...row.querySelectorAll("path")].find((p) => /^M /.test(p.getAttribute("d") ?? ""));
+        if (spark === undefined) {
+          add(`row ${spec.id} has a sparkline`, false, "no spark path");
+          continue;
+        }
+        const tokens = (spark.getAttribute("d") ?? "").match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+        const ys = tokens.filter((_, i) => i % 2 === 1);
+        const baseline = Math.max(...ys);
+        const elevated = ys.filter((y) => y < baseline - 0.75).length;
+        const lastElevated = ys.length > 0 && ys[ys.length - 1] < baseline - 0.75;
+        add(
+          `${spec.id}: growth spans buckets (≥${spec.minElevated} elevated of ${ys.length})`,
+          elevated >= spec.minElevated,
+          `${elevated} elevated`,
+        );
+        add(
+          `${spec.id}: ${spec.lastElevated ? "newest bucket still burning" : "newest bucket at rest"}`,
+          lastElevated === spec.lastElevated,
+          `last point ${lastElevated ? "elevated" : "at baseline"}`,
+        );
+        add(
+          `${spec.id}: not one fat newest bucket`,
+          !(elevated === 1 && lastElevated),
+          `${elevated} elevated`,
+        );
+      }
+      return {
+        pass: checks.every((c) => c.ok),
+        checks,
+        detail: checks.filter((c) => !c.ok).map((c) => c.name).join("; ") || "series shape spreads across buckets as the interpolation declares",
+      };
+    }
+
     if (which === "stack-order") {
       // The stack's rank order: every project row read top-to-bottom must
       // equal the wanted id order (the activity sort's end-to-end probe).
@@ -794,7 +846,7 @@ async function swimlaneCheck(page, check, order = null) {
     }
 
     return { pass: false, checks, detail: `unknown swimlane check "${which}"` };
-  }, { which: check, wantOrder: order });
+  }, { which: check, wantOrder: order, wantRows: rows });
   return outcome;
 }
 
@@ -1078,7 +1130,7 @@ async function runCase(page, evidenceDir, kase, suiteViewport) {
           break;
         }
         case "swimlane": {
-          const outcome = await swimlaneCheck(page, step.params?.check ?? "lanes", step.params?.order);
+          const outcome = await swimlaneCheck(page, step.params?.check ?? "lanes", step.params?.order, step.params?.rows);
           entry.pass = outcome.pass;
           entry.detail = outcome.detail;
           entry.checks = outcome.checks;
