@@ -97,6 +97,65 @@ is that port, with this repo's names and branch facts.
   meaningfully changes: `npm run shots` and `npm run gif` (`npm run build`
   first; the harness serves `dist/app.css`). A store listing that references a
   renamed or reshaped screenshot fails `npm run store:check`.
+- The gate is a named-stage runner (scripts/release-safety.mjs, ported from
+  Focus Board's): the old `build && uat && shots` chain exited with the first
+  failing stage's code but left no hook to say which stage it was; the runner
+  names the failed stage (`release-safety:build`, `release-safety:uat`, …),
+  publishes one ntfy message naming it when `NTFY_TOPIC` is configured
+  (gitignored `~/.config/activity-overview/ntfy.env`; no topic is a silent
+  no-op and a publish failure never changes the exit code), and exits with
+  the stage's own code. Keep the artifacts (`docs/uat/`,
+  `docs/release-safety/`) for the follow-up.
+
+## 2c. The scripted release (`npm run release`)
+
+The whole §2b–§4 pipeline is one scripted entry, scripts/release/run.mjs
+(`npm run release`), mirroring the Focus Board release discipline at script
+rigor. It runs in phases, and every phase refuses loudly:
+
+- **Preconditions** (a refusal aborts before any gate): clean tree, on `dev`,
+  HEAD in sync with `gh/dev` (it fetches first — offline aborts), tag `vX.Y.Z`
+  absent locally and on `gh`, version is exactly `X.Y.Z-dev` (no `-dev`
+  confusion), the `[Unreleased]` group is non-empty unless `--allow-empty`,
+  at least one UAT suite discovered in `tests/manual` (the sweep is
+  mandatory and cannot silently shrink), tag signing configured
+  (`user.signingkey` + `gpg.ssh.allowedSignersFile`), main promotable
+  fast-forward-only (no divergence), and main's own checkout healthy
+  (tracked-file modifications or an in-flight merge refuse; untracked
+  scaffolding such as `.worktrees/` does not — an ff cannot clobber it).
+  Refusals accumulate, so one pass reports every problem.
+- **Gates** (blocking, in order): `npm test`, `npx tsc --noEmit`,
+  `npm run build`, the full UAT sweep (every suite the runner discovers in
+  `tests/manual` — the script passes no suite args), `npm run store:check`,
+  `npm run release-shots`. First failure aborts before any mutation, named
+  through the same notification contract as §2b. After the gates, the tree
+  may carry changes only under `docs/uat/` and `docs/release-safety/`;
+  anything else (stale generated feeds included) aborts. The racy facts
+  (branch, tag local + remote) are re-checked post-gates, since gates take
+  minutes.
+- **Finalize + ship**: the §3 transforms (rename, fresh group, `-dev` strip
+  across package.json, package-lock.json's two sites, APP_VERSION),
+  regenerate feeds, one commit (`Release X.Y.Z: <lead summary>`, the summary
+  condensed from the group's first bullet), rebuild at the released version,
+  annotated tag (signed via the repo's ssh config, then `git tag -v`
+  verified — an unverified tag aborts), fast-forward main (its own checkout
+  when one exists — this repo's main checkout is
+  `~/Documents/code/bb-plugin-activity-overview` — else a temp worktree,
+  removed after), push `gh dev main vX.Y.Z`, and assemble the store drop
+  (`npm run store:build`).
+- **`--dry-run`** executes every gate for real and prints every step it
+  would take — including the exact diffs the finalize would write — while
+  mutating nothing (no file write, commit, tag, worktree, push, or store
+  build). Previewed refusals do not stop a dry-run's gates, so gate evidence
+  can ship from a branch that cannot itself release; the dry-run still exits
+  non-zero when a real run would have aborted.
+- **Failure after the finalize commit** is a half-applied release by nature:
+  the failure output names exactly what landed (commit, tag, main, push) and
+  the remediation (an unpushed local tag deletes with `git tag -d`; a re-run
+  refuses because the version no longer carries `-dev`). Reconcile by hand.
+- **Stays manual** (§6, §7, §4a): the prep commit bumping dev to the next
+  `-dev`, the `bb plugin reload activity-overview` pass, and the marketplace
+  submission from `dist/store/`.
 
 ## 3. Finalize commit (on the dev lineage)
 
