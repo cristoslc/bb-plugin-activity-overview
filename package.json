@@ -58,7 +58,8 @@
     "shots": "node scripts/screenshot/shoot.mjs",
     "gif": "node scripts/screenshot/capture-tab-tour-gif.mjs",
     "release-shots": "node scripts/uat/release-shots.mjs",
-    "release-safety": "npm run build && npm run uat && npm run release-shots",
+    "release-safety": "node scripts/release-safety.mjs",
+    "release": "node scripts/release/run.mjs",
     "store:check": "node scripts/store/build-listing.ts",
     "store:build": "node scripts/store/build-listing.ts --write"
   }
